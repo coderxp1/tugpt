@@ -91,6 +91,25 @@ services:
         target: 3000
         published: "3002"
 YAML
+cat > "$TMP/render-extraport.yml" <<'YAML'
+services:
+  web:
+    image: tugpt-web-staging
+    restart: "always"
+    networks:
+      staging-edge:
+        aliases:
+          - staging-web
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 3000
+        published: "3002"
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 3000
+        published: "3003"
+YAML
 
 # --- env fixtures -------------------------------------------------------------------
 printf 'NEXT_PUBLIC_SUPABASE_URL=https://prodref.supabase.co\nTUGPT_DOMAIN=tugpt.app\n' > "$TMP/prod.env"
@@ -127,6 +146,31 @@ printf 'good\n' > "$TMP/render"
 printf 'missing\n' > "$TMP/net"
 out=$(run_case); rc=$?
 expect "missing edge network fails edge-network" 1 "$rc" "FAIL edge-network" "$out"
+printf 'ok\n' > "$TMP/net"
+
+# Case 5: an extra published port (and a non-"no" restart policy) in the render.
+printf 'extraport\n' > "$TMP/render"
+out=$(run_case); rc=$?
+expect "extra published port fails compose-render" 1 "$rc" "FAIL compose-render" "$out"
+printf 'good\n' > "$TMP/render"
+
+# Case 6: Caddyfile does not validate.
+printf 'bad\n' > "$TMP/caddy"
+out=$(run_case); rc=$?
+expect "invalid Caddyfile fails caddy-validate" 1 "$rc" "FAIL caddy-validate" "$out"
+printf 'ok\n' > "$TMP/caddy"
+
+# Case 7: staging env file with loose permissions.
+chmod 644 "$TMP/staging.env"
+out=$(run_case); rc=$?
+expect "world-readable staging env fails env-file" 1 "$rc" "FAIL env-file" "$out"
+chmod 600 "$TMP/staging.env"
+
+# Case 8: staging env file missing entirely.
+mv "$TMP/staging.env" "$TMP/staging.env.away"
+out=$(run_case); rc=$?
+expect "missing staging env fails env-file" 1 "$rc" "FAIL env-file" "$out"
+mv "$TMP/staging.env.away" "$TMP/staging.env"
 
 if [ "$failures" -gt 0 ]; then
     printf 'staging-preflight.test: %s case(s) FAILED\n' "$failures"
