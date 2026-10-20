@@ -44,6 +44,9 @@ importers:
       '@tugpt/ai-providers':
         specifier: workspace:*
         version: link:../../packages/ai-providers
+      '@tugpt/appointments':
+        specifier: workspace:*
+        version: link:../../packages/appointments
       '@tugpt/auth':
         specifier: workspace:*
         version: link:../../packages/auth
@@ -123,6 +126,9 @@ importers:
       '@tugpt/ai-providers':
         specifier: workspace:*
         version: link:../../packages/ai-providers
+      '@tugpt/appointments':
+        specifier: workspace:*
+        version: link:../../packages/appointments
       '@tugpt/database':
         specifier: workspace:*
         version: link:../../packages/database
@@ -173,6 +179,22 @@ importers:
       '@tugpt/observability':
         specifier: workspace:*
         version: link:../observability
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@20.19.43)(jsdom@26.1.0)(vite@8.1.5(@types/node@20.19.43)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5))
+
+  packages/appointments:
+    dependencies:
+      '@tugpt/security':
+        specifier: workspace:*
+        version: link:../security
     devDependencies:
       '@types/node':
         specifier: ^20

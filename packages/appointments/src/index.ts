@@ -94,3 +94,52 @@ export {
   type RequestAvailabilityInput,
   type RequestAvailabilityOutcome,
 } from './appointments-service.js';
+
+// --- Slice 3: Google Calendar free/busy (read-only, flag-gated) -----------
+
+export {
+  GoogleFreeBusyProvider,
+  GOOGLE_FREEBUSY_FLAG_KEY,
+  GOOGLE_FREEBUSY_PROVIDER_KEY,
+  GOOGLE_FREEBUSY_SCOPE,
+  type FreeBusyFetch,
+  type FreeBusyFetchInit,
+  type FreeBusyFetchResponse,
+  type GoogleFreeBusyProviderOptions,
+} from './google-freebusy-provider.js';
+
+// --- Slice 3 (cont.): per-organization feature gating ---------------------
+
+export {
+  createGoogleFreeBusyProvider,
+  isGoogleFreeBusyEnabledForOrg,
+  type FeatureFlagReader,
+  type GoogleFreeBusyIntegrationOptions,
+} from './feature-gates.js';
+
+// --- Slice 3 (cont.): the production (Supabase-backed) store ---------------
+
+export {
+  SupabaseAppointmentStore,
+  type SupabaseAppointmentStoreOptions,
+  type SupabaseClientLike,
+  type SupabaseErrorLike,
+  type SupabaseQueryLike,
+  type SupabaseResultLike,
+} from './supabase-store.js';
+export {
+  GOOGLE_OAUTH_PROVIDER,
+  GOOGLE_CALENDAR_SECRET_NAME,
+  GOOGLE_OAUTH_CLIENT_SECRET_NAME,
+  GOOGLE_OAUTH_STATE_SECRET_NAME,
+  GOOGLE_AUTHORIZATION_URL,
+  GOOGLE_TOKEN_URL,
+  GOOGLE_REVOKE_URL,
+  GoogleOAuthError,
+  verifyGoogleOAuthState,
+  createGoogleConsent,
+  completeGoogleOAuthCallback,
+  revokeGoogleConnection,
+  type GoogleOAuthErrorCode,
+  type GoogleOAuthDeps,
+} from './google-oauth.js';

@@ -66,6 +66,7 @@ export const PRODUCTION_ROOTS = [
   'apps/worker/src',
   'apps/web/src',
   'packages/ai-orchestration/src',
+  'packages/appointments/src',
   'packages/auth/src',
   'packages/database/src',
   'packages/feature-flags/src',

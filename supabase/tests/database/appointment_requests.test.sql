@@ -22,7 +22,7 @@
 -- test rather than passing review.
 
 BEGIN;
-SELECT plan(24);
+SELECT plan(27);
 
 -- --- Fixtures --------------------------------------------------------------
 
@@ -343,16 +343,20 @@ SELECT throws_ok(
   'V7: an unattributed suggestion is refused'
 );
 
--- updated_at is maintained by the trigger, not by the caller.
+-- updated_at is maintained by the trigger, not by the caller. pgTAP runs this
+-- whole file in one transaction, where now() is frozen at transaction start,
+-- so "updated_at advanced past created_at" is unobservable here. Instead, feed
+-- the UPDATE a deliberately stale updated_at and check it did not survive:
+-- only the trigger could have replaced it.
 UPDATE public.appointment_requests
-SET status = 'SUGGESTED'
+SET status = 'SUGGESTED', updated_at = '2000-01-01T00:00:00Z'
 WHERE id = 'cccccccc-4e70-0000-0000-000000000001';
 
 SELECT ok(
-  (SELECT updated_at > created_at
+  (SELECT updated_at > '2000-01-01T00:00:00Z'::timestamptz
    FROM public.appointment_requests
    WHERE id = 'cccccccc-4e70-0000-0000-000000000001'),
-  'V8: the trigger advances updated_at on update'
+  'V8: the trigger maintains updated_at on update'
 );
 
 -- ===========================================================================

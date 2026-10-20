@@ -15,6 +15,7 @@
     "@supabase/ssr": "^0.12.4",
     "@tailwindcss/node": "^4.3.2",
     "@tugpt/ai-providers": "workspace:*",
+    "@tugpt/appointments": "workspace:*",
     "@tugpt/auth": "workspace:*",
     "@tugpt/database": "workspace:*",
     "@tugpt/feature-flags": "workspace:*",

@@ -30,6 +30,48 @@ export const en: Dictionary = {
   'nav.drafts': 'Drafts',
   'nav.inbox': 'Conversations',
   'nav.media': 'Media',
+  'nav.integrations': 'Integrations',
+
+  'integrations.title': 'Integrations',
+  'integrations.noOrganization': 'There is no active organization in this session.',
+  'integrations.google.title': 'Google Calendar',
+  'integrations.google.description':
+    'Shows the organization’s availability from Google Calendar when proposing appointment times. Read-only: TuGPT never creates or modifies events.',
+  'integrations.status.notConfigured':
+    'The integration has not been configured by the platform operator yet.',
+  'integrations.status.notConnected': 'Not connected',
+  'integrations.status.connected': 'Connected',
+  'integrations.status.credentialExpires': 'The credential expires on {date}.',
+  'integrations.status.credentialExpired':
+    'The credential has expired. Reconnect to renew it.',
+  'integrations.status.checksEnabled':
+    'Availability checks are enabled for this organization.',
+  'integrations.status.checksDisabled':
+    'Availability checks are disabled for this organization.',
+  'integrations.action.connect': 'Connect Google Calendar',
+  'integrations.action.reconnect': 'Reconnect',
+  'integrations.action.disconnect': 'Disconnect',
+  'integrations.adminOnly':
+    'Only the organization owner or an administrator can change this connection.',
+  'integrations.banner.connected': 'Google Calendar connected.',
+  'integrations.banner.denied':
+    'The connection was cancelled at Google. No credential was stored.',
+  'integrations.banner.revoked':
+    'Google Calendar disconnected. The stored credential was deleted.',
+  'integrations.banner.error': 'The connection could not be completed: {reason}.',
+  'integrations.reason.not_configured': 'the integration is not configured',
+  'integrations.reason.invalid_state':
+    'the connection session expired or is invalid; please start again',
+  'integrations.reason.invalid_callback': 'the response from Google was incomplete',
+  'integrations.reason.provider_error': 'Google returned an error',
+  'integrations.reason.forbidden': 'the session is not permitted for this organization',
+  'integrations.reason.exchange_failed': 'Google refused the authorization code',
+  'integrations.reason.no_offline_access': 'Google did not grant offline access',
+  'integrations.reason.scope_not_granted':
+    'the availability permission was not granted',
+  'integrations.reason.storage_failed': 'the credential could not be stored',
+  'integrations.reason.disconnect_failed': 'the disconnection could not be completed',
+  'integrations.reason.internal_error': 'an unexpected error occurred',
 
   'media.list.title': 'Media',
   'media.list.loading': 'Loading jobs…',

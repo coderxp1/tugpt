@@ -25,6 +25,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   { href: '/dashboard/inbox', labelKey: 'nav.inbox' },
   { href: '/dashboard/drafts', labelKey: 'nav.drafts' },
   { href: '/dashboard/media', labelKey: 'nav.media' },
+  { href: '/settings/integrations', labelKey: 'nav.integrations' },
 ];
 
 /**

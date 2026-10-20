@@ -129,6 +129,8 @@ export enum AppointmentStoreErrorCode {
   EXPIRY_BEFORE_RETRIEVAL = 'EXPIRY_BEFORE_RETRIEVAL',
   /** An update targeted a request that does not exist. */
   REQUEST_NOT_FOUND = 'REQUEST_NOT_FOUND',
+  /** The database answered with an error the store cannot map precisely. */
+  DATABASE_ERROR = 'DATABASE_ERROR',
 }
 
 export interface AppointmentStore {
