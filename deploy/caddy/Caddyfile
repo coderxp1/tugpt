@@ -47,3 +47,45 @@
 		header_up X-Real-IP {remote_host}
 	}
 }
+
+# ---------------------------------------------------------------------------
+# Staging (staging.tugpt.pro) — added for the Phase 3 staging environment.
+#
+# This block is ADDITIVE: the production site block above is unchanged,
+# byte for byte. It routes the staging hostname to the staging web
+# container, which runs under the separate `tugpt-staging` Compose
+# project (docker-compose.staging.yml) and joins this network under the
+# alias `staging-web`. Production never resolves that name; staging
+# never appears in the production block.
+#
+# Until the staging stack exists and DNS points here, this block simply
+# has no reachable upstream — it does not affect the production site.
+# Caddy will try to obtain a certificate for staging.tugpt.pro once this
+# configuration is loaded, so load it only after the DNS A record
+# exists (see the staging hosting plan).
+#
+# basic_auth is the outer door for staging; the application login is
+# the inner one. The hash below is a PLACEHOLDER for a discarded
+# throwaway password — replace it at deploy time with the output of
+# `caddy hash-password` for the real staging password, on the server,
+# and never commit the real hash's plaintext anywhere.
+staging.tugpt.pro {
+	encode zstd gzip
+
+	basic_auth {
+		operator $2b$14$AwMrZxc1h70512BliV2mEu4YAX77XMtPkfl1q.Y64vvBMwc5.Vo/G
+	}
+
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Robots-Tag "noindex, nofollow"
+		-Server
+	}
+
+	reverse_proxy staging-web:3000 {
+		header_up X-Real-IP {remote_host}
+	}
+}

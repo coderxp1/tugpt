@@ -1,0 +1,76 @@
+# docker-compose.staging.yml — the staging stack's differences from production.
+#
+# Staging runs on the SAME host as production but as a sealed, separate
+# Compose project. This file is an OVERRIDE, layered over the production
+# file, and is only ever used like this:
+#
+#   cd /opt/tugpt-staging
+#   set -a; . /etc/tugpt-staging/web.env; set +a     # staging env, never prod's
+#   docker compose -p tugpt-staging \
+#     -f docker-compose.yml -f docker-compose.staging.yml \
+#     up -d web                                     # web ONLY, ever
+#
+# Hard rules this file exists to keep:
+#   * Staging reads /etc/tugpt-staging/*.env and nothing under /etc/tugpt/.
+#     Next.js bakes NEXT_PUBLIC_* in at build time, so building staging
+#     with production's values would be silent and total (see the base
+#     file's args comment). The :? guards there refuse an empty build;
+#     this override is what makes the values staging's.
+#   * Staging publishes exactly one port, on loopback: 3002. Production
+#     keeps 3001. Nothing staging runs is reachable except through
+#     Caddy (which reaches it over the production network, alias
+#     `staging-web` — see deploy/caddy/Caddyfile).
+#   * No resident workers. The appointments entry point runs on demand
+#     for the smoke test; the queue workers are profile-gated below so
+#     that even a bare `docker compose up` in this project cannot start
+#     them (or a second Caddy fighting production for 80/443).
+#   * restart: "no". If the host reboots, production comes back on its
+#     own and staging does not — staging is started deliberately.
+#   * Resource limits, so a staging build or leak cannot starve
+#     production. Tune only with the host's measured headroom in view.
+#
+# `!override` below requires Docker Compose >= 2.24. On anything older
+# the file fails loudly at parse time rather than merging silently —
+# env_file and ports APPEND across Compose files by default, and an
+# appended production env file or a second published port is exactly
+# the failure this file must never allow quietly.
+#
+# The `production` network name (tugpt_tugpt) is the production
+# project's network as Compose names it. VERIFY on the host before the
+# first staging start: `docker network ls`. If it differs, fix the name
+# here in the repo first — never hand-edit the deployed copy.
+
+services:
+  web:
+    image: tugpt-web-staging:latest
+    env_file: !override
+      - /etc/tugpt-staging/web.env
+    ports: !override
+      - "127.0.0.1:3002:3000"
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          memory: 1G
+          cpus: "1.0"
+    networks:
+      tugpt:
+      production:
+        aliases:
+          - staging-web
+
+  # Profile-gated so the staging project can never start them. The
+  # profile name is deliberately unattractive to enable by accident.
+  whatsapp-worker:
+    profiles: ["staging-disabled"]
+  draft-worker:
+    profiles: ["staging-disabled"]
+  transcription-worker:
+    profiles: ["staging-disabled"]
+  caddy:
+    profiles: ["staging-disabled"]
+
+networks:
+  production:
+    external: true
+    name: tugpt_tugpt
