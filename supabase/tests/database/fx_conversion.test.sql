@@ -133,16 +133,16 @@ SELECT private.record_provider_usage(
   'aaaaaaaa-fbfb-0000-0000-000000000001', 'text', 'langdock', 'gpt-5-mini',
   '{"input_tokens": 1200, "output_tokens": 340}'::jsonb, 'ld-fx-1', 'req-fx-eur');
 
--- 833 * 1.1578 = 964.4474 -> 964
+-- 833 * 1.1225 = 934.9425 -> 935
 SELECT is(
   (SELECT accounting_cost_micros FROM public.provider_usage_events
     WHERE request_id = 'req-fx-eur'),
-  964::bigint,
-  'C1: 833 micro-euros is accounted as 964 micro-dollars at 1.1578'
+  935::bigint,
+  'C1: 833 micro-euros is accounted as 935 micro-dollars at 1.1225'
 );
 
 SELECT ok(
-  (SELECT fx_rate = 1.1578000000 AND fx_rate_date = '2026-09-02'::date
+  (SELECT fx_rate = 1.1225000000 AND fx_rate_date = '2026-10-19'::date
           AND accounting_currency = 'USD' AND currency = 'EUR'
      FROM public.provider_usage_events WHERE request_id = 'req-fx-eur'),
   'C2: and the row carries the rate, its date, and both currencies — so the '
@@ -226,7 +226,7 @@ VALUES ('EUR', 'USD', 1.9900000000, CURRENT_DATE,
 SELECT is(
   (SELECT accounting_cost_micros FROM public.provider_usage_events
     WHERE request_id = 'req-fx-eur'),
-  964::bigint,
+  935::bigint,
   'C7: a later rate does not re-price an event already recorded'
 );
 
@@ -236,13 +236,13 @@ DELETE FROM public.fx_rates WHERE rate = 1.9900000000;
 -- M: the meter
 -- ===========================================================================
 
--- 964 (converted EUR) + 10167 (native USD). Before 20260903000006 this
+-- 935 (converted EUR) + 10167 (native USD). Before 20260903000006 this
 -- organization raised P3G05, because none of its EUR spend could be expressed
 -- in the accounting currency.
 SELECT is(
   private.current_entitlement_usage(
     'aaaaaaaa-fbfb-0000-0000-000000000001', 'ai_cost_micros'),
-  11131,
+  11102,
   'M1: a period mixing EUR and USD spend sums in the accounting currency'
 );
 
@@ -274,7 +274,7 @@ SELECT private.record_provider_usage(
 SELECT is(
   private.current_entitlement_usage(
     'aaaaaaaa-fbfb-0000-0000-000000000001', 'ai_cost_micros'),
-  11131,
+  11102,
   'M4: an unpriced event neither counts nor raises — it has no cost to skip'
 );
 
@@ -318,7 +318,7 @@ SELECT private.record_provider_usage(
   NULL, NULL, '{}'::jsonb, pg_catalog.now() + interval '200 days');
 
 SELECT ok(
-  (SELECT accounting_cost_micros = 964 AND fx_rate = 1.1578000000
+  (SELECT accounting_cost_micros = 935 AND fx_rate = 1.1225000000
      FROM public.provider_usage_events WHERE request_id = 'req-fx-stale'),
   'S4: spend 200 days past the rate still converts, at the stale rate, rather '
   'than being refused'
