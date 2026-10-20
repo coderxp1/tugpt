@@ -70,15 +70,15 @@ SELECT is(
 
 SELECT is(
   (SELECT rate FROM private.resolve_fx_rate('EUR', 'USD')),
-  1.1215000000::numeric,
+  1.1225000000::numeric,
   'R2: the seeded ECB rate resolves'
 );
 
 SELECT is(
   (SELECT rate_date FROM private.resolve_fx_rate('EUR', 'USD')),
-  '2026-10-20'::date,
-  'R3: and carries the date it was published for — the 2026-10-20 rate, '
-  'read from the ECB daily feed on the day it was published'
+  '2026-10-19'::date,
+  'R3: and carries the date it was published for, which is not today — '
+  'the seed is always the most recent completed ECB day (20261020000002)'
 );
 
 SELECT is(

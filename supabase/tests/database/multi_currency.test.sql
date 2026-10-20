@@ -188,7 +188,7 @@ SELECT is(
 );
 
 -- The organization from block C holds both EUR and USD spend in this period:
---   req-eur-1     833 µEUR  -> 934 µUSD at 1.1215
+--   req-eur-1     833 µEUR  -> 935 µUSD at 1.1225
 --   req-usd-1   10167 µUSD  -> 10167, no conversion
 --   req-mixed-2   100 µEUR  -> 112 µUSD
 --   req-unpriced-1 unpriced -> excluded, and does not raise
@@ -197,9 +197,9 @@ SELECT is(
 SELECT is(
   private.current_entitlement_usage(
     'aaaaaaaa-c123-0000-0000-000000000001', 'ai_cost_micros'),
-  11213,
+  11214,
   'T2: a period holding both currencies meters as one total in the accounting '
-  'currency — 934 + 10167 + 112'
+  'currency — 935 + 10167 + 112'
 );
 
 -- The USD half alone would be 10283. Asserting that the answer is NOT that is
