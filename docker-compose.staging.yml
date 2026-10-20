@@ -18,8 +18,11 @@
 #     this override is what makes the values staging's.
 #   * Staging publishes exactly one port, on loopback: 3002. Production
 #     keeps 3001. Nothing staging runs is reachable except through
-#     Caddy (which reaches it over the production network, alias
-#     `staging-web` — see deploy/caddy/Caddyfile).
+#     Caddy, and Caddy reaches it over a DEDICATED edge network
+#     (`tugpt-staging-edge`) whose only members are Caddy and the
+#     staging web (alias `staging-web`). Staging never joins the
+#     production `tugpt` network, so the staging container has no
+#     network path to production services at all.
 #   * No resident workers. The appointments entry point runs on demand
 #     for the smoke test; the queue workers are profile-gated below so
 #     that even a bare `docker compose up` in this project cannot start
@@ -35,10 +38,12 @@
 # appended production env file or a second published port is exactly
 # the failure this file must never allow quietly.
 #
-# The `production` network name (tugpt_tugpt) is the production
-# project's network as Compose names it. VERIFY on the host before the
-# first staging start: `docker network ls`. If it differs, fix the name
-# here in the repo first — never hand-edit the deployed copy.
+# The edge network is external and created ONCE on the host as the
+# first staging-deploy step, before anything starts:
+#   docker network create tugpt-staging-edge
+# Production's caddy attaches to it via the base file (which carries
+# the same warning: never restart the production stack from a checkout
+# containing that attachment before this network exists).
 
 services:
   web:
@@ -54,8 +59,7 @@ services:
           memory: 1G
           cpus: "1.0"
     networks:
-      tugpt:
-      production:
+      staging-edge:
         aliases:
           - staging-web
 
@@ -71,6 +75,6 @@ services:
     profiles: ["staging-disabled"]
 
 networks:
-  production:
+  staging-edge:
     external: true
-    name: tugpt_tugpt
+    name: tugpt-staging-edge

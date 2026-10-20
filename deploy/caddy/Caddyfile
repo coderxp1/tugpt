@@ -54,8 +54,9 @@
 # This block is ADDITIVE: the production site block above is unchanged,
 # byte for byte. It routes the staging hostname to the staging web
 # container, which runs under the separate `tugpt-staging` Compose
-# project (docker-compose.staging.yml) and joins this network under the
-# alias `staging-web`. Production never resolves that name; staging
+# project (docker-compose.staging.yml) on the dedicated tugpt-staging-edge
+# network under the alias `staging-web`, whose only other member is
+# Caddy itself. Staging never joins the production `tugpt` network, and
 # never appears in the production block.
 #
 # Until the staging stack exists and DNS points here, this block simply
