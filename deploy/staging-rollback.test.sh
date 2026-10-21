@@ -65,7 +65,8 @@ chmod +x "$TMP/docker-stub"
 
 run_case() {
     : > "$TMP/calls.log"
-    FIXTURE_DIR="$TMP" DOCKER_CMD="$TMP/docker-stub" CHECKOUT_DIR="$TMP" \
+    FIXTURE_DIR="$TMP" TUGPT_STAGING_ROLLBACK_TEST_SEAMS=1 \
+    DOCKER_CMD="$TMP/docker-stub" CHECKOUT_DIR="$TMP" \
         sh "$ROLLBACK" 2>&1
 }
 
@@ -93,6 +94,44 @@ printf 'empty\n' > "$TMP/staging_left"
 printf 'down\n' > "$TMP/prod"
 out=$(run_case); rc=$?
 expect "production down fails production-running" 1 "$rc" "FAIL production-running" "$out"
+printf 'up\n' > "$TMP/prod"
+
+# Case 4: inherited-environment redirection, WITHOUT the test opt-in.
+# An "evil" DOCKER_CMD that would record its own invocation, plus
+# poisoned DOCKER_HOST / DOCKER_CONTEXT / CHECKOUT_DIR. In real-use
+# mode the script must ignore all of it: the evil binary is never
+# executed, and the script talks to the real docker CLI (absent in
+# this sandbox, so the run fails closed rather than succeeding).
+cat > "$TMP/docker-evil" <<'EVIL'
+#!/bin/sh
+printf 'evil docker invoked: %s\n' "$*" >> "$FIXTURE_DIR/evil.log"
+exit 0
+EVIL
+chmod +x "$TMP/docker-evil"
+rm -f "$TMP/evil.log"
+out=$(FIXTURE_DIR="$TMP" DOCKER_CMD="$TMP/docker-evil" \
+    DOCKER_HOST="tcp://127.0.0.1:9999" DOCKER_CONTEXT="evil" \
+    CHECKOUT_DIR="/nonexistent-dir" \
+    sh "$ROLLBACK" 2>&1); rc=$?
+if [ -e "$TMP/evil.log" ]; then
+    printf 'FAIL inherited DOCKER_CMD was executed in real-use mode\n'
+    failures=$((failures + 1))
+else
+    printf 'ok   inherited DOCKER_CMD is ignored in real-use mode\n'
+fi
+if [ "$rc" = "0" ]; then
+    printf 'FAIL real-use run with no real docker must not report success\n'
+    failures=$((failures + 1))
+else
+    printf 'ok   real-use run fails closed without a real docker\n'
+fi
+case "$out" in
+    *"test seams enabled"*)
+        printf 'FAIL test seams reported enabled without the opt-in\n'
+        failures=$((failures + 1))
+        ;;
+    *) printf 'ok   test seams stay off without the opt-in\n' ;;
+esac
 
 if [ "$failures" -gt 0 ]; then
     printf 'staging-rollback.test: %s case(s) FAILED\n' "$failures"

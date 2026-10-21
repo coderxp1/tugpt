@@ -35,14 +35,39 @@
 # Exit codes: 0 staging removed and production verified running,
 # 1 a verification failed, 2 the script could not run.
 #
-# deploy/staging-rollback.test.sh exercises it against a stub docker.
-# Run that after changing anything below.
+# deploy/staging-rollback.test.sh exercises it against a stub docker,
+# through the TUGPT_STAGING_ROLLBACK_TEST_SEAMS=1 opt-in described
+# below; without that variable the script ignores inherited
+# DOCKER_CMD / CHECKOUT_DIR / DOCKER_HOST / DOCKER_CONTEXT entirely,
+# and the test proves an inherited redirection is not followed.
+# Run the test after changing anything below.
 
 set -u   # deliberately NOT -e: every verification runs and reports
 
-# --- test seam ---------------------------------------------------------------
-DOCKER_CMD=${DOCKER_CMD:-docker}
-CHECKOUT_DIR=${CHECKOUT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
+# --- environment hardening -----------------------------------------------------
+# In real use this script talks to exactly one Docker daemon — the
+# host's, through its default socket and context — via exactly one
+# binary, from exactly one directory. An inherited DOCKER_HOST or
+# DOCKER_CONTEXT could point the client at another daemon, and the
+# DOCKER_CMD / CHECKOUT_DIR test seams could redirect execution
+# itself, so in real use all of them are forced here, before Docker
+# is invoked, without relying on how the script was called (sudo's
+# env_reset included).
+#
+# The seams survive only behind an explicit test opt-in
+# (TUGPT_STAGING_ROLLBACK_TEST_SEAMS=1), which the fixture test sets
+# and which prints a warning when active. It is never set by the
+# runbook invocation, and there is no reason to set it on the host.
+if [ "${TUGPT_STAGING_ROLLBACK_TEST_SEAMS:-}" = "1" ]; then
+    printf 'staging-rollback: WARNING: test seams enabled; not for host use\n' >&2
+    # Each is a command line, word-split on use.
+    DOCKER_CMD=${DOCKER_CMD:-docker}
+    CHECKOUT_DIR=${CHECKOUT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
+else
+    unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG
+    DOCKER_CMD=docker
+    CHECKOUT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+fi
 
 fails=0
 pass() { printf 'ok   %s\n' "$1"; }
