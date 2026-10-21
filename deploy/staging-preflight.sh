@@ -47,12 +47,36 @@
 
 set -u   # deliberately NOT -e: one failing check must not end the run
 
-# --- test seams --------------------------------------------------------------
-# Each is a command line, word-split on use. Leave them unset in real use.
-DOCKER_CMD=${DOCKER_CMD:-docker}
-STAGING_ENV_FILE=${STAGING_ENV_FILE:-/etc/tugpt-staging/web.env}
-PROD_ENV_FILE=${PROD_ENV_FILE:-/etc/tugpt/web.env}
-CHECKOUT_DIR=${CHECKOUT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
+# --- environment hardening -----------------------------------------------------
+# In real use this gate runs against exactly the production layout:
+# the system docker binary (resolved through a pinned PATH), the
+# checkout this script ships in, and the two canonical env-file
+# paths. Inherited DOCKER_CMD / CHECKOUT_DIR / STAGING_ENV_FILE /
+# PROD_ENV_FILE values are discarded, and Docker's own target
+# variables (DOCKER_HOST / DOCKER_CONTEXT / DOCKER_CONFIG) are
+# unset, so no inherited environment can redirect what is being
+# validated or where the validation points.
+#
+# The seams survive only behind the explicit test opt-in
+# (TUGPT_STAGING_PREFLIGHT_TEST_SEAMS=1), which the fixture test sets
+# and which prints a warning when active. It is never set by the
+# runbook invocation, and there is no reason to set it on the host.
+if [ "${TUGPT_STAGING_PREFLIGHT_TEST_SEAMS:-}" = "1" ]; then
+    printf 'staging-preflight: WARNING: test seams enabled; not for host use\n' >&2
+    # Each is a command line, word-split on use.
+    DOCKER_CMD=${DOCKER_CMD:-docker}
+    STAGING_ENV_FILE=${STAGING_ENV_FILE:-/etc/tugpt-staging/web.env}
+    PROD_ENV_FILE=${PROD_ENV_FILE:-/etc/tugpt/web.env}
+    CHECKOUT_DIR=${CHECKOUT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
+else
+    unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export PATH
+    DOCKER_CMD=docker
+    STAGING_ENV_FILE=/etc/tugpt-staging/web.env
+    PROD_ENV_FILE=/etc/tugpt/web.env
+    CHECKOUT_DIR=$(cd "$(dirname "$0")/.." && pwd)
+fi
 
 fails=0
 pass() { printf 'ok   %s\n' "$1"; }

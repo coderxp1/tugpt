@@ -120,7 +120,8 @@ printf 'NEXT_PUBLIC_SUPABASE_URL=https://stagingref.supabase.co\n' > "$TMP/stagi
 chmod 600 "$TMP/staging.env"
 
 run_case() {
-    FIXTURE_DIR="$TMP" DOCKER_CMD="$TMP/docker-stub" \
+    FIXTURE_DIR="$TMP" TUGPT_STAGING_PREFLIGHT_TEST_SEAMS=1 \
+    DOCKER_CMD="$TMP/docker-stub" \
     STAGING_ENV_FILE="$TMP/staging.env" PROD_ENV_FILE="${PROD_ENV_OVERRIDE:-$TMP/prod.env}" \
     CHECKOUT_DIR="$TMP" \
         sh "$PREFLIGHT" 2>&1
@@ -199,6 +200,40 @@ PROD_ENV_OVERRIDE="$TMP/prod-nodomain.env"
 out=$(run_case); rc=$?
 expect "empty TUGPT_DOMAIN fails caddy-validate" 1 "$rc" "FAIL caddy-validate" "$out"
 unset PROD_ENV_OVERRIDE
+
+# Case 11: hostile inherited environment, WITHOUT the test opt-in.
+# An "evil" DOCKER_CMD that records its own invocation, plus env-file
+# paths pointing at the passing fixtures and a bogus CHECKOUT_DIR.
+# In real-use mode the script must ignore all of it: the evil binary
+# never runs, the fixture env files (which would pass) are never
+# consulted — the forced production paths do not exist in this
+# sandbox, so the run fails closed with FAIL env-file.
+cat > "$TMP/docker-evil" <<'EVIL'
+#!/bin/sh
+printf 'evil docker invoked: %s\n' "$*" >> "$FIXTURE_DIR/evil.log"
+exit 0
+EVIL
+chmod +x "$TMP/docker-evil"
+rm -f "$TMP/evil.log"
+out=$(FIXTURE_DIR="$TMP" DOCKER_CMD="$TMP/docker-evil" \
+    DOCKER_HOST="tcp://127.0.0.1:9999" DOCKER_CONTEXT="evil" \
+    STAGING_ENV_FILE="$TMP/staging.env" PROD_ENV_FILE="$TMP/prod.env" \
+    CHECKOUT_DIR="/nonexistent-dir" \
+    sh "$PREFLIGHT" 2>&1); rc=$?
+if [ -e "$TMP/evil.log" ]; then
+    printf 'FAIL inherited DOCKER_CMD was executed in real-use mode\n'
+    failures=$((failures + 1))
+else
+    printf 'ok   inherited DOCKER_CMD is ignored in real-use mode\n'
+fi
+expect "hostile inheritance still fails closed (forced env paths)" 1 "$rc" "FAIL env-file" "$out"
+case "$out" in
+    *"test seams enabled"*)
+        printf 'FAIL test seams reported enabled without the opt-in\n'
+        failures=$((failures + 1))
+        ;;
+    *) printf 'ok   test seams stay off without the opt-in\n' ;;
+esac
 
 if [ "$failures" -gt 0 ]; then
     printf 'staging-preflight.test: %s case(s) FAILED\n' "$failures"
