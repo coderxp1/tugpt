@@ -14,7 +14,10 @@
 #
 # It changes nothing on the host. It reads two env files' *values* only
 # to compare one field (the Supabase URL) for equality; no value is
-# ever printed.
+# ever printed. Every check either passes or fails — there are no
+# skips: a check that cannot run (a missing file, an empty value) is
+# a failed check, because a gate that can be bypassed by absence is
+# not a gate.
 #
 # Checks:
 #   env-file       /etc/tugpt-staging/web.env exists, mode 600, root-owned
@@ -54,7 +57,6 @@ CHECKOUT_DIR=${CHECKOUT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
 fails=0
 pass() { printf 'ok   %s\n' "$1"; }
 fail() { printf 'FAIL %s: %s\n' "$1" "$2"; fails=$((fails + 1)); }
-skip() { printf 'skip %s: %s\n' "$1" "$2"; }
 
 # env_value FILE KEY -> prints the value of KEY=... (last assignment wins).
 # The caller must treat the result as a secret: compare, never print.
@@ -76,7 +78,17 @@ else
 fi
 
 # --- env-isolation -------------------------------------------------------------
-if [ -f "$STAGING_ENV_FILE" ] && [ -f "$PROD_ENV_FILE" ]; then
+# Fail-closed by design: if either file is missing, the comparison
+# cannot be made, and an unverifiable isolation is a FAILED isolation
+# — never a skip. (The first revision skipped here, which let the
+# script exit 0 with this check and caddy-validate unrun when the
+# production env file was absent. That was a fail-open defect; the
+# fixture test now covers it.)
+if [ ! -f "$STAGING_ENV_FILE" ]; then
+    fail env-isolation "staging env file is missing, so its Supabase URL cannot be compared against production's"
+elif [ ! -f "$PROD_ENV_FILE" ]; then
+    fail env-isolation "$PROD_ENV_FILE is missing, so the staging Supabase URL cannot be compared against production's"
+else
     staging_url=$(env_value "$STAGING_ENV_FILE" NEXT_PUBLIC_SUPABASE_URL)
     prod_url=$(env_value "$PROD_ENV_FILE" NEXT_PUBLIC_SUPABASE_URL)
     if [ -z "$staging_url" ]; then
@@ -86,8 +98,6 @@ if [ -f "$STAGING_ENV_FILE" ] && [ -f "$PROD_ENV_FILE" ]; then
     else
         pass env-isolation
     fi
-else
-    skip env-isolation "an env file is missing, so the URLs cannot be compared"
 fi
 
 # --- edge-network ---------------------------------------------------------------
@@ -145,18 +155,26 @@ else
 fi
 
 # --- caddy-validate ---------------------------------------------------------------
-if [ -f "$PROD_ENV_FILE" ]; then
-    domain=$(env_value "$PROD_ENV_FILE" TUGPT_DOMAIN)
-    # shellcheck disable=SC2086
-    if $DOCKER_CMD run --rm -e "TUGPT_DOMAIN=$domain" \
-        -v "$CHECKOUT_DIR/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
-        caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
-        pass caddy-validate
-    else
-        fail caddy-validate "the checkout's Caddyfile does not validate; do not load it into the running Caddy"
-    fi
+# Fail-closed like env-isolation: without the production env file
+# there is no TUGPT_DOMAIN to validate under, and an empty domain is
+# not a validation — both are failures, not skips.
+if [ ! -f "$PROD_ENV_FILE" ]; then
+    fail caddy-validate "$PROD_ENV_FILE is missing, so TUGPT_DOMAIN is unknown and the Caddyfile cannot be validated"
 else
-    skip caddy-validate "$PROD_ENV_FILE is missing, so TUGPT_DOMAIN is unknown"
+    domain=$(env_value "$PROD_ENV_FILE" TUGPT_DOMAIN)
+    if [ -z "$domain" ]; then
+        fail caddy-validate "TUGPT_DOMAIN is empty in $PROD_ENV_FILE, so the Caddyfile cannot be validated"
+    else
+        # Word-splitting of $DOCKER_CMD is the documented test seam.
+        # shellcheck disable=SC2086
+        if $DOCKER_CMD run --rm -e "TUGPT_DOMAIN=$domain" \
+            -v "$CHECKOUT_DIR/deploy/caddy/Caddyfile:/etc/caddy/Caddyfile:ro" \
+            caddy:2-alpine caddy validate --config /etc/caddy/Caddyfile >/dev/null 2>&1; then
+            pass caddy-validate
+        else
+            fail caddy-validate "the checkout's Caddyfile does not validate; do not load it into the running Caddy"
+        fi
+    fi
 fi
 
 # --- summary ------------------------------------------------------------------------
