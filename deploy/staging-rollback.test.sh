@@ -133,6 +133,33 @@ case "$out" in
     *) printf 'ok   test seams stay off without the opt-in\n' ;;
 esac
 
+# Case 5: hostile PATH, real-use mode. A directory containing an evil
+# `docker` is prepended to PATH. The script pins its own PATH before
+# resolving any command, so the evil binary must never run; with no
+# real docker in this sandbox the run fails closed.
+mkdir -p "$TMP/evilbin"
+cat > "$TMP/evilbin/docker" <<'EVIL'
+#!/bin/sh
+printf 'evil PATH docker invoked: %s\n' "$*" >> "$FIXTURE_DIR/evil-path.log"
+exit 0
+EVIL
+chmod +x "$TMP/evilbin/docker"
+rm -f "$TMP/evil-path.log"
+out=$(FIXTURE_DIR="$TMP" PATH="$TMP/evilbin:/usr/bin:/bin" \
+    /bin/sh "$ROLLBACK" 2>&1); rc=$?
+if [ -e "$TMP/evil-path.log" ]; then
+    printf 'FAIL docker resolved through the inherited PATH in real-use mode\n'
+    failures=$((failures + 1))
+else
+    printf 'ok   hostile PATH cannot redirect docker in real-use mode\n'
+fi
+if [ "$rc" = "0" ]; then
+    printf 'FAIL hostile-PATH real-use run must not report success without a real docker\n'
+    failures=$((failures + 1))
+else
+    printf 'ok   hostile-PATH run fails closed\n'
+fi
+
 if [ "$failures" -gt 0 ]; then
     printf 'staging-rollback.test: %s case(s) FAILED\n' "$failures"
     exit 1

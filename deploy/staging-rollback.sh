@@ -65,6 +65,12 @@ if [ "${TUGPT_STAGING_ROLLBACK_TEST_SEAMS:-}" = "1" ]; then
     CHECKOUT_DIR=${CHECKOUT_DIR:-$(cd "$(dirname "$0")/.." && pwd)}
 else
     unset DOCKER_HOST DOCKER_CONTEXT DOCKER_CONFIG
+    # Pin PATH before naming the binary, so `docker` — and every
+    # other command this script runs — resolves from the system
+    # directories only, never from a directory an inherited PATH
+    # could have prepended.
+    PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+    export PATH
     DOCKER_CMD=docker
     CHECKOUT_DIR=$(cd "$(dirname "$0")/.." && pwd)
 fi
