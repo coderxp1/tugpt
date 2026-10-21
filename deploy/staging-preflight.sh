@@ -117,6 +117,8 @@ else
     prod_url=$(env_value "$PROD_ENV_FILE" NEXT_PUBLIC_SUPABASE_URL)
     if [ -z "$staging_url" ]; then
         fail env-isolation "NEXT_PUBLIC_SUPABASE_URL is empty in the staging env file"
+    elif [ -z "$prod_url" ]; then
+        fail env-isolation "NEXT_PUBLIC_SUPABASE_URL is empty in the production env file, so there is no production value to differ from; isolation is unverifiable"
     elif [ "$staging_url" = "$prod_url" ]; then
         fail env-isolation "staging's Supabase URL is IDENTICAL to production's; staging must use its own Supabase project"
     else
@@ -150,12 +152,24 @@ else
         in_web { print }
     ')
     render_fails=0
-    if ! printf '%s\n' "$web_block" | grep -q 'staging-edge'; then
-        fail compose-render "web is not attached to staging-edge in the rendered config"
-        render_fails=1
-    fi
-    if printf '%s\n' "$web_block" | grep -qE '^      tugpt:'; then
-        fail compose-render "web is attached to the production tugpt network; staging must never join it"
+    # The network set must be EXACTLY {staging-edge}: presence of
+    # staging-edge plus absence of tugpt (the first revision's checks)
+    # would still admit any other additional network. Extract the
+    # keys of web's networks mapping and compare the whole set.
+    nets=$(printf '%s\n' "$web_block" | awk '
+        /^    networks:/ { in_nets = 1; next }
+        /^    [a-z]/ { in_nets = 0 }
+        in_nets && /^      [^ ]/ {
+            line = $0
+            sub(/^      /, "", line)
+            sub(/:.*/, "", line)
+            print line
+        }
+    ')
+    nets_joined=$(printf '%s' "$nets" | tr '\n' ' ')
+    nets_joined=${nets_joined% }
+    if [ "$nets_joined" != "staging-edge" ]; then
+        fail compose-render "web is attached to networks [$nets_joined]; expected exactly [staging-edge]"
         render_fails=1
     fi
     published_count=$(printf '%s\n' "$web_block" | grep -c 'published:' || true)

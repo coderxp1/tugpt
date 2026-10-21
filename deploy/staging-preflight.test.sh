@@ -113,6 +113,24 @@ services:
         target: 3000
         published: "3003"
 YAML
+cat > "$TMP/render-extranet.yml" <<'YAML'
+services:
+  web:
+    image: tugpt-web-staging
+    restart: "no"
+    networks:
+      staging-edge:
+        aliases:
+          - staging-web
+      tugpt-extra:
+        aliases:
+          - staging-web
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 3000
+        published: "3002"
+YAML
 
 # --- env fixtures -------------------------------------------------------------------
 printf 'NEXT_PUBLIC_SUPABASE_URL=https://prodref.supabase.co\nTUGPT_DOMAIN=tugpt.app\n' > "$TMP/prod.env"
@@ -234,6 +252,37 @@ case "$out" in
         ;;
     *) printf 'ok   test seams stay off without the opt-in\n' ;;
 esac
+
+# Case 12: production env file present, TUGPT_DOMAIN present, but
+# NEXT_PUBLIC_SUPABASE_URL missing entirely. env-isolation must
+# FAIL: differing from an empty production value proves nothing.
+printf 'TUGPT_DOMAIN=tugpt.app\n' > "$TMP/prod-nourl.env"
+PROD_ENV_OVERRIDE="$TMP/prod-nourl.env"
+out=$(run_case); rc=$?
+expect "missing production URL fails env-isolation" 1 "$rc" "FAIL env-isolation" "$out"
+case "$out" in
+    *"all checks passed"*)
+        printf 'FAIL missing production URL must never report success\n'
+        failures=$((failures + 1))
+        ;;
+    *) printf 'ok   missing production URL never reports success\n' ;;
+esac
+unset PROD_ENV_OVERRIDE
+
+# Case 13: same, with the production URL present but empty.
+printf 'NEXT_PUBLIC_SUPABASE_URL=\nTUGPT_DOMAIN=tugpt.app\n' > "$TMP/prod-emptyurl.env"
+PROD_ENV_OVERRIDE="$TMP/prod-emptyurl.env"
+out=$(run_case); rc=$?
+expect "empty production URL fails env-isolation" 1 "$rc" "FAIL env-isolation" "$out"
+unset PROD_ENV_OVERRIDE
+
+# Case 14: rendered config attaches web to staging-edge AND an
+# unexpected second network. The exact-set assertion must reject it
+# (presence + tugpt-absence checks would have let this through).
+printf 'extranet\n' > "$TMP/render"
+out=$(run_case); rc=$?
+expect "extra network in render fails compose-render" 1 "$rc" "FAIL compose-render" "$out"
+printf 'good\n' > "$TMP/render"
 
 if [ "$failures" -gt 0 ]; then
     printf 'staging-preflight.test: %s case(s) FAILED\n' "$failures"
