@@ -137,6 +137,12 @@ ALTER TABLE public.outbound_message_deliveries ENABLE ROW LEVEL SECURITY;
 ALTER TABLE public.outbound_message_deliveries FORCE ROW LEVEL SECURITY;
 -- No policies: service_role only, like every other operational table.
 
+-- Supabase's default privileges grant ALL on new tables to anon and
+-- authenticated; RLS does not restrain TRUNCATE. Take it all back,
+-- exactly as 20260927000001 does for media_generation_jobs — the
+-- table_privilege_hygiene pgTAP suite asserts this catalogue-wide.
+REVOKE ALL ON public.outbound_message_deliveries FROM authenticated, anon;
+
 CREATE INDEX IF NOT EXISTS outbound_deliveries_status_idx
   ON public.outbound_message_deliveries (status, created_at);
 
