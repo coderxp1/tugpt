@@ -238,7 +238,7 @@ reference date, and a source naming both.
 <!-- schema-gate-sample:start -->
 
 ```
-  [ok]   all 58 migration(s) in this checkout are applied (database has 58, latest 20260929000001)
+  [ok]   all 59 migration(s) in this checkout are applied (database has 59, latest 20261022000001)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
