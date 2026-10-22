@@ -1,5 +1,7 @@
 // Stage 5A: API response types for the draft review dashboard
 
+import type { DeliveryView } from './delivery-status';
+
 export interface DraftListItem {
   id: string;
   status: 'draft' | 'approved' | 'rejected';
@@ -13,6 +15,12 @@ export interface DraftListItem {
   source_message_preview: string | null;
   current_revision_body_preview: string | null;
   source_message_id?: string;
+  /**
+   * Outbound delivery state, attached by the list route when a
+   * delivery exists for this draft (approved drafts only). Absent or
+   * null means no delivery — the UI shows no delivery badge.
+   */
+  delivery?: DeliveryView | null;
 }
 
 export interface DraftSourceMessage {
