@@ -239,7 +239,7 @@ reference date, and a source naming both.
 
 ```
 <<<<<<< HEAD
-  [ok]   all 58 migration(s) in this checkout are applied (database has 58, latest 20260929000001)
+  [ok]   all 59 migration(s) in this checkout are applied (database has 59, latest 20260929000001)
 =======
   [ok]   all 56 migration(s) in this checkout are applied (database has 56, latest 20260911000001)
 >>>>>>> df8421d (Analytics v1: org-scoped usage & cost report (read path))

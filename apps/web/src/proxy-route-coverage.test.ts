@@ -110,6 +110,8 @@ const ROUTES: RouteExpectation[] = [
     kind: 'page',
     type: 'protected',
     why: 'Media job detail with private result preview. The proxy is the only gate on the page shell.',
+  },
+  {
     path: '/dashboard/analytics',
     kind: 'page',
     type: 'protected',
