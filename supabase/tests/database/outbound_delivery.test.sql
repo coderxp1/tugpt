@@ -66,14 +66,15 @@ INSERT INTO public.conversations (
    'cccccccc-7d22-0000-0000-000000000002', '+34611223355', 'open');
 
 INSERT INTO public.messages (
-  id, conversation_id, organization_id, webhook_event_id, direction, body
+  id, conversation_id, organization_id, webhook_event_id, direction, body,
+  body_source
 ) VALUES
   ('ffffffff-7d22-0000-0000-000000000001', 'eeeeeeee-7d22-0000-0000-000000000001',
    'aaaaaaaa-7d22-0000-0000-000000000001', 'dddddddd-7d22-0000-0000-000000000001',
-   'inbound', '¿Tenéis hueco mañana?'),
+   'inbound', '¿Tenéis hueco mañana?', 'customer'),
   ('ffffffff-7d22-0000-0000-000000000002', 'eeeeeeee-7d22-0000-0000-000000000002',
    'aaaaaaaa-7d22-0000-0000-000000000002', 'dddddddd-7d22-0000-0000-000000000002',
-   'inbound', 'Hola');
+   'inbound', 'Hola', 'customer');
 
 -- Each draft needs its own source message (unique per org + message).
 INSERT INTO public.webhook_events (
@@ -85,14 +86,15 @@ INSERT INTO public.webhook_events (
   ('dddddddd-7d22-0000-0000-000000000004', 'aaaaaaaa-7d22-0000-0000-000000000001',
    'cccccccc-7d22-0000-0000-000000000001', 'evt-out-4', 'message', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
 INSERT INTO public.messages (
-  id, conversation_id, organization_id, webhook_event_id, direction, body
+  id, conversation_id, organization_id, webhook_event_id, direction, body,
+  body_source
 ) VALUES
   ('ffffffff-7d22-0000-0000-000000000003', 'eeeeeeee-7d22-0000-0000-000000000001',
    'aaaaaaaa-7d22-0000-0000-000000000001', 'dddddddd-7d22-0000-0000-000000000003',
-   'inbound', '¿Y pasado mañana?'),
+   'inbound', '¿Y pasado mañana?', 'customer'),
   ('ffffffff-7d22-0000-0000-000000000004', 'eeeeeeee-7d22-0000-0000-000000000001',
    'aaaaaaaa-7d22-0000-0000-000000000001', 'dddddddd-7d22-0000-0000-000000000004',
-   'inbound', 'Gracias');
+   'inbound', 'Gracias', 'customer');
 
 -- Drafts: A-approved (the happy path), A-pending, A-approved-no-revision,
 -- B-approved (inactive connection). All in their own orgs' conversations.
@@ -213,11 +215,12 @@ INSERT INTO public.webhook_events (
   ('dddddddd-7d22-0000-0000-000000000005', 'aaaaaaaa-7d22-0000-0000-000000000001',
    'cccccccc-7d22-0000-0000-000000000001', 'evt-out-5', 'message', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
 INSERT INTO public.messages (
-  id, conversation_id, organization_id, webhook_event_id, direction, body
+  id, conversation_id, organization_id, webhook_event_id, direction, body,
+  body_source
 ) VALUES
   ('ffffffff-7d22-0000-0000-000000000005', 'eeeeeeee-7d22-0000-0000-000000000001',
    'aaaaaaaa-7d22-0000-0000-000000000001', 'dddddddd-7d22-0000-0000-000000000005',
-   'inbound', '¿Precio?');
+   'inbound', '¿Precio?', 'customer');
 INSERT INTO public.ai_drafts (
   id, organization_id, business_profile_id, conversation_id,
   source_message_id, status
