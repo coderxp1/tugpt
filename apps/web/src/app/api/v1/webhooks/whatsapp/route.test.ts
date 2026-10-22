@@ -540,4 +540,101 @@ describe('whatsapp webhook route: missing secrets fail closed', () => {
     const after = await GET(getRequest(query) as unknown as Parameters<typeof GET>[0]);
     expect(after.status).toBe(200);
   });
+
+  // --- Delivery receipts (20261022000005) -----------------------------------
+  //
+  // Status callbacks ride the same envelope as messages, in a
+  // sibling `statuses` array. The route applies them through
+  // record_outbound_delivery_receipt and NEVER fails the webhook
+  // for a receipt problem: receipts refine state, messages are the
+  // payload that matters, and a 500 would make Meta retry both.
+
+  const statusPayload = (statuses: unknown[]) => ({
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              metadata: { phone_number_id: '12345' },
+              statuses,
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  it('POST with a status-only payload applies the receipt and returns 200', async () => {
+    mockRpc.mockResolvedValue({ data: true, error: null });
+    const request = createSignedRequest(
+      statusPayload([{ id: 'wamid.OUT1', status: 'delivered', timestamp: '1729000000' }])
+    );
+    const { POST } = await import('./route');
+    const response = await POST(request as unknown as Parameters<typeof POST>[0]);
+
+    expect(response.status).toBe(200);
+    expect(mockRpc).toHaveBeenCalledWith('record_outbound_delivery_receipt', {
+      p_provider_message_id: 'wamid.OUT1',
+      p_status: 'delivered',
+      p_event_at: new Date(1729000000 * 1000).toISOString(),
+    });
+    expect(mockRpc).not.toHaveBeenCalledWith(
+      'ingest_whatsapp_message_event',
+      expect.anything()
+    );
+  });
+
+  it('POST with a receipt RPC failure still returns 200 and does not retry-storm Meta', async () => {
+    mockRpc.mockResolvedValue({
+      data: null,
+      error: { code: 'XX000', message: 'boom' },
+    });
+    const request = createSignedRequest(
+      statusPayload([{ id: 'wamid.OUT1', status: 'read', timestamp: '1729000100' }])
+    );
+    const { POST } = await import('./route');
+    const response = await POST(request as unknown as Parameters<typeof POST>[0]);
+
+    expect(response.status).toBe(200);
+  });
+
+  it('POST with a mixed payload ingests the message AND applies the receipt', async () => {
+    mockRpc.mockResolvedValue({ data: true, error: null });
+    const body = {
+      entry: [
+        {
+          changes: [
+            {
+              value: {
+                metadata: { phone_number_id: '12345' },
+                messages: [
+                  {
+                    id: 'wamid.IN1',
+                    from: '34611223344',
+                    timestamp: '1729000000',
+                    type: 'text',
+                    text: { body: 'Hola' },
+                  },
+                ],
+                statuses: [{ id: 'wamid.OUT1', status: 'read', timestamp: '1729000200' }],
+              },
+            },
+          ],
+        },
+      ],
+    };
+    const request = createSignedRequest(body);
+    const { POST } = await import('./route');
+    const response = await POST(request as unknown as Parameters<typeof POST>[0]);
+
+    expect(response.status).toBe(200);
+    expect(mockRpc).toHaveBeenCalledWith(
+      'ingest_whatsapp_message_event',
+      expect.objectContaining({ p_provider_message_id: 'wamid.IN1' })
+    );
+    expect(mockRpc).toHaveBeenCalledWith(
+      'record_outbound_delivery_receipt',
+      expect.objectContaining({ p_provider_message_id: 'wamid.OUT1', p_status: 'read' })
+    );
+  });
 });

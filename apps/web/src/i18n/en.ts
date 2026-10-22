@@ -173,6 +173,8 @@ export const en: Dictionary = {
   'drafts.delivery.title': 'WhatsApp delivery',
   'drafts.delivery.providerId': 'WhatsApp ID',
   'drafts.delivery.attempts': 'Attempts',
+  'drafts.delivery.deliveredAt': 'Delivered',
+  'drafts.delivery.readAt': 'Read',
 
   'drafts.detail.title': 'Draft review',
   'drafts.detail.loading': 'Loading draft…',

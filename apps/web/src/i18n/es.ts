@@ -185,6 +185,8 @@ export const es = {
   'drafts.delivery.title': 'Entrega por WhatsApp',
   'drafts.delivery.providerId': 'ID de WhatsApp',
   'drafts.delivery.attempts': 'Intentos',
+  'drafts.delivery.deliveredAt': 'Entregado',
+  'drafts.delivery.readAt': 'Leído',
 
   'drafts.detail.title': 'Revisión del borrador',
   'drafts.detail.loading': 'Cargando el borrador…',

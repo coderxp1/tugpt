@@ -51,4 +51,20 @@ describe('toDeliveryView', () => {
     expect(toDeliveryView(row({ status: 'cancelled' })).status).toBe('failed');
     expect(toDeliveryView(row({ status: 'something-else' })).status).toBe('failed');
   });
+
+  it('carries provider receipt times through; absent receipts stay null, never invented', () => {
+    const withReceipts = toDeliveryView(
+      row({
+        status: 'sent',
+        delivered_at: '2026-10-22T10:00:00Z',
+        read_at: '2026-10-22T10:07:00Z',
+      })
+    );
+    expect(withReceipts.deliveredAt).toBe('2026-10-22T10:00:00Z');
+    expect(withReceipts.readAt).toBe('2026-10-22T10:07:00Z');
+
+    const without = toDeliveryView(row({ status: 'sent' }));
+    expect(without.deliveredAt).toBeNull();
+    expect(without.readAt).toBeNull();
+  });
 });

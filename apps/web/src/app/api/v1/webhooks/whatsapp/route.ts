@@ -2,7 +2,8 @@ import { NextRequest, NextResponse } from 'next/server';
 import { verifySignature } from '@tugpt/security';
 import { createAdminSupabaseClient } from '@tugpt/database';
 import { featureFlagService } from '@tugpt/feature-flags';
-import { normalizeWhatsAppEnvelope, computeCanonicalHash } from '@/lib/whatsapp-normalizer';
+import { normalizeWhatsAppEnvelope, computeCanonicalHash, extractWhatsAppStatuses } from '@/lib/whatsapp-normalizer';
+import { defaultLogger } from '@tugpt/observability';
 import { readSecret, reportMissingSecret } from '@/lib/whatsapp-webhook-secrets';
 
 // Read per request, not at module load: see the header of
@@ -104,7 +105,10 @@ export async function POST(request: NextRequest) {
 
   // Normalize envelope into individual events
   const events = normalizeWhatsAppEnvelope(payload);
-  if (events.length === 0) {
+  // Delivery status callbacks (delivered / read / failed for OUR
+  // outbound messages) ride the same envelope in a sibling array.
+  const statuses = extractWhatsAppStatuses(payload);
+  if (events.length === 0 && statuses.length === 0) {
     // Valid but unsupported event: acknowledge without persistence
     return new NextResponse(null, { status: 200 });
   }
@@ -151,6 +155,39 @@ export async function POST(request: NextRequest) {
     if (error) {
       // Any ingestion failure: return 500 for Meta retry
       return new NextResponse(null, { status: 500 });
+    }
+  }
+
+  // Apply delivery receipts. Unlike message ingestion, a receipt
+  // failure must NOT fail the webhook: receipts only refine the
+  // record of a send that already happened (the send result is the
+  // floor of truth), Meta retries whole payloads on a 500, and the
+  // receipt RPC is idempotent and monotonic, so a later callback
+  // converges the state. Failures and unknown ids are logged with
+  // the provider message id and status only — never payload bodies.
+  for (const status of statuses) {
+    const { data: applied, error: receiptError } = await adminClient.rpc(
+      'record_outbound_delivery_receipt',
+      {
+        p_provider_message_id: status.providerMessageId,
+        p_status: status.status,
+        p_event_at: status.providerTimestamp,
+      }
+    );
+
+    if (receiptError) {
+      defaultLogger.warn('Delivery receipt RPC failed', {
+        requestId: requestId ?? undefined,
+        providerMessageId: status.providerMessageId,
+        receiptStatus: status.status,
+        sqlstateCode: receiptError.code,
+      });
+    } else if (applied === false) {
+      defaultLogger.warn('Delivery receipt not applied (unknown id or status)', {
+        requestId: requestId ?? undefined,
+        providerMessageId: status.providerMessageId,
+        receiptStatus: status.status,
+      });
     }
   }
 
