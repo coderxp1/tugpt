@@ -278,9 +278,11 @@ SELECT ok(
   'D1: authenticated cannot execute the enqueue RPC');
 
 SET LOCAL ROLE authenticated;
-SELECT is_empty(
+SELECT throws_ok(
   $$ SELECT id FROM public.outbound_message_deliveries $$,
-  'D2: RLS leaves the deliveries table empty for authenticated');
+  '42501', NULL,
+  'D2: authenticated cannot even SELECT the deliveries table '
+  '(grants revoked at creation; RLS is not the only wall)');
 RESET ROLE;
 
 SELECT * FROM finish();
