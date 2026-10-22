@@ -49,12 +49,13 @@ INSERT INTO public.whatsapp_connections (
    'bbbbbbbb-7d22-0000-0000-000000000002', '+34600000022', 'conn-out-b', 'disconnected');
 
 INSERT INTO public.webhook_events (
-  id, organization_id, whatsapp_connection_id, provider_event_key, event_kind
+  id, organization_id, whatsapp_connection_id, provider_event_key, event_kind,
+  payload_sha256
 ) VALUES
   ('dddddddd-7d22-0000-0000-000000000001', 'aaaaaaaa-7d22-0000-0000-000000000001',
-   'cccccccc-7d22-0000-0000-000000000001', 'evt-out-1', 'message'),
+   'cccccccc-7d22-0000-0000-000000000001', 'evt-out-1', 'message', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'),
   ('dddddddd-7d22-0000-0000-000000000002', 'aaaaaaaa-7d22-0000-0000-000000000002',
-   'cccccccc-7d22-0000-0000-000000000002', 'evt-out-2', 'message');
+   'cccccccc-7d22-0000-0000-000000000002', 'evt-out-2', 'message', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
 
 INSERT INTO public.conversations (
   id, organization_id, whatsapp_connection_id, contact_phone, status
@@ -76,12 +77,13 @@ INSERT INTO public.messages (
 
 -- Each draft needs its own source message (unique per org + message).
 INSERT INTO public.webhook_events (
-  id, organization_id, whatsapp_connection_id, provider_event_key, event_kind
+  id, organization_id, whatsapp_connection_id, provider_event_key, event_kind,
+  payload_sha256
 ) VALUES
   ('dddddddd-7d22-0000-0000-000000000003', 'aaaaaaaa-7d22-0000-0000-000000000001',
-   'cccccccc-7d22-0000-0000-000000000001', 'evt-out-3', 'message'),
+   'cccccccc-7d22-0000-0000-000000000001', 'evt-out-3', 'message', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef'),
   ('dddddddd-7d22-0000-0000-000000000004', 'aaaaaaaa-7d22-0000-0000-000000000001',
-   'cccccccc-7d22-0000-0000-000000000001', 'evt-out-4', 'message');
+   'cccccccc-7d22-0000-0000-000000000001', 'evt-out-4', 'message', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
 INSERT INTO public.messages (
   id, conversation_id, organization_id, webhook_event_id, direction, body
 ) VALUES
@@ -205,10 +207,11 @@ SELECT throws_ok(
 
 -- Fresh approved draft in org A to drive the failure path.
 INSERT INTO public.webhook_events (
-  id, organization_id, whatsapp_connection_id, provider_event_key, event_kind
+  id, organization_id, whatsapp_connection_id, provider_event_key, event_kind,
+  payload_sha256
 ) VALUES
   ('dddddddd-7d22-0000-0000-000000000005', 'aaaaaaaa-7d22-0000-0000-000000000001',
-   'cccccccc-7d22-0000-0000-000000000001', 'evt-out-5', 'message');
+   'cccccccc-7d22-0000-0000-000000000001', 'evt-out-5', 'message', '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef');
 INSERT INTO public.messages (
   id, conversation_id, organization_id, webhook_event_id, direction, body
 ) VALUES
