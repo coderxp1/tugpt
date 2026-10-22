@@ -42,8 +42,8 @@
 CREATE TABLE IF NOT EXISTS public.knowledge_entries (
   id UUID PRIMARY KEY DEFAULT pg_catalog.gen_random_uuid(),
   organization_id UUID NOT NULL REFERENCES public.organizations(id) ON DELETE CASCADE,
-  question TEXT NOT NULL CHECK (pg_catalog.length(pg_catalog.trim(question)) > 0),
-  answer TEXT NOT NULL CHECK (pg_catalog.length(pg_catalog.trim(answer)) > 0),
+  question TEXT NOT NULL CHECK (pg_catalog.length(pg_catalog.btrim(question)) > 0),
+  answer TEXT NOT NULL CHECK (pg_catalog.length(pg_catalog.btrim(answer)) > 0),
   enabled BOOLEAN NOT NULL DEFAULT true,
   created_by UUID NULL,
   created_at TIMESTAMPTZ NOT NULL DEFAULT pg_catalog.now(),
