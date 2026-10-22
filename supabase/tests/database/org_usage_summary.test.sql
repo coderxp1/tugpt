@@ -245,7 +245,7 @@ SELECT is(
   'U1: the unpriced call is COUNTED...');
 
 SELECT is(
-  (SELECT sum((c->>'cost_micros')::bigint)
+  (SELECT sum((c->>'cost_micros')::bigint)::bigint
    FROM jsonb_array_elements(
      public.org_usage_summary(
        'aaaaaaaa-c057-0000-0000-0000000000a1',
