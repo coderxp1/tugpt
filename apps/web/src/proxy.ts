@@ -58,6 +58,11 @@ const PUBLIC_PREFIXES: readonly string[] = [
   // boundary here. The per-lane quota gate and the enqueue/cancel RPCs
   // run through service_role and re-check membership.
   '/api/v1/media',
+  // Same shape: the handler authenticates, resolves the active organization,
+  // and the RPC re-checks membership from the session claims before it
+  // aggregates anything (20260911000001). JSON 401/403, never an HTML
+  // redirect into a fetch.
+  '/api/v1/analytics',
   // Same shape as the others — each handler authenticates for itself and the
   // RPCs enforce membership and role. `/api/v1/invitations/accept` is the one
   // that must be here rather than 'protected': the proxy's protected path

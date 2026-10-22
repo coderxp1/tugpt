@@ -19,6 +19,7 @@ import { useState, useEffect } from 'react';
 import Link from 'next/link';
 import type { DraftListItem, ApiError } from '@/lib/draft-api/types';
 import { apiErrorText } from '@/lib/draft-api/error-text';
+import { DeliveryBadge } from './DeliveryStatus';
 import { formatDateTime } from '@/i18n';
 import { useT } from '@/i18n/provider';
 
@@ -186,7 +187,10 @@ export function DraftInbox() {
                       {draft.current_revision_body_preview || ''}
                     </p>
                   </div>
-                  <StatusBadge status={draft.status} />
+                  <div className="flex items-center gap-2">
+                    <DeliveryBadge delivery={draft.delivery} />
+                    <StatusBadge status={draft.status} />
+                  </div>
                 </div>
                 <div className="mt-2 flex items-center gap-3 text-xs text-zinc-400">
                   <span>v{draft.version}</span>

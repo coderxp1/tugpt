@@ -13,6 +13,7 @@ import { apiErrorText } from '@/lib/draft-api/error-text';
 import { formatDateTime } from '@/i18n';
 import { useT } from '@/i18n/provider';
 import { DraftActions } from './DraftActions';
+import { DeliveryStatusPanel } from './DeliveryStatus';
 import { DraftRevisionHistory } from './DraftRevisionHistory';
 import { DraftEventHistory } from './DraftEventHistory';
 import { ConversationThread } from './ConversationThread';
@@ -251,6 +252,9 @@ export function DraftDetail({ draftId }: { draftId: string }) {
           onStaleVersion={handleStaleVersion}
         />
       )}
+
+      {/* Delivery status — present once an approval has enqueued one */}
+      <DeliveryStatusPanel draftId={draft.id} refreshKey={reloadKey} />
 
       {/* Revision history */}
       <DraftRevisionHistory draftId={draft.id} currentVersion={draft.version} />
