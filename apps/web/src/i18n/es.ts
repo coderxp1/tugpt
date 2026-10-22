@@ -176,6 +176,14 @@ export const es = {
   'drafts.status.draft': 'Borrador',
   'drafts.status.approved': 'Aprobado',
   'drafts.status.rejected': 'Rechazado',
+  'drafts.delivery.queued': 'En cola de envío',
+  'drafts.delivery.sending': 'Enviando…',
+  'drafts.delivery.sent': 'Enviado',
+  'drafts.delivery.failed': 'Envío fallido',
+  'drafts.delivery.rejected': 'Rechazado por WhatsApp',
+  'drafts.delivery.title': 'Entrega por WhatsApp',
+  'drafts.delivery.providerId': 'ID de WhatsApp',
+  'drafts.delivery.attempts': 'Intentos',
 
   'drafts.detail.title': 'Revisión del borrador',
   'drafts.detail.loading': 'Cargando el borrador…',
@@ -261,6 +269,8 @@ export const es = {
   'errors.INVALID_STATE_TRANSITION':
     'Este borrador no se puede modificar en su estado actual',
   'errors.INVALID_BODY': 'El borrador no puede quedar vacío',
+  'errors.WHATSAPP_CONNECTION_INACTIVE': 'La conexión de WhatsApp de esta conversación no está activa, así que la respuesta no se puede entregar. Vuelva a conectarla y apruebe de nuevo.',
+  'errors.DRAFT_HAS_NO_CONTENT': 'Este borrador no tiene contenido para entregar',
   'errors.INVITATION_NOT_FOUND': 'No se encontró la invitación',
   'errors.INVITATION_ALREADY_PENDING': 'Esa dirección ya tiene una invitación pendiente. Cancélela antes de enviar otra.',
   'errors.INVITATION_NOT_PENDING': 'Esta invitación ya fue usada o retirada',
