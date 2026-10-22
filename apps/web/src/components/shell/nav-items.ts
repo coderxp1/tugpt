@@ -24,6 +24,10 @@ export interface NavItem {
 export const NAV_ITEMS: readonly NavItem[] = [
   { href: '/dashboard/inbox', labelKey: 'nav.inbox' },
   { href: '/dashboard/drafts', labelKey: 'nav.drafts' },
+  // Knowledge sits with the reviewer's tools: it is what the drafts
+  // are grounded in, and the person reviewing drafts is the person
+  // who notices a missing or wrong fact.
+  { href: '/dashboard/knowledge', labelKey: 'nav.knowledge' },
   { href: '/dashboard/media', labelKey: 'nav.media' },
   // Last, and deliberately: the inbox answers "who is waiting" and the drafts
   // answer "what did the AI write" — both are the reviewer's job. Usage & cost
