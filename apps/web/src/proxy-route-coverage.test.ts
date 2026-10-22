@@ -166,6 +166,12 @@ const ROUTES: RouteExpectation[] = [
     why: 'Handler authenticates; the RPC enforces role and raises P3B02 otherwise.',
   },
   {
+    path: '/api/v1/drafts/[draftId]/delivery',
+    kind: 'api',
+    type: 'public',
+    why: 'Handler authenticates and resolves tenant context; the draft must be visible under the active org before the service-role delivery read.',
+  },
+  {
     path: '/api/v1/drafts/[draftId]/edit',
     kind: 'api',
     type: 'public',

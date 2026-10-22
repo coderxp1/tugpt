@@ -10,6 +10,11 @@ import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { DraftApiService } from '@/lib/draft-api/service';
 import { checkDraftFeatureGate } from '@/lib/draft-api/feature-gate';
+import {
+  toDeliveryView,
+  type DeliveryRow,
+  type DeliveryView,
+} from '@/lib/draft-api/delivery-status';
 import type { ApiError } from '@/lib/draft-api/types';
 
 const VALID_STATUSES = ['all', 'draft', 'approved', 'rejected'] as const;
@@ -76,13 +81,38 @@ export async function GET(request: Request) {
       limit
     );
 
+    // Attach outbound delivery state (migration 20261022000003). One
+    // batch read via the admin client for the page's draft ids; the
+    // RPC joins through ai_drafts, so a delivery is only returned
+    // with its own draft. Drafts without a delivery keep no badge.
+    let enrichedDrafts = drafts;
+    if (drafts.length > 0) {
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const { data: deliveryRows, error: deliveryError } = await (adminClient as any).rpc(
+        'list_outbound_deliveries_for_drafts',
+        { p_draft_ids: drafts.map((d) => d.id) }
+      );
+      if (!deliveryError && Array.isArray(deliveryRows)) {
+        const byDraft = new Map<string, DeliveryView>();
+        for (const row of deliveryRows as DeliveryRow[]) {
+          byDraft.set(row.draft_id, toDeliveryView(row));
+        }
+        enrichedDrafts = drafts.map((d) => ({
+          ...d,
+          delivery: byDraft.get(d.id) ?? null,
+        }));
+      }
+      // A failed delivery read degrades to "no badges", never to a
+      // failed draft list — the review queue must stay usable.
+    }
+
     defaultLogger.info('Draft list retrieved', {
       requestId,
       organizationId: activeTenant.organizationId,
       count: drafts.length,
     });
 
-    return NextResponse.json({ drafts, total, page, limit });
+    return NextResponse.json({ drafts: enrichedDrafts, total, page, limit });
   } catch (err) {
     defaultLogger.error('Draft list failed', err as Error, { requestId });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');

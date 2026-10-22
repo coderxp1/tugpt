@@ -65,6 +65,17 @@ const ERROR_MAP: Record<string, MappedError> = {
   // INTERNAL_ERROR" is how a validation contract rots silently.
   P3J03: { status: 400, code: 'INVALID_QUERY', message: 'Invalid time window' },
   P3J04: { status: 400, code: 'QUERY_WINDOW_TOO_LARGE', message: 'The requested time window is too large' },
+
+  // Outbound WhatsApp delivery (20261022000001, 20261022000003). Only the
+  // codes the approve-and-enqueue path can surface are mapped here; the
+  // worker-side codes (P3W03, P3W04, P3W07) never reach an API response.
+  // P3W05/P3W06 fail the whole approval — the wrapper runs approve and
+  // enqueue in one transaction, so the draft stays in 'draft' and the
+  // reviewer sees why at the moment of decision.
+  P3W01: { status: 404, code: 'DRAFT_NOT_FOUND', message: 'Draft not found' },
+  P3W02: { status: 422, code: 'INVALID_STATE_TRANSITION', message: 'This draft cannot be modified in its current state' },
+  P3W05: { status: 422, code: 'WHATSAPP_CONNECTION_INACTIVE', message: 'The WhatsApp connection for this conversation is not active, so the reply cannot be delivered. Reconnect it and approve again.' },
+  P3W06: { status: 422, code: 'DRAFT_HAS_NO_CONTENT', message: 'This draft has no message content to deliver' },
 };
 
 const UNKNOWN_ERROR: MappedError = {
