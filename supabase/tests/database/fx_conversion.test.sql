@@ -70,8 +70,10 @@ SELECT is(
 
 SELECT is(
   (SELECT rate FROM private.resolve_fx_rate('EUR', 'USD')),
-  1.1578000000::numeric,
-  'R2: the seeded ECB rate resolves'
+  1.1234000000::numeric,
+  'R2: the seeded ECB rate resolves (newest seed: 2026-10-21, '
+  'migration 20261022000002; the 2026-09-02 rate remains in force '
+  'for instants in its own window — see R6)'
 );
 
 SELECT is(
