@@ -36,11 +36,9 @@ INSERT INTO auth.users (id, email) VALUES
   ('b0000000-7d23-0000-0000-000000000001', 'owner-a@approve.test'),
   ('b0000000-7d23-0000-0000-000000000002', 'owner-b@approve.test'),
   ('b0000000-7d23-0000-0000-000000000009', 'outsider@approve.test');
-
-INSERT INTO public.profiles (id, email) VALUES
-  ('b0000000-7d23-0000-0000-000000000001', 'owner-a@approve.test'),
-  ('b0000000-7d23-0000-0000-000000000002', 'owner-b@approve.test'),
-  ('b0000000-7d23-0000-0000-000000000009', 'outsider@approve.test');
+-- public.profiles rows are created by the handle_new_user trigger on
+-- auth.users (20260716000001); inserting them again here would
+-- duplicate the primary key — CI run 39781367467 caught exactly that.
 
 INSERT INTO public.organizations (id, name, slug) VALUES
   ('aaaaaaaa-7d23-0000-0000-000000000001', 'Clínica A', 'approve-enqueue-a'),
