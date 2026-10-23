@@ -61,9 +61,11 @@
 #
 # Until the staging stack exists and DNS points here, this block simply
 # has no reachable upstream — it does not affect the production site.
-# Caddy will try to obtain a certificate for staging.tugpt.pro once this
-# configuration is loaded, so load it only after the DNS A record
-# exists (see the staging hosting plan).
+# Load order follows the staging runbook (§4A), which is authoritative:
+# this block is loaded with the rest of the sequence and the DNS A
+# record comes LAST. Caddy will retry certificate issuance for
+# staging.tugpt.pro until DNS resolves; those retries are expected
+# and harmless, and the block stays unreachable until then.
 #
 # basic_auth is the outer door for staging; the application login is
 # the inner one. The hash below is a PLACEHOLDER for a discarded

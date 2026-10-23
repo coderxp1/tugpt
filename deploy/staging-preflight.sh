@@ -29,7 +29,9 @@
 #   compose-render the merged staging config renders, and the web
 #                  service is exactly as designed: staging-edge network
 #                  only (never the production `tugpt` network), one
-#                  published port, loopback 3002 only, restart "no"
+#                  published port, loopback 3002 only, restart "no",
+#                  and the resource limits from the reviewed override
+#                  (cpus "1.0", memory 1 GiB) present in the render
 #   caddy-validate the checkout's Caddyfile validates under the caddy
 #                  image, with production's TUGPT_DOMAIN
 #
@@ -187,6 +189,20 @@ else
     fi
     if ! printf '%s\n' "$web_block" | grep -q 'restart: "no"'; then
         fail compose-render "web's restart policy is not \"no\" in the rendered config"
+        render_fails=1
+    fi
+    # The resource limits are part of the reviewed staging design
+    # (docker-compose.staging.yml: cpus "1.0", memory 1G). Assert them
+    # in the RENDER rather than trusting the override file's text: a
+    # render without them means the override was dropped or edited,
+    # and staging must not start unbounded on the production host.
+    # Compose renders 1G as 1073741824 bytes; accept either form.
+    if ! printf '%s\n' "$web_block" | grep -q 'cpus: "1.0"'; then
+        fail compose-render "web's cpu limit is not \"1.0\" in the rendered config; the reviewed resource limits are missing or changed"
+        render_fails=1
+    fi
+    if ! printf '%s\n' "$web_block" | grep -qE 'memory: "?1073741824"?|memory: "1G"'; then
+        fail compose-render "web's memory limit is not 1G in the rendered config; the reviewed resource limits are missing or changed"
         render_fails=1
     fi
     [ "$render_fails" = "0" ] && pass compose-render
