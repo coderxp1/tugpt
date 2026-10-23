@@ -29,6 +29,7 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // who notices a missing or wrong fact.
   { href: '/dashboard/knowledge', labelKey: 'nav.knowledge' },
   { href: '/dashboard/media', labelKey: 'nav.media' },
+  { href: '/settings/integrations', labelKey: 'nav.integrations' },
   // Last, and deliberately: the inbox answers "who is waiting" and the drafts
   // answer "what did the AI write" — both are the reviewer's job. Usage & cost
   // answers "what is this costing", which is the owner's question, and it is

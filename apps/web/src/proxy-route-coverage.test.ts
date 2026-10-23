@@ -112,6 +112,12 @@ const ROUTES: RouteExpectation[] = [
     why: 'Media job detail with private result preview. The proxy is the only gate on the page shell.',
   },
   {
+    path: '/settings/integrations',
+    kind: 'page',
+    type: 'protected',
+    why: 'Integration settings (Google Calendar connection state and actions). The proxy is the gate on the shell; the page itself resolves the session tenant and shows metadata only — credential material never reaches it.',
+  },
+  {
     path: '/dashboard/analytics',
     kind: 'page',
     type: 'protected',
@@ -334,6 +340,24 @@ const ROUTES: RouteExpectation[] = [
     kind: 'api',
     type: 'public',
     why: 'Handler authenticates and resolves tenant context; the signed URL is minted service-side only after an org-scoped read authorizes the caller — no customer-facing storage policies exist on the private media bucket.',
+  },
+  {
+    path: '/api/v1/integrations/google/start',
+    kind: 'api',
+    type: 'public',
+    why: 'Handler authenticates and requires the owner/admin role; the organization comes from the session (x-tenant-id is only a validated hint) and the minted OAuth state is HMAC-signed and bound to that user and organization.',
+  },
+  {
+    path: '/api/v1/integrations/google/callback',
+    kind: 'api',
+    type: 'public',
+    why: 'Handler authenticates; the organization and user come from the HMAC-signed state, membership and role are re-verified before the single-use code is exchanged, and outcomes redirect only to the fixed settings path.',
+  },
+  {
+    path: '/api/v1/integrations/google/disconnect',
+    kind: 'api',
+    type: 'public',
+    why: 'Handler authenticates and requires the owner/admin role; the organization comes from the session, and the outcome redirects only to the fixed settings path.',
   },
 ];
 
