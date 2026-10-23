@@ -135,6 +135,17 @@ services:
       - caddy_config:/config
     networks:
       - tugpt
+      # The staging edge network (see docker-compose.staging.yml). Caddy
+      # is the only production service on it, and the staging web is the
+      # only other member — staging never joins the `tugpt` network
+      # itself. Declared external: the network is created ONCE on the
+      # host (`docker network create tugpt-staging-edge`) as part of the
+      # staging deployment, BEFORE this file is next used to start the
+      # stack — an external network that does not exist fails the whole
+      # `up`, production included. Do not remove the network while this
+      # line is here, and do not land this line on a host where the
+      # network has not been created yet.
+      - staging-edge
     depends_on:
       - web
 
@@ -229,6 +240,11 @@ services:
 networks:
   tugpt:
     driver: bridge
+  # External, created by hand at staging deploy time (see the caddy
+  # service above). Not used by any production workload.
+  staging-edge:
+    external: true
+    name: tugpt-staging-edge
 
 volumes:
   # Issued certificates and the ACME account key. Only used by the `proxy`

@@ -209,4 +209,162 @@ export async function writePlatformSecret(
   return { id: String((data as { id: unknown }).id), keyId: sealed.keyId };
 }
 
+/**
+ * What an organization secret read hands back: the credential, plus the
+ * metadata `organization_secrets` carries on purpose — the scopes the
+ * credential was granted under and its expiry. A reader that would use a
+ * token for a scope it was not granted is making an authorization decision;
+ * the scopes come along so the reader can refuse before calling.
+ */
+export interface OrganizationSecretValue {
+  readonly plaintext: string;
+  readonly scopes: string[];
+  readonly expiresAt: string | null;
+}
+
+export interface WriteOrganizationSecretOptions {
+  /** ADR-015 D8: the scopes this credential was granted under. Empty means "none recorded". */
+  readonly scopes?: readonly string[];
+  /** The credential's expiry, or `null` for one that does not expire. */
+  readonly expiresAt?: string | null;
+}
+
+/**
+ * Read and decrypt one organization-owned credential.
+ *
+ * Throws on every failure, including "no such row" — the same contract as
+ * `readPlatformSecret`, for the same reason: a nullable return invites
+ * `?? ''` at the call site, and an empty credential is the value that turns
+ * a missing secret into a request authenticated as nobody.
+ *
+ * The identity binds the organization into the GCM additional authenticated
+ * data, so a row moved between organizations will not decrypt in its new
+ * home, and a platform ciphertext presented here will not decrypt either.
+ */
+export async function readOrganizationSecret(
+  client: SupabaseClient,
+  organizationId: string,
+  provider: string,
+  secretName: string,
+  keys: KeyRing
+): Promise<OrganizationSecretValue> {
+  const { data, error } = await client
+    .from('organization_secrets')
+    .select('algorithm, key_id, iv, ciphertext, auth_tag, scopes, expires_at')
+    .eq('organization_id', organizationId)
+    .eq('provider', provider)
+    .eq('secret_name', secretName)
+    .maybeSingle();
+
+  if (error) {
+    throw new SecretStoreError(
+      `failed to read ${organizationId}/${provider}/${secretName} from organization_secrets`,
+      'QUERY_FAILED'
+    );
+  }
+  if (!data) {
+    throw new SecretStoreError(
+      `no ${organizationId}/${provider}/${secretName} row in organization_secrets`,
+      'NOT_FOUND'
+    );
+  }
+
+  const identity: SecretIdentity = { organizationId, provider, secretName };
+  const plaintext = decryptSecret(rowToSecret(data as SecretRow), identity, keys);
+
+  const row = data as SecretRow & { scopes?: unknown; expires_at?: unknown };
+  const scopes = Array.isArray(row.scopes)
+    ? row.scopes.filter((s): s is string => typeof s === 'string')
+    : [];
+  const expiresAt = typeof row.expires_at === 'string' ? row.expires_at : null;
+
+  return { plaintext, scopes, expiresAt };
+}
+
+/**
+ * Encrypt and store one organization-owned credential.
+ *
+ * An upsert on `(organization_id, provider, secret_name)`, the table's unique
+ * index, so rotating or re-granting a credential is this same call. The
+ * plaintext never crosses the wire; the ciphertext is produced first, so a
+ * failed write never half-lands.
+ *
+ * Returns the key id it used, for the same reason `writePlatformSecret` does.
+ */
+export async function writeOrganizationSecret(
+  client: SupabaseClient,
+  organizationId: string,
+  provider: string,
+  secretName: string,
+  plaintext: string,
+  keyId: string,
+  keys: KeyRing,
+  options: WriteOrganizationSecretOptions = {}
+): Promise<{ id: string; keyId: string }> {
+  const identity: SecretIdentity = { organizationId, provider, secretName };
+  const sealed = encryptSecret(plaintext, identity, keyId, keys);
+
+  const { data, error } = await client
+    .from('organization_secrets')
+    .upsert(
+      {
+        organization_id: organizationId,
+        provider,
+        secret_name: secretName,
+        scopes: [...(options.scopes ?? [])],
+        expires_at: options.expiresAt ?? null,
+        algorithm: sealed.algorithm,
+        key_id: sealed.keyId,
+        iv: encodeBytea(sealed.iv),
+        ciphertext: encodeBytea(sealed.ciphertext),
+        auth_tag: encodeBytea(sealed.authTag),
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: 'organization_id,provider,secret_name' }
+    )
+    .select('id')
+    .single();
+
+  if (error || !data) {
+    throw new SecretStoreError(
+      `failed to write ${organizationId}/${provider}/${secretName} to organization_secrets`,
+      'WRITE_FAILED'
+    );
+  }
+
+  return { id: String((data as { id: unknown }).id), keyId: sealed.keyId };
+}
+
+/**
+ * Delete one organization-owned credential. Idempotent by design:
+ * revoking a connection that was never stored, or was already revoked,
+ * succeeds with `false` ("nothing was there") rather than throwing —
+ * revocation must be safe to retry. A database error still throws
+ * QUERY_FAILED: "we could not delete it" and "it was not there" are
+ * different operational states and must not be conflated.
+ */
+export async function deleteOrganizationSecret(
+  client: SupabaseClient,
+  organizationId: string,
+  provider: string,
+  secretName: string
+): Promise<boolean> {
+  const { data, error } = await client
+    .from('organization_secrets')
+    .delete()
+    .eq('organization_id', organizationId)
+    .eq('provider', provider)
+    .eq('secret_name', secretName)
+    .select('id');
+
+  if (error) {
+    throw new SecretStoreError(
+      `failed to delete ${organizationId}/${provider}/${secretName} from organization_secrets`,
+      'QUERY_FAILED'
+    );
+  }
+
+  return Array.isArray(data) && data.length > 0;
+}
+
 export { SecretCryptoError };

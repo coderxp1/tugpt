@@ -34,6 +34,7 @@ tugpt-nextjs-recovered/
 ├── packages/
 │   ├── ai-orchestration/       # Prompt builder, provider selection, draft pipeline
 │   ├── ai-providers/           # AI provider adapter pattern (active: Langdock; Logicc/Anymize adapters retained, unused)
+│   ├── appointments/           # Appointment availability & request persistence (no booking writes yet)
 │   ├── auth/                   # Supabase auth service & session management
 │   ├── database/               # Supabase client, migrations, RLS policies
 │   ├── feature-flags/          # Feature flag architecture
@@ -150,7 +151,7 @@ pnpm exec turbo typecheck     # TypeScript
 pnpm exec turbo test          # Vitest
 ```
 
-Each of the four runs across **10 workspaces** — the 8 `packages/*`, plus `web`
+Each of the four runs across **11 workspaces** — the 9 `packages/*`, plus `web`
 and `worker` — so a full cold gate is 39 tasks (`build` is skipped for the
 packages, which have no build step). Run it as one command:
 

@@ -56,6 +56,14 @@ const ALLOWED_TS = new Map<string, string>([
     'Generated Supabase type map. Declares the table shape; performs no query.',
   ],
   [
+    'packages/appointments/src/feature-gates.ts',
+    'Documents that the per-organization answer comes from is_feature_enabled and takes it through an injected reader the composition root implements via the RPC. The package performs no query and makes no authorization decision itself.',
+  ],
+  [
+    'packages/appointments/src/google-freebusy-provider.ts',
+    'Names the flag key (GOOGLE_FREEBUSY_FLAG_KEY) and the table the flag row lives in so the composition root knows which flag to gate. The provider queries nothing; it receives `enabled` from its caller.',
+  ],
+  [
     'apps/worker/src/e2e/milestone1.ts',
     'E2E harness. Arms the global row and an org row as test setup, then restores ' +
       'them on teardown. It also calls is_feature_enabled to assert the resolved ' +

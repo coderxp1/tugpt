@@ -42,6 +42,48 @@ export const es = {
   'nav.drafts': 'Borradores',
   'nav.inbox': 'Conversaciones',
   'nav.media': 'Multimedia',
+  'nav.integrations': 'Integraciones',
+
+  'integrations.title': 'Integraciones',
+  'integrations.noOrganization': 'No hay una organización activa en esta sesión.',
+  'integrations.google.title': 'Google Calendar',
+  'integrations.google.description':
+    'Muestra la disponibilidad de la organización en Google Calendar al proponer horarios de citas. Solo lectura: TuGPT nunca crea ni modifica eventos.',
+  'integrations.status.notConfigured':
+    'La integración aún no está configurada por el operador de la plataforma.',
+  'integrations.status.notConnected': 'Sin conexión',
+  'integrations.status.connected': 'Conectado',
+  'integrations.status.credentialExpires': 'La credencial caduca el {date}.',
+  'integrations.status.credentialExpired':
+    'La credencial caducó. Hay que reconectar para renovarla.',
+  'integrations.status.checksEnabled':
+    'Las consultas de disponibilidad están activadas para esta organización.',
+  'integrations.status.checksDisabled':
+    'Las consultas de disponibilidad están desactivadas para esta organización.',
+  'integrations.action.connect': 'Conectar Google Calendar',
+  'integrations.action.reconnect': 'Reconectar',
+  'integrations.action.disconnect': 'Desconectar',
+  'integrations.adminOnly':
+    'Solo el propietario o un administrador de la organización puede cambiar esta conexión.',
+  'integrations.banner.connected': 'Google Calendar conectado.',
+  'integrations.banner.denied':
+    'La conexión fue cancelada en Google. No se guardó ninguna credencial.',
+  'integrations.banner.revoked':
+    'Google Calendar desconectado. La credencial guardada fue eliminada.',
+  'integrations.banner.error': 'La conexión no pudo completarse: {reason}.',
+  'integrations.reason.not_configured': 'la integración no está configurada',
+  'integrations.reason.invalid_state':
+    'la sesión de conexión caducó o no es válida; hay que empezar de nuevo',
+  'integrations.reason.invalid_callback': 'la respuesta de Google llegó incompleta',
+  'integrations.reason.provider_error': 'Google devolvió un error',
+  'integrations.reason.forbidden': 'la sesión no tiene permiso para esta organización',
+  'integrations.reason.exchange_failed': 'Google rechazó el código de autorización',
+  'integrations.reason.no_offline_access': 'Google no concedió acceso permanente',
+  'integrations.reason.scope_not_granted':
+    'no se concedió el permiso de disponibilidad',
+  'integrations.reason.storage_failed': 'no se pudo guardar la credencial',
+  'integrations.reason.disconnect_failed': 'no se pudo completar la desconexión',
+  'integrations.reason.internal_error': 'ocurrió un error inesperado',
 
   'media.list.title': 'Multimedia',
   'media.list.loading': 'Cargando trabajos…',

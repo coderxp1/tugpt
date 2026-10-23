@@ -4,7 +4,10 @@ import {
   decodeBytea,
   encodeBytea,
   readPlatformSecret,
+  readOrganizationSecret,
+  deleteOrganizationSecret,
   writePlatformSecret,
+  writeOrganizationSecret,
   SecretStoreError,
 } from './secret-store';
 import { encryptSecret, SecretCryptoError, type KeyRing } from './secret-crypto';
@@ -300,5 +303,180 @@ describe('writePlatformSecret', () => {
     await expect(
       writePlatformSecret(client, 'gladia', 'api_key', SECRET, KEY_ID, KEYS)
     ).rejects.toMatchObject({ code: 'WRITE_FAILED' });
+  });
+});
+
+const ORG_ID = '11111111-2222-3333-4444-555555555555';
+const ORG_SECRET = '{"access_token":"ya29.test","refresh_token":"1//test"}';
+const FREEBUSY_SCOPE = 'https://www.googleapis.com/auth/calendar.freebusy';
+
+/** A row for the org's Google calendar credential, as PostgREST renders one. */
+function storedOrgRow(overrides: Record<string, unknown> = {}) {
+  const sealed = encryptSecret(
+    ORG_SECRET,
+    { organizationId: ORG_ID, provider: 'google', secretName: 'calendar_oauth' },
+    KEY_ID,
+    KEYS
+  );
+  return {
+    algorithm: sealed.algorithm,
+    key_id: sealed.keyId,
+    iv: encodeBytea(sealed.iv),
+    ciphertext: encodeBytea(sealed.ciphertext),
+    auth_tag: encodeBytea(sealed.authTag),
+    scopes: [FREEBUSY_SCOPE],
+    expires_at: '2026-01-15T13:00:00.000Z',
+    ...overrides,
+  };
+}
+
+describe('readOrganizationSecret', () => {
+  it('returns the plaintext with the scopes and expiry the row carries', async () => {
+    const { client } = selectClient({ data: storedOrgRow() });
+
+    const value = await readOrganizationSecret(client, ORG_ID, 'google', 'calendar_oauth', KEYS);
+
+    expect(value.plaintext).toBe(ORG_SECRET);
+    expect(value.scopes).toEqual([FREEBUSY_SCOPE]);
+    expect(value.expiresAt).toBe('2026-01-15T13:00:00.000Z');
+  });
+
+  it('queries organization_secrets for exactly the identity it was asked for', async () => {
+    const { client, calls } = selectClient({ data: storedOrgRow() });
+    await readOrganizationSecret(client, ORG_ID, 'google', 'calendar_oauth', KEYS);
+
+    expect(calls.table).toBe('organization_secrets');
+    expect(calls['eq:organization_id']).toBe(ORG_ID);
+    expect(calls['eq:provider']).toBe('google');
+    expect(calls['eq:secret_name']).toBe('calendar_oauth');
+    const selected = String(calls.select).split(',').map((c) => c.trim());
+    expect(selected.sort()).toEqual(
+      ['algorithm', 'auth_tag', 'ciphertext', 'expires_at', 'iv', 'key_id', 'scopes'].sort()
+    );
+  });
+
+  it('throws NOT_FOUND for a missing row rather than returning null', async () => {
+    const { client } = selectClient({ data: null });
+
+    await expect(
+      readOrganizationSecret(client, ORG_ID, 'google', 'calendar_oauth', KEYS)
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  });
+
+  it('throws QUERY_FAILED on a database error', async () => {
+    const { client } = selectClient({ error: { message: 'connection reset' } });
+
+    await expect(
+      readOrganizationSecret(client, ORG_ID, 'google', 'calendar_oauth', KEYS)
+    ).rejects.toMatchObject({ code: 'QUERY_FAILED' });
+  });
+
+  // The GCM additional data binds the organization: a platform ciphertext
+  // (identity organizationId: null) must not decrypt as an organization
+  // secret, and neither may another organization's row.
+  it('refuses a ciphertext sealed under a different identity', async () => {
+    const { client } = selectClient({ data: storedRow() });
+
+    await expect(
+      readOrganizationSecret(client, ORG_ID, 'google', 'calendar_oauth', KEYS)
+    ).rejects.toBeInstanceOf(SecretCryptoError);
+  });
+});
+
+describe('writeOrganizationSecret', () => {
+  it('upserts on the (organization_id, provider, secret_name) index with scopes and expiry', async () => {
+    const { client, calls } = upsertClient({ data: { id: 'row-1' } });
+
+    const result = await writeOrganizationSecret(
+      client,
+      ORG_ID,
+      'google',
+      'calendar_oauth',
+      ORG_SECRET,
+      KEY_ID,
+      KEYS,
+      { scopes: [FREEBUSY_SCOPE], expiresAt: '2026-01-15T13:00:00.000Z' }
+    );
+
+    expect(result).toEqual({ id: 'row-1', keyId: KEY_ID });
+    expect(calls.table).toBe('organization_secrets');
+    expect(calls.opts).toEqual({ onConflict: 'organization_id,provider,secret_name' });
+    const row = calls.row as Record<string, unknown>;
+    expect(row.organization_id).toBe(ORG_ID);
+    expect(row.scopes).toEqual([FREEBUSY_SCOPE]);
+    expect(row.expires_at).toBe('2026-01-15T13:00:00.000Z');
+    // The ciphertext that crosses the wire decrypts back to the plaintext.
+    const roundTrip = await readOrganizationSecret(
+      selectClient({ data: { ...storedOrgRow(), iv: row.iv, ciphertext: row.ciphertext, auth_tag: row.auth_tag, key_id: row.key_id } }).client,
+      ORG_ID,
+      'google',
+      'calendar_oauth',
+      KEYS
+    );
+    expect(roundTrip.plaintext).toBe(ORG_SECRET);
+  });
+
+  it('throws WRITE_FAILED when the upsert fails', async () => {
+    const { client } = upsertClient({ error: { message: 'denied' } });
+
+    await expect(
+      writeOrganizationSecret(client, ORG_ID, 'google', 'calendar_oauth', ORG_SECRET, KEY_ID, KEYS)
+    ).rejects.toMatchObject({ code: 'WRITE_FAILED' });
+  });
+});
+
+function deleteClient(result: { data?: unknown; error?: unknown }) {
+  const calls: Record<string, unknown> = {};
+  const builder: Record<string, unknown> = {
+    delete: vi.fn(() => builder),
+    eq: vi.fn((col: string, val: unknown) => {
+      calls[`eq:${col}`] = val;
+      return builder;
+    }),
+    select: vi.fn(async (cols: string) => {
+      calls.select = cols;
+      return { data: result.data ?? null, error: result.error ?? null };
+    }),
+  };
+  const from = vi.fn((table: string) => {
+    calls.table = table;
+    return builder;
+  });
+
+  return { calls, from, client: { from } as never };
+}
+
+describe('deleteOrganizationSecret', () => {
+  it('deletes by the full identity and reports whether a row was there', async () => {
+    const { client, calls } = deleteClient({ data: [{ id: 'row-1' }] });
+
+    const deleted = await deleteOrganizationSecret(
+      client,
+      ORG_ID,
+      'google',
+      'calendar_oauth'
+    );
+
+    expect(deleted).toBe(true);
+    expect(calls.table).toBe('organization_secrets');
+    expect(calls['eq:organization_id']).toBe(ORG_ID);
+    expect(calls['eq:provider']).toBe('google');
+    expect(calls['eq:secret_name']).toBe('calendar_oauth');
+  });
+
+  it('reports false when nothing was stored, without throwing', async () => {
+    const { client } = deleteClient({ data: [] });
+
+    await expect(
+      deleteOrganizationSecret(client, ORG_ID, 'google', 'calendar_oauth')
+    ).resolves.toBe(false);
+  });
+
+  it('throws QUERY_FAILED on a database error rather than claiming absence', async () => {
+    const { client } = deleteClient({ error: { message: 'denied' } });
+
+    await expect(
+      deleteOrganizationSecret(client, ORG_ID, 'google', 'calendar_oauth')
+    ).rejects.toMatchObject({ code: 'QUERY_FAILED' });
   });
 });

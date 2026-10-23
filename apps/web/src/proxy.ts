@@ -70,6 +70,15 @@ const PUBLIC_PREFIXES: readonly string[] = [
   // has none yet for the organization they are joining. It still requires a
   // session; the handler returns 401 without one.
   '/api/v1/invitations',
+  // Same shape again: the handlers authenticate for themselves. The start
+  // route mints an HMAC-signed, user-bound OAuth state only for a session
+  // owner/admin; the callback verifies that state and re-checks membership
+  // and role before exchanging the code. Routing these through the proxy's
+  // session check would break the callback: Google's redirect arrives as a
+  // top-level navigation whose contract is the signed state plus the
+  // session, and the handler answers with its own 401 envelope / settings
+  // redirect rather than the proxy's.
+  '/api/v1/integrations',
 ];
 
 /**
