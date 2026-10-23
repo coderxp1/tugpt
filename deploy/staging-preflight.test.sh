@@ -70,6 +70,11 @@ services:
   web:
     image: tugpt-web-staging
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1073741824"
     networks:
       staging-edge:
         aliases:
@@ -85,6 +90,11 @@ services:
   web:
     image: tugpt-web-staging
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1073741824"
     networks:
       tugpt:
         aliases:
@@ -99,6 +109,11 @@ services:
   web:
     image: tugpt-web-staging
     restart: "always"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1073741824"
     networks:
       staging-edge:
         aliases:
@@ -118,11 +133,52 @@ services:
   web:
     image: tugpt-web-staging
     restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "1.0"
+          memory: "1073741824"
     networks:
       staging-edge:
         aliases:
           - staging-web
       tugpt-extra:
+        aliases:
+          - staging-web
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 3000
+        published: "3002"
+YAML
+
+cat > "$TMP/render-nolimits.yml" <<'YAML'
+services:
+  web:
+    image: tugpt-web-staging
+    restart: "no"
+    networks:
+      staging-edge:
+        aliases:
+          - staging-web
+    ports:
+      - mode: ingress
+        host_ip: 127.0.0.1
+        target: 3000
+        published: "3002"
+YAML
+cat > "$TMP/render-biglimits.yml" <<'YAML'
+services:
+  web:
+    image: tugpt-web-staging
+    restart: "no"
+    deploy:
+      resources:
+        limits:
+          cpus: "2.0"
+          memory: "2147483648"
+    networks:
+      staging-edge:
         aliases:
           - staging-web
     ports:
@@ -282,6 +338,20 @@ unset PROD_ENV_OVERRIDE
 printf 'extranet\n' > "$TMP/render"
 out=$(run_case); rc=$?
 expect "extra network in render fails compose-render" 1 "$rc" "FAIL compose-render" "$out"
+printf 'good\n' > "$TMP/render"
+
+# Case 15: rendered config carries no resource limits at all (the
+# override was dropped or edited). The limits assertion must reject it.
+printf 'nolimits\n' > "$TMP/render"
+out=$(run_case); rc=$?
+expect "missing resource limits in render fails compose-render" 1 "$rc" "FAIL compose-render" "$out"
+printf 'good\n' > "$TMP/render"
+
+# Case 16: rendered config carries RAISED resource limits (2 cpus /
+# 2G). Only the reviewed values pass; bigger is also a failure.
+printf 'biglimits\n' > "$TMP/render"
+out=$(run_case); rc=$?
+expect "raised resource limits in render fails compose-render" 1 "$rc" "FAIL compose-render" "$out"
 printf 'good\n' > "$TMP/render"
 
 if [ "$failures" -gt 0 ]; then
