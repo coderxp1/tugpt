@@ -1,5 +1,7 @@
 // Stage 5A: POST /api/v1/drafts/:draftId/approve — Approve a draft
-// Calls approve_draft(draftId, expectedLockVersion) RPC via user-session client.
+// Calls approve_and_enqueue_draft(draftId, expectedLockVersion) RPC via
+// user-session client (migration 20261022000003): approval and outbound
+// delivery enqueue commit or roll back together.
 // Amendment 1: Approved/rejected are terminal. Edit on terminal → P3B04 from DB.
 // Amendment 2: Confirms draft is visible under active org before calling RPC.
 // Amendment 5: Exact SQLSTATE-to-HTTP mapping.
@@ -78,8 +80,14 @@ export async function POST(
       return errorResponse(404, 'DRAFT_NOT_FOUND', 'Draft not found');
     }
 
+    // Atomic approve + enqueue (migration 20261022000003): one RPC, one
+    // transaction. If the delivery cannot be enqueued (inactive
+    // connection, no content), the approval rolls back with it and the
+    // mapped P3W error tells the reviewer why — a draft is never left
+    // approved-but-silently-undeliverable, and a retry cannot create a
+    // second delivery (the enqueue is idempotent per draft).
     const { data, error: rpcError } = // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    await (supabase as any).rpc('approve_draft', {
+    await (supabase as any).rpc('approve_and_enqueue_draft', {
       p_draft_id: draftId,
       p_expected_lock_version: body.expectedLockVersion,
     });
@@ -96,13 +104,22 @@ export async function POST(
       return errorResponse(mapped.status, mapped.code, mapped.message);
     }
 
-    defaultLogger.info('Draft approved', {
+    defaultLogger.info('Draft approved and queued for delivery', {
       requestId,
       draftId,
       organizationId: activeTenant.organizationId,
     });
 
-    return NextResponse.json({ draft: data });
+    const approvedRow = Array.isArray(data) ? data[0] : data;
+    const delivery =
+      approvedRow && typeof approvedRow === 'object' && 'delivery_id' in approvedRow
+        ? {
+            id: (approvedRow as { delivery_id: string }).delivery_id,
+            status: (approvedRow as { delivery_status: string }).delivery_status,
+          }
+        : null;
+
+    return NextResponse.json({ draft: data, delivery });
   } catch (err) {
     defaultLogger.error('Draft approve failed', err as Error, { requestId });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');

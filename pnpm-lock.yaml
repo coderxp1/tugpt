@@ -132,6 +132,9 @@ importers:
       '@tugpt/database':
         specifier: workspace:*
         version: link:../../packages/database
+      '@tugpt/feature-flags':
+        specifier: workspace:*
+        version: link:../../packages/feature-flags
       '@tugpt/jobs':
         specifier: workspace:*
         version: link:../../packages/jobs

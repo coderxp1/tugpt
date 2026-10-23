@@ -156,6 +156,7 @@ export const es = {
   // (see media-api/error-mapper.ts); this spelling is translated too so an
   // older client never renders a raw code.
   'errors.MEDIA_QUOTA_EXCEEDED': 'Se alcanzó el límite de trabajos de esta organización',
+  'nav.analytics': 'Uso y costos',
   'inbox.title': 'Conversaciones',
   'inbox.loading': 'Cargando conversaciones…',
   'inbox.loadFailed': 'No se pudieron cargar las conversaciones',
@@ -218,6 +219,14 @@ export const es = {
   'drafts.status.draft': 'Borrador',
   'drafts.status.approved': 'Aprobado',
   'drafts.status.rejected': 'Rechazado',
+  'drafts.delivery.queued': 'En cola de envío',
+  'drafts.delivery.sending': 'Enviando…',
+  'drafts.delivery.sent': 'Enviado',
+  'drafts.delivery.failed': 'Envío fallido',
+  'drafts.delivery.rejected': 'Rechazado por WhatsApp',
+  'drafts.delivery.title': 'Entrega por WhatsApp',
+  'drafts.delivery.providerId': 'ID de WhatsApp',
+  'drafts.delivery.attempts': 'Intentos',
 
   'drafts.detail.title': 'Revisión del borrador',
   'drafts.detail.loading': 'Cargando el borrador…',
@@ -291,6 +300,43 @@ export const es = {
   'drafts.events.edit': 'Editado',
   'drafts.events.reject': 'Rechazado',
 
+  // Analytics v1 — uso y costos. Los totales de costo desconocido se dicen
+  // como desconocidos: nunca se muestra un cero donde falta un precio.
+  'analytics.title': 'Uso y costos',
+  'analytics.loading': 'Cargando uso…',
+  'analytics.loadFailed': 'No se pudo cargar el uso',
+  'analytics.retry': 'Reintentar',
+  'analytics.rangeLabel': 'Período',
+  'analytics.range.7d': '7 días',
+  'analytics.range.30d': '30 días',
+  'analytics.range.90d': '90 días',
+  'analytics.window': 'Del {from} al {to}',
+  'analytics.empty': 'No hay uso registrado en este período.',
+  'analytics.totalsTitle': 'Resumen del período',
+  'analytics.events': 'Llamadas registradas',
+  'analytics.pricedEvents': 'Con precio conocido',
+  'analytics.unpricedEvents': 'Sin precio',
+  'analytics.unpricedNotice':
+    '{count} llamadas sin precio: su costo es desconocido y no se suma como cero.',
+  'analytics.unconvertedNotice':
+    '{count} llamadas con precio no se pudieron convertir a la moneda contable; su costo falta en el total convertido.',
+  'analytics.accountingCost': 'Costo convertido ({currency})',
+  'analytics.nativeCost': 'Costo facturado ({currency})',
+  'analytics.costUnknown': 'Costo desconocido',
+  'analytics.quantities.input_tokens': 'Tokens de entrada',
+  'analytics.quantities.output_tokens': 'Tokens de salida',
+  'analytics.quantities.audio_seconds': 'Segundos de audio facturados',
+  'analytics.byProviderTitle': 'Por proveedor y modelo',
+  'analytics.provider': 'Proveedor',
+  'analytics.model': 'Modelo',
+  'analytics.modality': 'Modalidad',
+  'analytics.modality.text': 'Texto',
+  'analytics.modality.audio': 'Audio',
+  'analytics.modelUnknown': 'Sin especificar',
+  'analytics.column.events': 'Llamadas',
+  'analytics.column.cost': 'Costo',
+  'analytics.unpricedShort': '{count} sin precio',
+
   // Keyed by the `code` the API returns alongside its message, not by the
   // message. `apps/web/src/lib/draft-api/error-mapper.ts` is the list; the
   // server keeps sending English, and the server's text is the fallback when a
@@ -303,6 +349,8 @@ export const es = {
   'errors.INVALID_STATE_TRANSITION':
     'Este borrador no se puede modificar en su estado actual',
   'errors.INVALID_BODY': 'El borrador no puede quedar vacío',
+  'errors.WHATSAPP_CONNECTION_INACTIVE': 'La conexión de WhatsApp de esta conversación no está activa, así que la respuesta no se puede entregar. Vuelva a conectarla y apruebe de nuevo.',
+  'errors.DRAFT_HAS_NO_CONTENT': 'Este borrador no tiene contenido para entregar',
   'errors.INVITATION_NOT_FOUND': 'No se encontró la invitación',
   'errors.INVITATION_ALREADY_PENDING': 'Esa dirección ya tiene una invitación pendiente. Cancélela antes de enviar otra.',
   'errors.INVITATION_NOT_PENDING': 'Esta invitación ya fue usada o retirada',
@@ -311,6 +359,8 @@ export const es = {
   'errors.ALREADY_A_MEMBER': 'Esa persona ya pertenece a esta organización',
   'errors.ROLE_ABOVE_YOUR_OWN': 'No puede invitar a alguien con un rol superior al suyo',
   'errors.INVALID_EMAIL': 'Esa dirección de correo no es válida',
+  'errors.INVALID_QUERY': 'Los parámetros de la consulta no son válidos',
+  'errors.QUERY_WINDOW_TOO_LARGE': 'El período solicitado es demasiado grande',
   'errors.INTERNAL_ERROR': 'Ocurrió un error inesperado',
   // Media API (media-api/error-mapper.ts). Spanish is the source of truth;
   // the server sends the English sentence as the fallback.

@@ -27,11 +27,22 @@ import {
  * the credential a send would need. So the constraint is asserted twice, in
  * two different ways, because neither alone is enough.
  *
- * FIRST, AGAINST THE SOURCE (this describe block):
+ * AMENDMENT (2026-10-22, owner's product mandate): the delivery path
+ * for human-approved drafts now exists (migration 20261022000001,
+ * src/whatsapp-send.ts, src/outbound-*.ts). The sentence above is
+ * therefore amended, not repealed:
  *
- *   * No file under apps/worker/src references Meta's send endpoint.
- *   * No file under apps/worker/src issues a POST to a Graph host.
- *   * `whatsapp-media.ts`, which holds the token, names no method but GET.
+ *   * The TRANSCRIPTION path still cannot send. whatsapp-media.ts
+ *     remains GET-only and the runtime half below still runs the real
+ *     transcription client and worker against a stubbed fetch.
+ *   * A send endpoint may be referenced, and a Graph POST issued,
+ *     ONLY from src/whatsapp-send.ts — the one module whose entire
+ *     purpose is sending, reached only through OutboundWorker.
+ *   * OutboundWorker claims and sends nothing while the
+ *     `whatsapp_integration` kill switch is off — its production
+ *     state, hardcoded `false` in @tugpt/feature-flags (ADR-010
+ *     amendment 2). outbound-worker.test.ts asserts that behavior;
+ *     the switch itself is NOT changed by the amendment.
  *
  * A grep-based guard has one failure mode worth more than the guard itself:
  * matching nothing, forever, while reading as protection. The first test below
@@ -83,21 +94,21 @@ describe('the transcription path cannot send a WhatsApp message', () => {
     expect(code(read(MEDIA_FILE))).toContain('graph.facebook.com');
   });
 
-  it('references no Meta send endpoint anywhere in the worker', () => {
+  it('references the Meta send endpoint only from the gated sender module', () => {
     const offenders = sourceFiles().filter((f) => /\/messages\b/.test(code(read(f))));
     expect(
       offenders.map((f) => path.relative(SRC, f)),
-      'a Graph /messages reference appeared in the worker; that is the outbound endpoint'
-    ).toEqual([]);
+      'a Graph /messages reference appeared outside src/whatsapp-send.ts'
+    ).toEqual(['whatsapp-send.ts']);
   });
 
-  it('issues no POST to a Graph host from anywhere in the worker', () => {
+  it('issues a POST to a Graph host only from the gated sender module', () => {
     const offenders = sourceFiles().filter((f) => {
       const body = code(read(f));
       if (!/graph\.facebook\.com|fbcdn|fbsbx|whatsapp\.net/.test(body)) return false;
       return /method:\s*'(POST|PUT|PATCH|DELETE)'/.test(body);
     });
-    expect(offenders.map((f) => path.relative(SRC, f))).toEqual([]);
+    expect(offenders.map((f) => path.relative(SRC, f))).toEqual(['whatsapp-send.ts']);
   });
 
   /**

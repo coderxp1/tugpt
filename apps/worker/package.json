@@ -24,6 +24,7 @@
     "@tugpt/ai-providers": "workspace:*",
     "@tugpt/appointments": "workspace:*",
     "@tugpt/database": "workspace:*",
+    "@tugpt/feature-flags": "workspace:*",
     "@tugpt/jobs": "workspace:*",
     "@tugpt/observability": "workspace:*",
     "@tugpt/security": "workspace:*"
