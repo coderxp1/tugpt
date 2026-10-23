@@ -41,6 +41,9 @@ export interface DeliveryRow {
   attempts: number;
   error_code: string | null;
   updated_at: string;
+  /** Receipt columns (20261022000005); absent on rows read by older code paths. */
+  delivered_at?: string | null;
+  read_at?: string | null;
 }
 
 export interface DeliveryView {
@@ -50,6 +53,9 @@ export interface DeliveryView {
   attempts: number;
   errorCode: string | null;
   updatedAt: string;
+  /** Provider receipt times (20261022000005); null until Meta reports them. */
+  deliveredAt: string | null;
+  readAt: string | null;
 }
 
 export function toDeliveryView(row: DeliveryRow): DeliveryView {
@@ -78,5 +84,7 @@ export function toDeliveryView(row: DeliveryRow): DeliveryView {
     attempts: row.attempts,
     errorCode: row.error_code,
     updatedAt: row.updated_at,
+    deliveredAt: row.delivered_at ?? null,
+    readAt: row.read_at ?? null,
   };
 }

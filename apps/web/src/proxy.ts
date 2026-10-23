@@ -63,6 +63,12 @@ const PUBLIC_PREFIXES: readonly string[] = [
   // aggregates anything (20260911000001). JSON 401/403, never an HTML
   // redirect into a fetch.
   '/api/v1/analytics',
+  // Same shape: the handler authenticates, resolves the tenant and
+  // passes the draft feature gate; the data operations run on the
+  // session client, so the knowledge_entries RLS policies (members
+  // read, owner/admin write — 20261022000004) are the authorization
+  // layer. JSON 401/403, never an HTML redirect into a fetch.
+  '/api/v1/knowledge',
   // Same shape as the others — each handler authenticates for itself and the
   // RPCs enforce membership and role. `/api/v1/invitations/accept` is the one
   // that must be here rather than 'protected': the proxy's protected path

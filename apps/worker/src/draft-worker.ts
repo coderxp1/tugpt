@@ -17,6 +17,10 @@ import type { SupabaseClient } from '@supabase/supabase-js';
 import { Logger } from '@tugpt/observability';
 import { DraftPgmqAdapter } from './draft-queue-adapter.js';
 import { DraftOrchestrator } from '@tugpt/ai-orchestration';
+import {
+  selectKnowledgeEntries,
+  type KnowledgeEntryRow,
+} from './knowledge-selection';
 import type { DraftRequest, DraftConfig, DraftResult } from '@tugpt/ai-orchestration';
 import { DEFAULT_ORGANIZATION_LOCALE, normalizeOrganizationLocale } from '@tugpt/database';
 import type { ProviderErrorCategory } from '@tugpt/ai-providers';
@@ -199,14 +203,27 @@ export class DraftWorker {
       }
 
       // Step 4: Load ai_draft_config
-      const config = await this.loadDraftConfig(jobRow.business_profile_id, jobRow.organization_id);
-      if (!config) {
+      const baseConfig = await this.loadDraftConfig(jobRow.business_profile_id, jobRow.organization_id);
+      if (!baseConfig) {
         logger.error('Draft config not found', undefined, {
           draftGenerationJobId,
         });
         await this.archiveFailed(msgId, draftGenerationJobId, 'DRAFT_INVALID_CONFIG');
         return;
       }
+
+      // Step 4b (FAQ v1): select this organization's knowledge
+      // entries relevant to the customer's message. Never fails the
+      // draft: no entries (or a read error) leaves the config
+      // exactly as it was before FAQ existed.
+      const knowledgeEntries = await this.loadKnowledgeEntries(
+        jobRow.organization_id,
+        sourceText
+      );
+      const config: DraftConfig =
+        knowledgeEntries.length > 0
+          ? { ...baseConfig, knowledgeEntries }
+          : baseConfig;
 
       // Step 5: Reserve quota
       const reservation = await this.reserveQuota(draftGenerationJobId);
@@ -427,6 +444,38 @@ export class DraftWorker {
       return null;
     }
     return data.body;
+  }
+
+  /**
+   * FAQ v1: the organization's enabled knowledge entries relevant
+   * to this message (knowledge-selection.ts does the scoring; this
+   * method only reads). Runs under the worker's service-role
+   * client; the organization comes from the job row, never from
+   * message content. Any failure returns [] — a knowledge outage
+   * degrades drafts to their pre-FAQ behavior, never to an error.
+   */
+  private async loadKnowledgeEntries(
+    organizationId: string,
+    sourceText: string
+  ): Promise<KnowledgeEntryRow[]> {
+    try {
+      const { data, error } = await this.client
+        .from('knowledge_entries')
+        .select('question, answer')
+        .eq('organization_id', organizationId)
+        .eq('enabled', true)
+        .limit(200);
+
+      if (error || !data) {
+        return [];
+      }
+      return selectKnowledgeEntries(
+        data as KnowledgeEntryRow[],
+        sourceText
+      );
+    } catch {
+      return [];
+    }
   }
 
   private async loadDraftConfig(businessProfileId: string, organizationId: string): Promise<DraftConfig | null> {
