@@ -227,6 +227,41 @@ const ROUTES: RouteExpectation[] = [
       'analytics-usage-route.test.ts.',
   },
   {
+    path: '/dashboard/knowledge',
+    kind: 'page',
+    type: 'protected',
+    why: 'FAQ management. The proxy is the only gate on the page shell; the data operations go through the knowledge API, whose authorization is the knowledge_entries RLS policy set.',
+  },
+  {
+    path: '/api/v1/knowledge',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates, resolves tenant, and passes the draft feature gate; list ' +
+      'and create run on the session client so the knowledge_entries policies decide ' +
+      '(members read, owner/admin write — an agent insert returns 42501, mapped to 403). ' +
+      'Asserted in knowledge-routes.test.ts.',
+  },
+  {
+    path: '/api/v1/knowledge/[entryId]',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Same handler shape; update and delete are organization-scoped in the query and ' +
+      'policy-checked by RLS — a cross-organization id affects zero rows and returns ' +
+      'the same 404 as a missing entry. Asserted in knowledge-routes.test.ts.',
+  },
+  {
+    path: '/api/v1/knowledge/preview',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Read-only retrieval preview: handler authenticates and gates like the other ' +
+      'knowledge routes, reads the organization’s enabled entries under RLS, and runs ' +
+      'the shared selectKnowledgeEntries — the same function the draft worker uses — ' +
+      'so the preview cannot disagree with production drafting.',
+  },
+  {
     path: '/api/v1/conversations/[conversationId]/assign',
     kind: 'api',
     type: 'public',
