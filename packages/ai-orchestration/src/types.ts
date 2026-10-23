@@ -38,6 +38,26 @@ export interface DraftConfig {
    * Spanish prompt rather than failing to compile in a hurry.
    */
   readonly locale?: string;
+  /**
+   * Knowledge entries (FAQ v1) already selected for this message by
+   * the caller — the worker's deterministic keyword selection over
+   * the organization's enabled entries. Optional and usually absent:
+   * with no entries the built prompt is byte-identical to the
+   * pre-FAQ prompt, which is the missing-answer path (the guardrails
+   * then govern: do not invent, capture the lead).
+   *
+   * Entry text is UNTRUSTED business content. The prompt builder
+   * renders it inside the subordinated data block (see
+   * prompt-scaffolding's knowledge framing), never as instructions,
+   * and the guardrail block still follows it.
+   */
+  readonly knowledgeEntries?: readonly KnowledgeEntry[];
+}
+
+/** One FAQ/knowledge pair, as stored in public.knowledge_entries. */
+export interface KnowledgeEntry {
+  readonly question: string;
+  readonly answer: string;
 }
 
 /** Request for draft generation. */

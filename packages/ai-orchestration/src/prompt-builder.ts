@@ -119,6 +119,23 @@ export function buildPromptMessages(sourceText: string, config: DraftConfig): Ch
     systemParts.push(`${scaffolding.tone}\n${config.tone}`);
   }
 
+  // Knowledge (FAQ v1): the selected entries, rendered as a data
+  // block under the framing that subordinates them — facts to use,
+  // never instructions to obey. Present only when the caller
+  // selected at least one entry for this message; with none, the
+  // prompt is exactly what it was before FAQ existed. The block
+  // sits BEFORE the guardrails on purpose: the non-negotiable rules
+  // remain the last word, so nothing an entry says — mistaken or
+  // malicious — can outrank them.
+  if (config.knowledgeEntries && config.knowledgeEntries.length > 0) {
+    const entries = config.knowledgeEntries
+      .map((entry) => `P: ${entry.question}\nR: ${entry.answer}`)
+      .join('\n\n');
+    systemParts.push(
+      `${scaffolding.knowledgeHeading}\n${scaffolding.knowledgeFraming}\n\n${entries}`
+    );
+  }
+
   // Last, and unconditional. A config with every field empty still produces a
   // system message with these rules in it — which is the state a newly created
   // organization is in before anyone has written its instructions.
