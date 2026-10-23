@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeWhatsAppEnvelope, computeCanonicalHash } from './whatsapp-normalizer';
+import { normalizeWhatsAppEnvelope, computeCanonicalHash, extractWhatsAppStatuses } from './whatsapp-normalizer';
 
 /**
  * The sha256 of JSON.stringify(['whatsapp-event-v1', 'meta', '12345', 'msg1',
@@ -524,5 +524,68 @@ describe('whatsapp-normalizer', () => {
     };
 
     expect(computeCanonicalHash(event)).toBe(KNOWN_HASH);
+  });
+});
+
+describe('extractWhatsAppStatuses', () => {
+  const payloadWith = (statuses: unknown) => ({
+    entry: [
+      {
+        changes: [
+          {
+            value: {
+              metadata: { phone_number_id: '12345' },
+              statuses,
+            },
+          },
+        ],
+      },
+    ],
+  });
+
+  it('extracts a delivered receipt with its event time as ISO', () => {
+    const out = extractWhatsAppStatuses(
+      payloadWith([{ id: 'wamid.1', status: 'delivered', timestamp: '1729000000' }])
+    );
+    expect(out).toEqual([
+      {
+        providerMessageId: 'wamid.1',
+        status: 'delivered',
+        providerTimestamp: new Date(1729000000 * 1000).toISOString(),
+      },
+    ]);
+  });
+
+  it('extracts multiple statuses across changes, including failed', () => {
+    const out = extractWhatsAppStatuses({
+      entry: [
+        {
+          changes: [
+            { value: { statuses: [{ id: 'wamid.1', status: 'read', timestamp: '1729000100' }] } },
+            { value: { statuses: [{ id: 'wamid.2', status: 'failed' }] } },
+          ],
+        },
+      ],
+    });
+    expect(out.map((s) => `${s.providerMessageId}:${s.status}`)).toEqual([
+      'wamid.1:read',
+      'wamid.2:failed',
+    ]);
+    expect(out[1].providerTimestamp).toBeNull();
+  });
+
+  it('skips malformed items instead of throwing — provider-shaped input never crashes the webhook', () => {
+    const out = extractWhatsAppStatuses(
+      payloadWith([null, {}, { id: 42, status: 'read' }, { id: 'wamid.9' }, { id: 'wamid.9', status: 'read', timestamp: 'junk' }])
+    );
+    expect(out).toEqual([
+      { providerMessageId: 'wamid.9', status: 'read', providerTimestamp: null },
+    ]);
+  });
+
+  it('returns nothing for message-only payloads and for non-objects', () => {
+    expect(extractWhatsAppStatuses({ entry: [{ changes: [{ value: { messages: [] } }] }] })).toEqual([]);
+    expect(extractWhatsAppStatuses(null)).toEqual([]);
+    expect(extractWhatsAppStatuses('nope')).toEqual([]);
   });
 });
