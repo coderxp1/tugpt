@@ -154,6 +154,74 @@ export function normalizeWhatsAppEnvelope(payload: unknown): NormalizedWhatsAppE
  * 'whatsapp-event-v2' and somebody decides what happens to in-flight
  * redeliveries. That is a migration, not an edit.
  */
+export interface NormalizedWhatsAppStatus {
+  /** The provider message id (wamid) of OUR outbound message. */
+  providerMessageId: string;
+  /** Meta's status vocabulary: sent | delivered | read | failed. */
+  status: string;
+  /** ISO timestamp of the provider event, when Meta sent one. */
+  providerTimestamp: string | null;
+}
+
+/**
+ * Extracts delivery status callbacks from a Meta webhook payload.
+ *
+ * Statuses live in the same entry -> changes -> value structure as
+ * messages, in a sibling `statuses` array — they are NOT messages,
+ * which is why the message normalizer above never sees them (and
+ * why, before delivery receipts, they were acknowledged and
+ * dropped). Parsing is defensive in the same style: anything
+ * malformed is skipped, never thrown — a webhook handler that
+ * throws on provider-shaped input earns itself a retry storm.
+ */
+export function extractWhatsAppStatuses(payload: unknown): NormalizedWhatsAppStatus[] {
+  const statuses: NormalizedWhatsAppStatus[] = [];
+
+  if (!payload || typeof payload !== 'object') {
+    return statuses;
+  }
+  const entries = (payload as Record<string, unknown>).entry;
+  if (!Array.isArray(entries)) {
+    return statuses;
+  }
+
+  for (const entry of entries) {
+    if (!entry || typeof entry !== 'object') continue;
+    const changes = (entry as Record<string, unknown>).changes;
+    if (!Array.isArray(changes)) continue;
+
+    for (const change of changes) {
+      if (!change || typeof change !== 'object') continue;
+      const value = (change as Record<string, unknown>).value;
+      if (!value || typeof value !== 'object') continue;
+      const rawStatuses = (value as Record<string, unknown>).statuses;
+      if (!Array.isArray(rawStatuses)) continue;
+
+      for (const raw of rawStatuses) {
+        if (!raw || typeof raw !== 'object') continue;
+        const item = raw as Record<string, unknown>;
+        const id = item.id;
+        const status = item.status;
+        if (typeof id !== 'string' || id.length === 0) continue;
+        if (typeof status !== 'string' || status.length === 0) continue;
+
+        let providerTimestamp: string | null = null;
+        const ts = item.timestamp;
+        if (typeof ts === 'string' || typeof ts === 'number') {
+          const seconds = Number(ts);
+          if (Number.isFinite(seconds) && seconds > 0) {
+            providerTimestamp = new Date(seconds * 1000).toISOString();
+          }
+        }
+
+        statuses.push({ providerMessageId: id, status, providerTimestamp });
+      }
+    }
+  }
+
+  return statuses;
+}
+
 export function computeCanonicalHash(event: {
   provider: string;
   providerConnectionIdentifier: string;

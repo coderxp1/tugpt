@@ -18,6 +18,7 @@
 import { useState, useEffect } from 'react';
 import type { DeliveryView } from '@/lib/draft-api/delivery-status';
 import { useT } from '@/i18n/provider';
+import { formatDateTime } from '@/i18n';
 
 const BADGE_STYLES: Record<DeliveryView['status'], string> = {
   queued: 'bg-blue-100 text-blue-800',
@@ -97,6 +98,18 @@ export function DeliveryStatusPanel({
             <div className="flex gap-2">
               <dt>{t('drafts.delivery.attempts')}</dt>
               <dd>{delivery.attempts}</dd>
+            </div>
+          )}
+          {delivery.deliveredAt && (
+            <div className="flex gap-2">
+              <dt>{t('drafts.delivery.deliveredAt')}</dt>
+              <dd>{formatDateTime(delivery.deliveredAt, t.locale)}</dd>
+            </div>
+          )}
+          {delivery.readAt && (
+            <div className="flex gap-2">
+              <dt>{t('drafts.delivery.readAt')}</dt>
+              <dd>{formatDateTime(delivery.readAt, t.locale)}</dd>
             </div>
           )}
         </dl>
