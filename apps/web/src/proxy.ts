@@ -39,12 +39,22 @@ const PUBLIC_EXACT: ReadonlySet<string> = new Set([
   // Liveness probe. Returns no tenant data and is polled without credentials —
   // by the container healthcheck in docker-compose.yml, among others.
   '/api/v1/health',
+  // Product Control Center page. Renders no tenant data and reads no
+  // session; the data it shows comes from the public control-center APIs
+  // below, which return no tenant data, no secrets, and perform no writes.
+  '/control-center',
 ]);
 
 const PUBLIC_PREFIXES: readonly string[] = [
   // Meta calls this unauthenticated; it is gated by HMAC signature and the
   // hardcoded whatsapp_integration flag (ADR-010 amendment 2).
   '/api/v1/webhooks',
+  // Product Control Center labs. No tenant data, no secrets, no writes:
+  // the health endpoint reports env presence as booleans only, and the
+  // lab endpoint runs production pure functions over caller fixtures
+  // (or returns an honest blocked result). Nothing here authenticates
+  // because there is nothing tenant-scoped to protect.
+  '/api/v1/control-center',
   // Handlers authenticate and resolve tenant context; RLS scopes the rows.
   '/api/v1/drafts',
   '/api/v1/organizations',

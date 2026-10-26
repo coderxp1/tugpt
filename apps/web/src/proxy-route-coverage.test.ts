@@ -142,6 +142,24 @@ const ROUTES: RouteExpectation[] = [
     why: 'Liveness probe. Returns no tenant data and is polled without credentials.',
   },
   {
+    path: '/control-center',
+    kind: 'page',
+    type: 'public',
+    why: 'Product Control Center shell. Renders no tenant data and reads no session; its data comes from the public control-center APIs, which return no tenant data, no secrets, and perform no writes.',
+  },
+  {
+    path: '/api/v1/control-center/health',
+    kind: 'api',
+    type: 'public',
+    why: 'Control Center overview. Reports app state, env presence as booleans only, and catalog counts; no tenant data, no secret values, no writes.',
+  },
+  {
+    path: '/api/v1/control-center/lab',
+    kind: 'api',
+    type: 'public',
+    why: 'Control Center lab runner. Executes production pure functions over caller-supplied fixtures in-process (or returns an honest blocked result); no tenant data, no secrets, no sends, no database writes.',
+  },
+  {
     path: '/api/v1/webhooks/whatsapp',
     kind: 'api',
     type: 'public',
@@ -395,9 +413,12 @@ describe('proxy route classification coverage', () => {
       (r) => r.path
     );
 
-    // The landing page is the only one, and it renders no tenant data. If this
-    // list grows, a page is being served to anyone who asks for it.
-    expect(unguarded).toEqual(['/']);
+    // The landing page and the Control Center are the only public pages.
+    // The Control Center is a deliberate, recorded exception: it renders
+    // no tenant data, reads no session, and its APIs return no tenant
+    // data, no secrets, and perform no writes. If this list grows
+    // further, a page is being served to anyone who asks for it.
+    expect(unguarded).toEqual(['/', '/control-center']);
   });
 
   it('matches the app directory on kind as well as path', () => {

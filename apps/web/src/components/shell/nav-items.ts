@@ -29,6 +29,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // who notices a missing or wrong fact.
   { href: '/dashboard/knowledge', labelKey: 'nav.knowledge' },
   { href: '/dashboard/media', labelKey: 'nav.media' },
+  // The Control Center is the owner's view of the whole product: health,
+  // feature inventory, and the safe test labs. It lives outside
+  // /dashboard so it opens without a tenant session, and it is linked
+  // here so a signed-in owner can reach it from the shell too.
+  { href: '/control-center', labelKey: 'nav.controlCenter' },
   { href: '/settings/integrations', labelKey: 'nav.integrations' },
   // Last, and deliberately: the inbox answers "who is waiting" and the drafts
   // answer "what did the AI write" — both are the reviewer's job. Usage & cost
