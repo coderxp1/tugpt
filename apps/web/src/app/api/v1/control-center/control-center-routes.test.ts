@@ -64,4 +64,31 @@ describe('control-center lab route', () => {
     const res = await labPOST(req);
     expect(res.status).toBe(400);
   });
+
+  it('rejects an oversized body with 413', async () => {
+    const req = new Request('http://localhost/api/v1/control-center/lab', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'content-length': String(70 * 1024),
+      },
+      body: JSON.stringify({ test: 'faq-retrieval', input: {} }),
+    });
+    const res = await labPOST(req);
+    expect(res.status).toBe(413);
+  });
+
+  it('rejects malformed lab input with 400 instead of a 500', async () => {
+    const res = await labPOST(
+      post({ test: 'appointments', input: { durationMinutes: 100000 } }),
+    );
+    expect(res.status).toBe(400);
+    const json = (await res.json()) as { error: { code: string } };
+    expect(json.error.code).toBe('INVALID_INPUT');
+  });
+
+  it('rejects a non-string test name with 400', async () => {
+    const res = await labPOST(post({ test: 42, input: {} }));
+    expect(res.status).toBe(400);
+  });
 });
