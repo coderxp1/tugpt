@@ -16,8 +16,10 @@ import { AuthService } from '@tugpt/auth';
 import { MediaApiService } from '@/lib/media-api/service';
 import { checkMediaFeatureGate } from '@/lib/media-api/feature-gate';
 import { mapMediaRpcError } from '@/lib/media-api/error-mapper';
-import { validateSubmitBody } from '@/lib/media-api/validation';
+import { validateSubmitBody, validateZImageRequest } from '@/lib/media-api/validation';
 import type { ApiError, MediaJobStatus } from '@/lib/media-api/types';
+
+import { BodyTooLarge, readMediaBody } from '@/lib/media-api/bounded-body';
 
 const VALID_STATUSES: Array<'all' | MediaJobStatus> = [
   'all',
@@ -62,14 +64,20 @@ export async function POST(request: Request) {
 
     let body: unknown;
     try {
-      body = await request.json();
-    } catch {
+      body = await readMediaBody(request);
+    } catch (error) {
+      if (error instanceof BodyTooLarge) return errorResponse(413, 'INVALID_REQUEST', 'Request body too large');
       return errorResponse(400, 'INVALID_REQUEST', 'Request body must be valid JSON');
     }
 
     const validated = validateSubmitBody(body);
     if (!validated.ok) {
       return errorResponse(400, validated.code, validated.message);
+    }
+
+    if (process.env.MEDIA_IMAGE_PROVIDER === 'z-image-turbo') {
+      const routeError = validateZImageRequest(validated.value);
+      if (routeError) return errorResponse(400, 'INVALID_REQUEST', routeError);
     }
 
     const mediaService = new MediaApiService(supabase, adminClient);
