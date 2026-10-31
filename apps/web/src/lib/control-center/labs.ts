@@ -218,7 +218,7 @@ export async function labAppointments(input: {
   return {
     test: 'appointments',
     mode: 'simulated-provider',
-    summary: `Real AvailabilityService + real InMemoryAppointmentStore ran against the package's MockCalendarAvailabilityProvider (SIMULATED calendar — Google free/busy is NOT involved and no Google credentials exist). Slots: ${result.ok ? result.slots.length : 0}; store round-trip: ${readBack ? 'request retrieved' : 'FAILED'}. The DB CHECK refusing CONFIRMED writes is proven by pgTAP, not here.`,
+    summary: `Real AvailabilityService + real InMemoryAppointmentStore ran against the package's MockCalendarAvailabilityProvider (SIMULATED calendar — Google free/busy is NOT involved; credentials are not used). Slots: ${result.ok ? result.slots.length : 0}; store round-trip: ${readBack ? 'request retrieved' : 'FAILED'}. The DB CHECK refusing CONFIRMED writes is proven by pgTAP, not here.`,
     output: {
       availability: result,
       storedRequestId: request.id,
@@ -252,4 +252,45 @@ export function labOverview(): {
       ),
     },
   };
+}
+
+// ---------------------------------------------------------------------------
+// Blocked labs. Each reason is composed from what is actually present in this
+// process's environment, so the same text cannot be wrong on a different
+// machine. "Gladia" and "GPU" name the real dependencies; the database clause
+// changes with NEXT_PUBLIC_SUPABASE_URL.
+
+function databaseClause(): string {
+  const configured = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  );
+  return configured
+    ? 'A Supabase project is configured here, but the Control Center deliberately runs without a tenant session, so it cannot read or write tenant rows.'
+    : 'No Supabase project is configured here (NEXT_PUBLIC_SUPABASE_URL unset).';
+}
+
+export function labVoiceTranscriptionBlocked(): LabResult {
+  return labBlocked(
+    'voice-transcription',
+    `The transcription pipeline needs a vault-provisioned Gladia key and a database session. This lab does not access the credential vault or invoke Gladia. ${databaseClause()} Pipeline stages and the transcript-to-draft rule are proven by the worker suites and pgTAP, not by a live run here.`,
+  );
+}
+
+export function labMediaGenerationBlocked(): LabResult {
+  return labBlocked(
+    'media-generation',
+    'Generation needs the GPU worker and media_generation enabled for an organization. This lab does not enqueue GPU work or inspect tenant feature flags. Use the authenticated /dashboard/media workflow only after provisioning and launch approval.',
+  );
+}
+
+export function labUsageBlocked(): LabResult {
+  const configured = Boolean(
+    process.env.NEXT_PUBLIC_SUPABASE_URL && process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY,
+  );
+  return labBlocked(
+    'usage',
+    configured
+      ? 'Usage totals come from the org_usage_summary RPC, which runs as the signed-in user under RLS. The Control Center deliberately has no tenant session, so it cannot call it; sign in and open /dashboard/analytics for the real totals.'
+      : 'Usage totals come from the org_usage_summary RPC, which needs a database session. No Supabase project is configured here (NEXT_PUBLIC_SUPABASE_URL unset); once one is, /dashboard/analytics shows the real totals.',
+  );
 }
