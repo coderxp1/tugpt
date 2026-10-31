@@ -143,3 +143,22 @@ export function validateSubmitBody(
     },
   };
 }
+
+/** Fixed resources for the deployed Z-Image route; never caller-selected models. */
+export function validateZImageRequest(value: MediaJobSubmitRequest): string | null {
+  if (value.kind !== 'image') return 'Video generation is not configured';
+  if (value.negativePrompt?.trim()) return 'This image model does not support negative prompts';
+  const params = value.params ?? {};
+  if (Object.keys(params).some((key) => !['width', 'height', 'seed'].includes(key))) {
+    return 'Unsupported image parameter';
+  }
+  const width = params.width ?? 1024;
+  const height = params.height ?? 1024;
+  if (![[1024, 1024], [1280, 720], [720, 1280]].some(([w, h]) => width === w && height === h)) {
+    return 'Unsupported image dimensions';
+  }
+  if (params.seed !== undefined && (typeof params.seed !== 'number' || !Number.isInteger(params.seed) || params.seed < 0 || params.seed > 2147483647)) {
+    return 'Invalid image seed';
+  }
+  return null;
+}
