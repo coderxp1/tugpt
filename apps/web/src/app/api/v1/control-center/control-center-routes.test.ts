@@ -2,7 +2,7 @@
 // state (never secret values), and the lab endpoint runs labs or
 // returns honest errors for unknown tests and bad bodies.
 
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it } from 'vitest';
 import { GET as healthGET } from './health/route';
 import { POST as labPOST } from './lab/route';
 
@@ -15,6 +15,18 @@ function post(body: unknown): Request {
 }
 
 describe('control-center health route', () => {
+  const savedUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const savedKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const savedToken = process.env.CONTROL_CENTER_TOKEN;
+  afterEach(() => {
+    if (savedUrl === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    else process.env.NEXT_PUBLIC_SUPABASE_URL = savedUrl;
+    if (savedKey === undefined) delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    else process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY = savedKey;
+    if (savedToken === undefined) delete process.env.CONTROL_CENTER_TOKEN;
+    else process.env.CONTROL_CENTER_TOKEN = savedToken;
+  });
+
   it('reports the kill switch OFF and env presence as booleans', async () => {
     const res = await healthGET();
     const json = (await res.json()) as {
@@ -27,6 +39,35 @@ describe('control-center health route', () => {
     for (const value of Object.values(json.envPresence)) {
       expect(typeof value).toBe('boolean');
     }
+  });
+
+  it('reports runtime and access mode, never the token itself, and is not cacheable', async () => {
+    process.env.CONTROL_CENTER_TOKEN = 'a-perfectly-long-operator-token-value';
+    const res = await healthGET();
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const text = await res.text();
+    expect(text).not.toContain('a-perfectly-long-operator-token-value');
+    const json = JSON.parse(text) as {
+      runtime: { nodeVersion: string; build: { sha: string | null } };
+      access: { mode: string; tokenConfigured: boolean; weakToken: boolean };
+    };
+    expect(json.runtime.nodeVersion).toBe(process.version);
+    expect(json.access).toEqual({ mode: 'token', tokenConfigured: true, weakToken: false });
+    // No literal commit baked into the source: the build is whatever the
+    // deploy exported, or null.
+    expect(json.runtime.build.sha).toBe(process.env.TUGPT_GIT_SHA ?? null);
+  });
+
+  it('reports the database as not configured when no Supabase project is set, without probing', async () => {
+    delete process.env.NEXT_PUBLIC_SUPABASE_URL;
+    delete process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+    const res = await healthGET();
+    const json = (await res.json()) as {
+      database: { configured: boolean; reachable: boolean | null; available: boolean; host: string | null };
+      workers: { available: boolean; observable: boolean };
+    };
+    expect(json.database).toMatchObject({ configured: false, reachable: null, available: false, host: null });
+    expect(json.workers).toMatchObject({ available: false, observable: false });
   });
 });
 
@@ -90,5 +131,17 @@ describe('control-center lab route', () => {
   it('rejects a non-string test name with 400', async () => {
     const res = await labPOST(post({ test: 42, input: {} }));
     expect(res.status).toBe(400);
+  });
+});
+
+// Regression: neither chunked transport nor a JSON primitive bypasses validation.
+describe('lab transport bounds', () => {
+  it('rejects null JSON without a server exception', async () => {
+    const response = await labPOST(new Request('http://localhost/api/v1/control-center/lab', { method: 'POST', body: 'null' }));
+    expect(response.status).toBe(400);
+  });
+  it('enforces the byte limit even without Content-Length', async () => {
+    const response = await labPOST(new Request('http://localhost/api/v1/control-center/lab', { method: 'POST', body: JSON.stringify({ test: 'faq-retrieval', input: { question: 'a'.repeat(66000) } }) }));
+    expect(response.status).toBe(413);
   });
 });
