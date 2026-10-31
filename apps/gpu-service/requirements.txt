@@ -1,0 +1,16 @@
+# Install torch separately from the official cu130 index, not extra-index-url:
+# pip install torch==2.14.1 --index-url https://download.pytorch.org/whl/cu130
+pip==26.2.0
+setuptools==84.1.0
+diffusers==0.42.1
+transformers==5.22.1
+accelerate==1.15.0
+safetensors==0.8.0
+huggingface-hub==2.4.0
+fastapi==0.162.0
+uvicorn==0.54.0
+httpx>=0.28,<1
+pillow>=12,<14
+sentencepiece>=0.2,<1
+protobuf>=6,<8
+pytest>=9,<10
