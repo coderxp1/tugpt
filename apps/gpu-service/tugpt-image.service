@@ -1,0 +1,27 @@
+[Unit]
+Description=TuGPT private image executor
+After=network.target
+[Service]
+User=tugpt-ai
+Group=tugpt-ai
+WorkingDirectory=/srv/tugpt-ai/src
+Environment=HF_HOME=/srv/tugpt-ai/models
+Environment=HF_HUB_OFFLINE=1
+Environment=OMP_NUM_THREADS=8
+ExecStart=/srv/tugpt-ai/venv/bin/uvicorn server:create_app --factory --host 127.0.0.1 --port 18765 --workers 1 --no-access-log
+Restart=on-failure
+RestartSec=10
+TimeoutStopSec=45
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+ReadWritePaths=/srv/tugpt-ai/state
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+IPAddressDeny=any
+IPAddressAllow=localhost
+MemoryMax=64G
+TasksMax=512
+[Install]
+WantedBy=multi-user.target
