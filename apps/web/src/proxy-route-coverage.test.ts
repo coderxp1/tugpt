@@ -141,23 +141,29 @@ const ROUTES: RouteExpectation[] = [
     type: 'public',
     why: 'Liveness probe. Returns no tenant data and is polled without credentials.',
   },
+  // The three 'operator' routes are the Product Control Center. They have
+  // no tenant session to check (the point is to open before any organization
+  // exists) but they are not public either: proxy.ts gates them with
+  // CONTROL_CENTER_TOKEN — 404 without a valid configured key in every environment,
+  // 401 without proof of that key otherwise. The
+  // policy and its tests live in lib/control-center/access.ts.
   {
     path: '/control-center',
     kind: 'page',
-    type: 'public',
-    why: 'Product Control Center shell. Renders no tenant data and reads no session; its data comes from the public control-center APIs, which return no tenant data, no secrets, and perform no writes.',
+    type: 'operator',
+    why: 'Product Control Center shell. Renders no tenant data and reads no session; gated by CONTROL_CENTER_TOKEN in proxy.ts (404 without configuration in every environment, 401 without proof).',
   },
   {
     path: '/api/v1/control-center/health',
     kind: 'api',
-    type: 'public',
-    why: 'Control Center overview. Reports app state, env presence as booleans only, and catalog counts; no tenant data, no secret values, no writes.',
+    type: 'operator',
+    why: 'Control Center overview. Reports runtime, access mode, env presence as booleans, a live Supabase reachability probe (origin only) and catalog counts. No tenant data, no secret values, no writes — but it describes the deployment, so it is operator-gated, not public.',
   },
   {
     path: '/api/v1/control-center/lab',
     kind: 'api',
-    type: 'public',
-    why: 'Control Center lab runner. Executes production pure functions over caller-supplied fixtures in-process (or returns an honest blocked result); no tenant data, no secrets, no sends, no database writes.',
+    type: 'operator',
+    why: 'Control Center lab runner. Executes production pure functions over caller fixtures in-process (or returns an honest blocked result); no tenant data, no secrets, no sends, no database writes. Operator-gated because it executes code on demand.',
   },
   {
     path: '/api/v1/webhooks/whatsapp',
@@ -402,8 +408,8 @@ describe('proxy route classification coverage', () => {
     }
   });
 
-  it('records a reason for every route the proxy does not authenticate', () => {
-    for (const route of ROUTES.filter((r) => r.type === 'public')) {
+  it('records a reason for every route the proxy does not authenticate with a session', () => {
+    for (const route of ROUTES.filter((r) => r.type === 'public' || r.type === 'operator')) {
       expect(route.why.length, `${route.path} needs a reason`).toBeGreaterThan(20);
     }
   });
@@ -413,12 +419,22 @@ describe('proxy route classification coverage', () => {
       (r) => r.path
     );
 
-    // The landing page and the Control Center are the only public pages.
-    // The Control Center is a deliberate, recorded exception: it renders
-    // no tenant data, reads no session, and its APIs return no tenant
-    // data, no secrets, and perform no writes. If this list grows
-    // further, a page is being served to anyone who asks for it.
-    expect(unguarded).toEqual(['/', '/control-center']);
+    // The landing page is the only public page, and it renders nothing. If
+    // this list grows, a page is being served to anyone who asks for it.
+    expect(unguarded).toEqual(['/']);
+  });
+
+  it('classifies exactly the three Control Center routes as operator, and nothing else', () => {
+    const operator = ROUTES.filter((r) => classifyRoute(r.path) === 'operator')
+      .map((r) => r.path)
+      .sort();
+    // The operator gate is a token, not a tenant session. It must never
+    // quietly absorb a tenant route: that would swap RLS-backed auth for a
+    // shared secret.
+    expect(operator).toEqual(['/api/v1/control-center/health', '/api/v1/control-center/lab', '/control-center']);
+    for (const route of ROUTES) {
+      if (route.type === 'operator') expect(route.path.includes('control-center')).toBe(true);
+    }
   });
 
   it('matches the app directory on kind as well as path', () => {
