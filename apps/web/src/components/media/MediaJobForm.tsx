@@ -6,7 +6,7 @@
 // round trip. Each submission carries a fresh idempotency key, so a double
 // click or a retried request cannot create two jobs.
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
@@ -27,7 +27,7 @@ const IMAGE_SIZES = [
   { width: 720, height: 1280 },
 ] as const;
 
-export function MediaJobForm() {
+export function MediaJobForm({ imageOnly = false }: { imageOnly?: boolean }) {
   const t = useT();
   const router = useRouter();
 
@@ -41,6 +41,8 @@ export function MediaJobForm() {
   const [apiError, setApiError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
 
+  const inFlight = useRef(false);
+  const submission = useRef<{ fingerprint: string; key: string } | null>(null);
   const promptCount = prompt.length;
 
   const validate = (): boolean => {
@@ -68,16 +70,17 @@ export function MediaJobForm() {
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (inFlight.current) return;
     setApiError(null);
     if (!validate()) return;
 
+    inFlight.current = true;
     setSubmitting(true);
     try {
       const [width, height] = imageSize.split('x').map(Number);
       const payload: MediaJobSubmitRequest = {
         kind,
         prompt: prompt.trim(),
-        idempotencyKey: crypto.randomUUID(),
         params:
           kind === 'image'
             ? { width, height }
@@ -86,6 +89,12 @@ export function MediaJobForm() {
       if (negativePrompt.trim().length > 0) {
         payload.negativePrompt = negativePrompt.trim();
       }
+
+      const fingerprint = JSON.stringify(payload);
+      if (submission.current?.fingerprint !== fingerprint) {
+        submission.current = { fingerprint, key: crypto.randomUUID() };
+      }
+      payload.idempotencyKey = submission.current.key;
 
       const res = await fetch('/api/v1/media/jobs', {
         method: 'POST',
@@ -104,6 +113,7 @@ export function MediaJobForm() {
     } catch {
       setApiError(t('media.form.submitFailed'));
     } finally {
+      inFlight.current = false;
       setSubmitting(false);
     }
   };
@@ -124,7 +134,7 @@ export function MediaJobForm() {
             {t('media.form.kindLabel')}
           </span>
           <div className="flex gap-2">
-            {(['image', 'video'] as const).map((k) => (
+            {(imageOnly ? (['image'] as const) : (['image', 'video'] as const)).map((k) => (
               <button
                 key={k}
                 type="button"
@@ -161,8 +171,8 @@ export function MediaJobForm() {
           </p>
         </div>
 
-        {/* Negative prompt */}
-        <div>
+        {/* Z-Image-Turbo does not support negative prompting. */}
+        {!imageOnly && <div>
           <label
             htmlFor="media-negative-prompt"
             className="mb-2 block text-sm font-medium text-zinc-700"
@@ -177,7 +187,7 @@ export function MediaJobForm() {
             placeholder={t('media.form.negativePromptPlaceholder')}
             className="w-full rounded-lg border border-zinc-300 p-3 text-sm focus:border-zinc-500 focus:outline-none"
           />
-        </div>
+        </div>}
 
         {/* Image params */}
         {kind === 'image' && (
