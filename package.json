@@ -8,7 +8,8 @@
     "lint": "turbo lint",
     "test": "turbo test",
     "typecheck": "turbo typecheck",
-    "worker": "turbo dev --filter=@tugpt/worker"
+    "worker": "turbo dev --filter=@tugpt/worker",
+    "control-center": "node scripts/control-center.mjs"
   },
   "devDependencies": {
     "@eslint/js": "9.39.5",

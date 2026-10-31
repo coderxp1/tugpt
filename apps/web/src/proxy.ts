@@ -2,8 +2,26 @@ import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { createServerClient as createSSRClient } from '@supabase/ssr';
 import type { Database } from '@tugpt/database';
+import {
+  CONTROL_CENTER_COOKIE,
+  CONTROL_CENTER_COOKIE_MAX_AGE_SECONDS,
+  CONTROL_CENTER_HEADER,
+  cookieValueFor,
+  decideOperatorAccess,
+  resolveAccessMode,
+  type OperatorDecision,
+} from '@/lib/control-center/access';
+import { OWNER_LOGIN_HTML } from '@/lib/control-center/login';
 
-export type RouteType = 'auth' | 'protected' | 'public';
+/**
+ * - `auth`      — sign-in flow; must work signed out.
+ * - `protected` — tenant pages; the proxy requires a Supabase session.
+ * - `public`    — the proxy performs no check (see PUBLIC_* for why each is safe).
+ * - `operator`  — the Product Control Center. Not a tenant surface, so no
+ *                 Supabase session; gated instead by CONTROL_CENTER_TOKEN
+ *                 (see lib/control-center/access.ts for the exact policy).
+ */
+export type RouteType = 'auth' | 'protected' | 'public' | 'operator';
 
 /**
  * Segment-aware prefix match: `/api/v1/drafts` matches itself and
@@ -100,9 +118,23 @@ const PUBLIC_PREFIXES: readonly string[] = [
  * is inaccessible rather than exposed, and the mistake announces itself the
  * first time somebody loads the page.
  */
+/**
+ * The Product Control Center. Exactly these paths — the page and its two
+ * APIs — and nothing that merely shares the prefix. They are NOT public: the
+ * health endpoint reports environment presence and reachability, and the lab
+ * endpoint executes product code on demand. Neither should be offered to
+ * anonymous internet traffic, and neither has a tenant session to check, so
+ * they get their own class and their own gate (CONTROL_CENTER_TOKEN).
+ */
+const OPERATOR_EXACT: ReadonlySet<string> = new Set(['/control-center']);
+const OPERATOR_PREFIXES: readonly string[] = ['/api/v1/control-center'];
+
 export function classifyRoute(pathname: string): RouteType {
   if (underPrefix(pathname, '/auth') || underPrefix(pathname, '/api/v1/auth')) {
     return 'auth';
+  }
+  if (OPERATOR_EXACT.has(pathname) || OPERATOR_PREFIXES.some((p) => underPrefix(pathname, p))) {
+    return 'operator';
   }
   if (PUBLIC_EXACT.has(pathname)) {
     return 'public';
@@ -142,6 +174,69 @@ function denyUnauthenticated(request: NextRequest, pathname: string): NextRespon
   return NextResponse.redirect(loginUrl);
 }
 
+/** True when the browser is talking to us over TLS, directly or via Caddy. */
+function isHttps(request: NextRequest): boolean {
+  return (
+    request.nextUrl.protocol === 'https:' ||
+    request.headers.get('x-forwarded-proto')?.split(',')[0]?.trim() === 'https'
+  );
+}
+
+function setOperatorCookie(response: NextResponse, value: string, request: NextRequest): void {
+  response.cookies.set(CONTROL_CENTER_COOKIE, value, {
+    httpOnly: true,
+    sameSite: 'lax',
+    secure: isHttps(request),
+    path: '/',
+    maxAge: CONTROL_CENTER_COOKIE_MAX_AGE_SECONDS,
+  });
+}
+
+function denyOperator(pathname: string, decision: Extract<OperatorDecision, { kind: 'deny' }>): NextResponse {
+  const headers = { 'cache-control': 'no-store' };
+  if (isApiPath(pathname)) {
+    // 404 carries no hint: an unconfigured deployment must not tell anonymous
+    // callers that the surface exists or how to enable it. 401 means a token
+    // IS configured, and the hint only says how to present one.
+    const body =
+      decision.status === 404
+        ? { error: 'Not Found' }
+        : { error: 'Unauthenticated', reason: decision.reason };
+    return NextResponse.json(body, { status: decision.status, headers });
+  }
+  return new NextResponse(decision.status === 404 ? 'Not Found' : OWNER_LOGIN_HTML, {
+    status: decision.status,
+    headers: {
+      ...headers,
+      'content-type': decision.status === 404 ? 'text/plain' : 'text/html; charset=utf-8',
+      'referrer-policy': 'no-referrer',
+      'x-frame-options': 'DENY',
+      'content-security-policy': "default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'; frame-ancestors 'none'",
+    },
+  });
+}
+
+/**
+ * Evaluate the Control Center gate for one request. Returns the decision and,
+ * when the request proved possession of the token by header, the
+ * cookie value to set so the browser does not have to present it again.
+ */
+async function authorizeOperator(
+  request: NextRequest,
+): Promise<{ decision: OperatorDecision; cookieToSet: string | null }> {
+  const configuredToken = process.env.CONTROL_CENTER_TOKEN;
+  const { token } = resolveAccessMode(process.env.NODE_ENV, configuredToken);
+  const expectedCookieValue = token === null ? null : await cookieValueFor(token);
+  const decision = decideOperatorAccess({
+    nodeEnv: process.env.NODE_ENV,
+    configuredToken,
+    cookieValue: request.cookies.get(CONTROL_CENTER_COOKIE)?.value,
+    headerValue: request.headers.get(CONTROL_CENTER_HEADER) ?? undefined,
+  });
+  const provedByToken = decision.kind === 'allow' && decision.via === 'header';
+  return { decision, cookieToSet: provedByToken ? expectedCookieValue : null };
+}
+
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
 
@@ -157,6 +252,31 @@ export async function proxy(request: NextRequest) {
     request.cookies.get('tugpt_tenant_id')?.value ||
     request.headers.get('x-tenant-id') ||
     undefined;
+
+  // Product Control Center: operator gate, never the tenant session check.
+  let operatorCookie: string | null = null;
+  if (routeType === 'operator') {
+    // Reject cross-origin browser requests, including same-site sibling origins.
+    const origin = request.headers.get('origin');
+    // Next normalizes nextUrl to its listening hostname (127.0.0.1 locally).
+    // Compare Origin with the actual Host, never an untrusted forwarded host.
+    const requestOrigin = `${isHttps(request) ? 'https' : 'http'}://${request.headers.get('host') ?? request.nextUrl.host}`;
+    if (request.headers.get('sec-fetch-site') === 'cross-site' ||
+        (origin && origin !== requestOrigin)) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403, headers: { 'cache-control': 'no-store' } });
+    }
+    const { decision, cookieToSet } = await authorizeOperator(request);
+    if (decision.kind === 'deny') {
+      return denyOperator(pathname, decision);
+    }
+    if (pathname === '/control-center' && request.method === 'POST' && request.nextUrl.searchParams.has('logout')) {
+      const response = NextResponse.redirect(new URL('/control-center', requestOrigin), 303);
+      response.cookies.set(CONTROL_CENTER_COOKIE, '', { path: '/', httpOnly: true, sameSite: 'lax', secure: isHttps(request), maxAge: 0 });
+      response.headers.set('cache-control', 'no-store');
+      return response;
+    }
+    operatorCookie = cookieToSet;
+  }
 
   // Handle protected routes authentication check using Supabase SSR
   if (routeType === 'protected') {
@@ -248,6 +368,14 @@ export async function proxy(request: NextRequest) {
   response.headers.set('x-request-id', requestId);
   if (activeTenantId) {
     response.headers.set('x-tenant-id', activeTenantId);
+  }
+  if (operatorCookie !== null) {
+    setOperatorCookie(response, operatorCookie, request);
+  }
+  if (routeType === 'operator') {
+    response.headers.set('cache-control', 'no-store');
+    response.headers.set('referrer-policy', 'same-origin');
+    response.headers.set('x-frame-options', 'DENY');
   }
 
   return response;

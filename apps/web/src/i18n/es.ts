@@ -42,6 +42,7 @@ export const es = {
   'nav.drafts': 'Borradores',
   'nav.inbox': 'Conversaciones',
   'nav.media': 'Multimedia',
+  'nav.controlCenter': 'Centro de control',
   'nav.integrations': 'Integraciones',
 
   'integrations.title': 'Integraciones',
