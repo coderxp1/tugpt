@@ -1,0 +1,23 @@
+[Unit]
+Description=TuGPT outbound media queue consumer
+After=network-online.target tugpt-image.service
+Wants=network-online.target
+ConditionPathExists=/srv/tugpt-ai/state/worker.env
+[Service]
+User=tugpt-ai
+Group=tugpt-ai
+WorkingDirectory=/srv/tugpt-ai/src
+EnvironmentFile=/srv/tugpt-ai/state/worker.env
+ExecStart=/srv/tugpt-ai/venv/bin/python /srv/tugpt-ai/src/worker.py
+Restart=on-failure
+RestartSec=15
+UMask=0077
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+MemoryMax=512M
+TasksMax=64
+[Install]
+WantedBy=multi-user.target
