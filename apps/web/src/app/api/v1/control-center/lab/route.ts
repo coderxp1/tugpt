@@ -7,10 +7,12 @@
 import { NextResponse } from 'next/server';
 import {
   labAppointments,
-  labBlocked,
   labDeliveryReceipts,
   labFaqRetrieval,
   labGroundedPrompt,
+  labMediaGenerationBlocked,
+  labUsageBlocked,
+  labVoiceTranscriptionBlocked,
   labWhatsAppInbound,
 } from '@/lib/control-center/labs';
 
@@ -124,7 +126,29 @@ export async function POST(request: Request) {
   }
   let body: { test?: unknown; input?: Record<string, unknown> };
   try {
-    body = await request.json();
+    const reader = request.body?.getReader();
+    if (!reader) throw new Error('Missing JSON');
+    const chunks: Uint8Array[] = [];
+    let size = 0;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      size += value.byteLength;
+      if (size > MAX_BODY_BYTES) {
+        await reader.cancel();
+        return NextResponse.json(
+          { error: { code: 'BODY_TOO_LARGE', message: 'Lab request body exceeds 64 KB.' } },
+          { status: 413 },
+        );
+      }
+      chunks.push(value);
+    }
+    const bytes = new Uint8Array(size);
+    let offset = 0;
+    for (const chunk of chunks) { bytes.set(chunk, offset); offset += chunk.byteLength; }
+    const parsed: unknown = JSON.parse(new TextDecoder().decode(bytes));
+    if (!isRecord(parsed)) throw new Error('Expected JSON object');
+    body = parsed;
   } catch {
     return NextResponse.json(
       { error: { code: 'INVALID_BODY', message: 'Request body must be JSON.' } },
@@ -159,26 +183,11 @@ export async function POST(request: Request) {
       case 'appointments':
         return NextResponse.json(await labAppointments(input as never));
       case 'voice-transcription':
-        return NextResponse.json(
-          labBlocked(
-            'voice-transcription',
-            'The transcription pipeline needs a Gladia key (vault-provisioned) and a database. Neither is configured here. Pipeline stages and the transcript-to-draft rule are proven by worker suites and pgTAP.',
-          ),
-        );
+        return NextResponse.json(labVoiceTranscriptionBlocked());
       case 'media-generation':
-        return NextResponse.json(
-          labBlocked(
-            'media-generation',
-            'Generation needs the GPU worker and media_generation enabled for an org. Both are off here: no GPU host is connected to this environment and the flag stays OFF for prod orgs until launch limits are approved.',
-          ),
-        );
+        return NextResponse.json(labMediaGenerationBlocked());
       case 'usage':
-        return NextResponse.json(
-          labBlocked(
-            'usage',
-            'Usage totals come from the org_usage_summary RPC, which needs a database session. No database is configured in this environment; the /dashboard/analytics page shows real totals once Supabase is configured.',
-          ),
-        );
+        return NextResponse.json(labUsageBlocked());
       default:
         return NextResponse.json(
           {
@@ -192,7 +201,7 @@ export async function POST(request: Request) {
     }
   } catch {
     // Deliberately generic: a lab failure must not leak internal error
-    // text to an unauthenticated caller. The failure is still visible
+    // text to the caller. The failure is still visible
     // in server logs via the platform's own logging.
     return NextResponse.json(
       {
