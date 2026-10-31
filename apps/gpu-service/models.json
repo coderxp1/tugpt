@@ -1,0 +1,5 @@
+{
+  "image.generate": {"provider":"diffusers","model":"Tongyi-MAI/Z-Image-Turbo","revision":"f332072aa78be7aecdf3ee76d5c247082da564a6","license":"Apache-2.0","status":"private-service-verified","external":false},
+  "text.generate": {"provider":"transformers","model":"Qwen/Qwen3-8B","revision":"b968826d9c46dd6066d109eabc6255188de91218","license":"Apache-2.0","status":"local-smoke-tested-not-app-routed","external":false},
+  "embedding.generate": {"provider":"transformers","model":"Qwen/Qwen3-Embedding-0.6B","revision":"97b0c614be4d77ee51c0cef4e5f07c00f9eb65b3","license":"Apache-2.0","dimensions":1024,"status":"local-smoke-tested-not-app-routed","external":false}
+}
