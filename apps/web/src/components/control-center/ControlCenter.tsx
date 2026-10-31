@@ -39,12 +39,43 @@ const TABS: { id: Tab; label: string }[] = [
 ];
 
 interface HealthState {
+  runtime?: {
+    nodeEnv: string | null;
+    nodeVersion: string;
+    startedAt: string;
+    uptimeSeconds: number;
+    build: { sha: string | null; branch: string | null };
+  };
+  access?: {
+    mode: 'token' | 'disabled';
+    tokenConfigured: boolean;
+    weakToken: boolean;
+  };
   whatsappKillSwitch: string;
   envPresence: Record<string, boolean>;
   catalogCounts: Record<string, number>;
   catalogTotal: number;
-  database: { available: boolean; reason: string };
-  workers: { available: boolean; reason: string };
+  database: {
+    available: boolean;
+    reason: string;
+    configured?: boolean;
+    reachable?: boolean | null;
+    latencyMs?: number | null;
+    host?: string | null;
+  };
+  workers: { available: boolean; reason: string; observable?: boolean };
+}
+
+const ACCESS_MODE_LABEL: Record<NonNullable<HealthState['access']>['mode'], string> = {
+  token: 'locked by CONTROL_CENTER_TOKEN — this browser holds a valid unlock cookie',
+  disabled: 'disabled (no valid owner key)',
+};
+
+function buildLabel(health: HealthState | null): string {
+  const b = health?.runtime?.build;
+  if (!b || (!b.sha && !b.branch)) return 'build: not reported by this process (TUGPT_GIT_SHA unset)';
+  const sha = b.sha ? b.sha.slice(0, 10) : '?';
+  return `build: ${b.branch ?? 'unknown branch'} @ ${sha}`;
 }
 
 interface RunRecord {
@@ -63,6 +94,7 @@ async function runLab(
     headers: { 'content-type': 'application/json' },
     body: JSON.stringify({ test, input }),
   });
+  if (res.status === 401) throw new Error('Owner session expired. Reload this page to unlock.');
   return res.json();
 }
 
@@ -115,12 +147,16 @@ export function ControlCenter() {
 
   useEffect(() => {
     fetch('/api/v1/control-center/health')
-      .then((r) => r.json())
+      .then((r) => {
+        if (!r.ok) throw new Error(r.status === 401 ? 'Owner session expired. Reload to unlock.' : `Health request failed (${r.status})`);
+        return r.json();
+      })
       .then(setHealth)
       .catch((err: unknown) => setHealthError(err instanceof Error ? err.message : 'Health fetch failed'));
   }, []);
 
   async function execute(test: string, input: Record<string, unknown>) {
+    setResult(null);
     setRunning(true);
     setRunError(null);
     try {
@@ -146,12 +182,25 @@ export function ControlCenter() {
   }
 
   return (
-    <main className="mx-auto max-w-5xl px-4 py-6 text-zinc-200">
-      <h1 className="text-2xl font-bold text-zinc-50">TuGPT Product Control Center</h1>
+    <div lang="en" className="min-h-screen bg-zinc-950">
+    <main className="mx-auto w-full min-w-0 max-w-5xl break-words px-4 py-6 text-zinc-200">
+      <form action="/control-center?logout=1" method="post" className="float-right"><button className="rounded border border-zinc-600 px-3 py-2 text-sm" type="submit">Lock workspace</button></form>
+          <h1 className="text-2xl font-bold text-zinc-50">TuGPT Product Control Center</h1>
       <p className="mt-1 text-sm text-zinc-400">
-        Baseline: main <code>e82dcecb</code> (frozen MVP). WhatsApp kill switch:{' '}
-        <strong className="text-red-400">OFF</strong>. Nothing on this page sends a message,
-        calls a provider, writes to a database, or spends money.
+        {health ? (
+          <>
+            <code>{buildLabel(health)}</code> · env <code>{health.runtime?.nodeEnv ?? '?'}</code>{' '}
+            · WhatsApp kill switch:{' '}
+            <strong className={health.whatsappKillSwitch === 'OFF' ? 'text-red-400' : 'text-green-400'}>
+              {health.whatsappKillSwitch}
+            </strong>
+            .{' '}
+          </>
+        ) : (
+          <>Reading live state… </>
+        )}
+        Labs on this page never send a message, call an AI/calendar/media provider, write to a database, or
+        spend money.
       </p>
 
       <nav className="mt-5 flex flex-wrap gap-2" aria-label="Control Center sections">
@@ -159,7 +208,7 @@ export function ControlCenter() {
           <button
             key={t.id}
             type="button"
-            onClick={() => setTab(t.id)}
+            onClick={() => { setTab(t.id); setResult(null); setRunError(null); }}
             className={`rounded-full px-3 py-1 text-sm ${
               tab === t.id ? 'bg-zinc-100 text-zinc-900' : 'bg-zinc-800 text-zinc-200'
             }`}
@@ -169,6 +218,11 @@ export function ControlCenter() {
         ))}
       </nav>
 
+      {tab !== 'tests' && <div aria-live="polite" className="mt-3 text-sm">
+        {running && <p>Running...</p>}
+        {runError && <p role="alert" className="text-red-400">{runError}</p>}
+        {result && <p>Result: {result.test} — mode: {result.mode}</p>}
+      </div>}
       <div className="mt-5 space-y-4">
         {tab === 'overview' && (
           <Section title="System health">
@@ -176,9 +230,28 @@ export function ControlCenter() {
             {!health && !healthError && <p>Loading real state…</p>}
             {health && (
               <div className="space-y-3 text-sm">
+                {health.access && (
+                  <p>
+                    Access: <strong>{ACCESS_MODE_LABEL[health.access.mode]}</strong>
+                    {health.access.weakToken && (
+                      <span className="text-amber-400">
+                        {' '}
+                        — CONTROL_CENTER_TOKEN is set but shorter than 24 characters, so it is
+                        ignored.
+                      </span>
+                    )}
+                  </p>
+                )}
+                {health.runtime && (
+                  <p>
+                    Runtime: Node {health.runtime.nodeVersion}, NODE_ENV={health.runtime.nodeEnv ?? 'unset'},
+                    up {health.runtime.uptimeSeconds}s since {health.runtime.startedAt}.{' '}
+                    {buildLabel(health)}.
+                  </p>
+                )}
                 <p>
                   WhatsApp kill switch: <strong>{health.whatsappKillSwitch}</strong> (code
-                  default; no flag rows exist).
+                  default; tenant flag rows are not queried).
                 </p>
                 <div>
                   <p className="font-medium text-zinc-100">Connected services (presence only, never values)</p>
@@ -191,12 +264,26 @@ export function ControlCenter() {
                   </ul>
                 </div>
                 <p>
-                  Database: {health.database.available ? 'connected' : 'not connected'} —{' '}
-                  {health.database.reason}
+                  Supabase Auth health (not a database test):{' '}
+                  <strong>
+                    {health.database.available
+                      ? `reachable${health.database.latencyMs != null ? ` (${health.database.latencyMs} ms)` : ''}`
+                      : health.database.configured
+                        ? 'configured but unreachable'
+                        : 'not configured'}
+                  </strong>{' '}
+                  — {health.database.reason}
                 </p>
                 <p>
-                  Workers: {health.workers.available ? 'running' : 'not running'} —{' '}
-                  {health.workers.reason}
+                  Workers:{' '}
+                  <strong>
+                    {health.workers.available
+                      ? 'running'
+                      : health.workers.observable === false
+                        ? 'not observable from here'
+                        : 'not running'}
+                  </strong>{' '}
+                  — {health.workers.reason}
                 </p>
                 <p>
                   Feature catalog: {health.catalogTotal} entries —{' '}
@@ -212,7 +299,7 @@ export function ControlCenter() {
 
         {tab === 'catalog' && (
           <Section title="Feature catalog — what is real, what is not">
-            <CatalogTable entries={FEATURE_CATALOG} />
+            <div className="overflow-x-auto"><CatalogTable entries={FEATURE_CATALOG} /></div>
             <p className="mt-3 text-sm text-zinc-400">
               Evidence, PRs, and next actions for each entry live in the inventory document
               delivered with this dashboard. Nothing marked “in the UI” is a mock: those pages
@@ -294,7 +381,7 @@ export function ControlCenter() {
               </button>
             </div>
             <p className="mt-3 text-sm text-zinc-400">
-              Google free/busy is NOT involved: no Google credentials exist. The lab runs the
+              Google free/busy is NOT involved: this lab always uses a simulated provider. The lab runs the
               production AvailabilityService and store against the package&apos;s mock calendar
               provider. The database CHECK refusing CONFIRMED writes is proven by pgTAP.
             </p>
@@ -363,5 +450,6 @@ export function ControlCenter() {
         )}
       </div>
     </main>
+    </div>
   );
 }
