@@ -17,7 +17,7 @@ function CallbackHandler() {
     const handleCallback = async () => {
       const supabase = getBrowserClient();
       const code = searchParams.get('code');
-      const next = searchParams.get('next') || '/dashboard/drafts';
+      const next = searchParams.get('next') || '/dashboard';
 
       if (code) {
         const { error } = await supabase.auth.exchangeCodeForSession(code);

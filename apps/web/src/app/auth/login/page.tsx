@@ -18,7 +18,7 @@ function LoginForm() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const redirect = searchParams.get('redirect') || '/dashboard/drafts';
+  const redirect = searchParams.get('redirect') || '/dashboard';
 
   useEffect(() => {
     // If already authenticated, redirect

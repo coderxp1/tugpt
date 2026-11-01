@@ -93,7 +93,7 @@ Required variables:
 | `HUBSPOT_API_KEY` | HubSpot CRM API | **Secret** (server only) |
 | `WHATSAPP_APP_SECRET` | Meta app secret; the webhook's HMAC key. **Must be non-empty before `whatsapp_integration` is enabled** — the route refuses every request while it is blank | **Secret** (server only) |
 | `WHATSAPP_VERIFY_TOKEN` | Meta webhook verification token. Same rule | **Secret** (server only) |
-| `TUGPT_DOMAIN` | Public hostname (`tugpt.app`). Read by the Caddy reverse proxy only | Server only |
+| `TUGPT_DOMAIN` | Dashboard hostname (`dashboard.tugpt.pro`). Read by the Caddy reverse proxy only | Server only |
 | `TUGPT_SECRET_KEY_<ID>` | Base64 of 32 random bytes. A key ring, not one key: `<ID>` lowercased with `_` → `.` is the `key_id` written on each `platform_secrets` row, so `TUGPT_SECRET_KEY_PLATFORM_V1` is `platform.v1`. Several may be set at once — that is how rotation works | **Secret** (server only) |
 | `TRANSCRIPTION_MAX_MEDIA_BYTES` | Ceiling on one inbound voice note. Defaults to 8 MiB. A spend control, not a storage one: Gladia bills per second and bytes are the only proxy for duration before decoding | Server only |
 
@@ -246,7 +246,8 @@ The list above stopped there for two weeks. Everything below is merged on `main`
 - **Workers run under `tsx` in production too** (2026-08-25). The first ever container boot crash-looped on `ERR_MODULE_NOT_FOUND`: no `@tugpt/*` package produces a `dist/`, so the worker's CJS output `require()`s raw TypeScript. Every earlier path — dev, the e2e harness, the old systemd units — ran under `tsx` and hid it. `apps/worker/tests/worker-start-command.test.ts` fails anyone who reverts that. `docs/production_environment.md` §4.
 - **[ADR-015](docs/adr/ADR-015-ai-business-operating-system.md) accepted** (2026-08-25): the product direction beyond draft review.
 - **Quota-period lifecycle** (2026-08-26, migration `20260826000001`). `public.enable_draft_generation_for_org()` creates the period and enables the org flag in one transaction, and a trigger refuses to enable the flag for an organization with no covering period (`P3B17`). Before it, a missing period silently skipped every job.
-- **Domain migration to `tugpt.app`** (2026-08-28): [ADR-016](docs/adr/ADR-016-product-name-and-domain.md).
+- **Domain migration to `tugpt.app`** (2026-08-28): [ADR-016](docs/adr/ADR-016-product-name-and-domain.md). Superseded 2026-11-01.
+- **Domains on tugpt.pro** (2026-11-01): website `tugpt.pro`, Dashboard `dashboard.tugpt.pro`, Workspace `workspace.tugpt.pro`. `tugpt.app` is not part of the setup. See [production environment §5.4d](docs/production_environment.md).
 - **Spanish-first interface** (2026-08-30): [ADR-017](docs/adr/ADR-017-spanish-first-internationalization.md). Typed `es`/`en` dictionaries with Spanish as the source of truth, a key-parity guard, and `organizations.locale` (default `es`) carried on `TenantContext` — never `Accept-Language`, because one shop's two reviewers must see one language.
 - **The anti-invention guardrail** (2026-08-30). Emitted by `packages/ai-orchestration/src/prompt-builder.ts` for every draft, appended after every per-organization section: no invented prices, hours, availability, deadlines, promotions or policies; capture a contact detail instead; answer honestly if asked whether the reply is automated. It is **not** a seeded default an owner can clear — "mandatory" and "seeded" are not the same property, and the seeded `response_rules` deliberately does not repeat it.
 

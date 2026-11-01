@@ -1,3 +1,5 @@
+> **Status update 2026-11-01:** the domain decision in this ADR is superseded. `tugpt.app` is not part of the TuGPT setup; canonical domains are `tugpt.pro`, `dashboard.tugpt.pro` and `workspace.tugpt.pro`. The product-name decision (TuGPT, no TLD in the brand) stands.
+
 # ADR-016: The Product Name Is "TuGPT"; the Domain Is Configuration
 
 ## Status

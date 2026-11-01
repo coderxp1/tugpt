@@ -116,7 +116,7 @@ cp "$BIN/docker" "$MINIMAL/docker"
 for u in sh cut grep date tr sed; do
   command -v "$u" >/dev/null 2>&1 && ln -sf "$(command -v "$u")" "$MINIMAL/$u"
 done
-OUT=$(PATH="$MINIMAL" TUGPT_DOMAIN=tugpt.app sh "$SUT" 2>&1); RC=$?
+OUT=$(PATH="$MINIMAL" TUGPT_DOMAIN=dashboard.tugpt.pro sh "$SUT" 2>&1); RC=$?
 
 assert_exit 2
 assert_has 'check-cert: openssl is not on PATH.'
@@ -130,7 +130,7 @@ assert_has 'check-cert: openssl is not on PATH.'
 # afternoon in /etc/resolv.conf.
 # =============================================================================
 CASE="caddy-stopped"
-export TUGPT_DOMAIN=tugpt.app FIX_CADDY_RUNNING=0 FIX_DNS_RC=0
+export TUGPT_DOMAIN=dashboard.tugpt.pro FIX_CADDY_RUNNING=0 FIX_DNS_RC=0
 FIX_ENDDATE="$(enddate_in 89)"; export FIX_ENDDATE
 run
 
@@ -153,7 +153,7 @@ assert_has 'Renewals will fail silently until the certificate expires.'
 assert_has '127.0.0.53 nameserver is the systemd-resolved stub'
 # The run must CONTINUE to the certificate check rather than stopping at DNS -
 # one run should give the whole picture.
-assert_matches 'ok +cert +tugpt\.app valid for [0-9]+d'
+assert_matches 'ok +cert +dashboard\.tugpt\.pro valid for [0-9]+d'
 
 # =============================================================================
 # Case 5 - everything healthy.
@@ -165,7 +165,7 @@ run
 
 assert_exit 0
 assert_has 'ok    dns   caddy resolves acme-v02.api.letsencrypt.org'
-assert_matches 'ok +cert +tugpt\.app valid for (88|89)d'
+assert_matches 'ok +cert +dashboard\.tugpt\.pro valid for (88|89)d'
 assert_lacks 'FAIL'
 
 # =============================================================================
@@ -177,7 +177,7 @@ FIX_ENDDATE="$(enddate_in 10)"; export FIX_ENDDATE
 run
 
 assert_exit 1
-assert_matches 'FAIL +cert +tugpt\.app expires in (9|10)d \(threshold 21d\)'
+assert_matches 'FAIL +cert +dashboard\.tugpt\.pro expires in (9|10)d \(threshold 21d\)'
 assert_has 'Caddy renews around 30d out'
 # DNS was fine; that must still be reported as fine.
 assert_has 'ok    dns'
@@ -191,7 +191,7 @@ FIX_ENDDATE="$(enddate_in 10)"; export FIX_ENDDATE
 OUT=$(PATH="$BIN:$PATH" MIN_DAYS=5 sh "$SUT" 2>&1); RC=$?
 
 assert_exit 0
-assert_matches 'ok +cert +tugpt\.app valid for (9|10)d'
+assert_matches 'ok +cert +dashboard\.tugpt\.pro valid for (9|10)d'
 
 # =============================================================================
 # Case 8 - nothing answers on :443. Not a certificate problem to guess at.
@@ -201,7 +201,7 @@ export FIX_ENDDATE=""
 run
 
 assert_exit 1
-assert_has 'FAIL  cert  could not read a certificate from tugpt.app:443'
+assert_has 'FAIL  cert  could not read a certificate from dashboard.tugpt.pro:443'
 
 # =============================================================================
 # Case 9 - the expiry date is unparseable. Exit 2 (could not run), not 1 -

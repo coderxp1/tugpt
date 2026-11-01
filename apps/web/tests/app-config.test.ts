@@ -6,7 +6,7 @@ import { es } from '../src/i18n/es';
 describe('TuGPT Product Identity & Localization Config', () => {
   it('has the correct product name and identity metadata', async () => {
     // No TLD in the product name. The old domain was lost on 2026-08-28 and
-    // the brand had carried it into the browser tab; tugpt.app is a hostname,
+    // the brand had carried it into the browser tab; dashboard.tugpt.pro is a hostname,
     // not an identity. apps/worker/tests/no-dead-domain.test.ts keeps the dead
     // one from returning — including from a comment like this one.
     expect(APP_CONFIG.name).toBe('TuGPT');

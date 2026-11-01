@@ -4,6 +4,8 @@
  * WHY A TEST AND NOT A CODE REVIEW
  *
  * On 2026-08-28 control of `tugpt.ai` was lost and `tugpt.app` became canonical.
+ * On 2026-11-01 the owner confirmed `tugpt.app` is not part of the TuGPT setup;
+ * the canonical domains are tugpt.pro, dashboard.tugpt.pro and workspace.tugpt.pro.
  * The migration audit was done by hand, with grep, and grep missed two entire
  * categories on the first pass:
  *
@@ -44,7 +46,7 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
  * names and must not match, which is what the trailing exclusion of `-` and `/`
  * is for.
  */
-const DEAD_DOMAIN = /tugpt\\?[._-]ai(?![-a-z0-9])/i;
+const DEAD_DOMAIN = /tugpt\\?[._-](?:ai|app)(?![-a-z0-9])/i;
 
 /** Directories that run or deploy. Prose lives elsewhere and is not guarded. */
 const GUARDED_ROOTS = ['apps', 'packages', 'deploy', 'supabase'];
@@ -141,8 +143,11 @@ describe('the dead domain does not come back', () => {
     // Must NOT match: workspace package names.
     expect(DEAD_DOMAIN.test("import x from '@tugpt/ai-providers'")).toBe(false);
     expect(DEAD_DOMAIN.test("@tugpt/ai-orchestration@0.1.0")).toBe(false);
-    // Must NOT match: the live domain.
-    expect(DEAD_DOMAIN.test('https://tugpt.app/api/v1/health')).toBe(false);
+    // Must match: tugpt.app is not part of the TuGPT setup (2026-11-01).
+    expect(DEAD_DOMAIN.test('https://tugpt.app/api/v1/health')).toBe(true);
+    // Must NOT match: the live domains.
+    expect(DEAD_DOMAIN.test('https://dashboard.tugpt.pro/api/v1/health')).toBe(false);
+    expect(DEAD_DOMAIN.test('https://tugpt.pro')).toBe(false);
   });
 
   it('no runtime or deploy file references it', () => {
@@ -169,9 +174,9 @@ describe('the dead domain does not come back', () => {
     expect(
       offenders,
       `These runtime/deploy files still reference tugpt.ai:\n  ${offenders.join('\n  ')}\n\n` +
-        `That domain is hostile — control of it was lost on 2026-08-28. Use tugpt.app, ` +
+        `tugpt.ai is hostile (control lost 2026-08-28) and tugpt.app is not part of the TuGPT setup. Use tugpt.pro subdomains, ` +
         `or for a product name use "TuGPT" with no TLD at all. Putting a TLD in the ` +
-        `brand is what made this migration expensive; doing it again with .app ` +
+        `brand is what made this migration expensive; doing it again ` +
         `guarantees a repeat.\n\n` +
         `If a hit genuinely cannot be changed, add it to ALLOWED with the standing ` +
         `instruction or repository rule that forbids the edit.`
