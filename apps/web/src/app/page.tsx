@@ -23,6 +23,9 @@
  * an already-signed-in reviewer goes directly to work instead of touching a
  * login page that would only bounce them onward.
  *
+ * Since 2026-11-01 `/` points at the Dashboard hub (/dashboard), the product
+ * hub every signed-in person lands on; the inbox is one product inside it.
+ *
  * When a real landing page exists, replace this — and remember that `/` is
  * classified `public` in proxy.ts, so whatever replaces it is served to
  * anyone who asks. See proxy-route-coverage.test.ts.
@@ -31,5 +34,5 @@
 import { redirect } from 'next/navigation';
 
 export default function RootPage(): never {
-  redirect('/dashboard/inbox');
+  redirect('/dashboard');
 }

@@ -45,7 +45,17 @@ export function AppShell({ organizationName, email, t, children }: AppShellProps
       <header className="border-b border-zinc-200 bg-white">
         <div className="mx-auto flex max-w-4xl flex-wrap items-center justify-between gap-x-4 gap-y-2 px-4 py-3">
           <div className="flex min-w-0 items-baseline gap-2">
-            <span className="text-sm font-bold text-zinc-900">{APP_CONFIG.name}</span>
+            {/*
+              Back to the Dashboard hub. The hub is where products are chosen;
+              this header is inside one of them.
+            */}
+            <Link
+              href="/dashboard"
+              aria-label={t('hub.home')}
+              className="text-sm font-bold text-zinc-900 hover:underline"
+            >
+              {APP_CONFIG.name}
+            </Link>
             {/*
               The separator is decorative and hidden from assistive technology;
               the organization name carries its own label instead, so it is not

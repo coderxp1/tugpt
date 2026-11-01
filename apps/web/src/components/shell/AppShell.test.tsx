@@ -139,6 +139,14 @@ describe('navigation', () => {
   });
 });
 
+describe('the way back to the Dashboard hub', () => {
+  it('links the product name to /dashboard from every tool page', () => {
+    renderShell();
+    const home = screen.getByRole('link', { name: t('hub.home') });
+    expect(home.getAttribute('href')).toBe('/dashboard');
+  });
+});
+
 describe('keyboard access', () => {
   it('offers a skip link that lands on the page content', () => {
     // Without it, every navigation costs a reviewer working by keyboard a tab
