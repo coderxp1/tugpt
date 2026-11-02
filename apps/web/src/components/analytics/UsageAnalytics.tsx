@@ -89,7 +89,7 @@ export function UsageAnalytics() {
   const isEmpty = totals !== null && totals.events === 0;
 
   return (
-    <main>
+    <div>
       <h1>{t('analytics.title')}</h1>
 
       <div role="group" aria-label={t('analytics.rangeLabel')}>
@@ -250,7 +250,7 @@ export function UsageAnalytics() {
           )}
         </>
       )}
-    </main>
+    </div>
   );
 }
 

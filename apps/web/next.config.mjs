@@ -11,6 +11,7 @@ const nextConfig = {
   // the traced runtime files, used by apps/web/Dockerfile for the VPS
   // deployment (see docs/production_environment.md, section 5).
   output: 'standalone',
+  distDir: process.env.TUGPT_NEXT_DIST_DIR || '.next',
   // Required in monorepos: without this, file tracing for `standalone`
   // only looks inside apps/web and misses the @tugpt/* workspace packages
   // this app depends on (they live under packages/*, outside the tracing

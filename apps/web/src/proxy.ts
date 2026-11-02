@@ -40,6 +40,11 @@ const PUBLIC_EXACT: ReadonlySet<string> = new Set([
   // Liveness probe. Returns no tenant data and is polled without credentials —
   // by the container healthcheck in docker-compose.yml, among others.
   '/api/v1/health',
+  // Public branding assets only; no broad application-route exemption.
+  '/dashboard-assets/ManyChatGravity-Normal.woff2',
+  '/dashboard-assets/Rooftop-Regular.woff2',
+  '/dashboard-assets/Rooftop-Bold.woff2',
+  '/dashboard-assets/reference-social.jpg',
 ]);
 
 const PUBLIC_PREFIXES: readonly string[] = [

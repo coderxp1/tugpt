@@ -63,6 +63,7 @@ export interface ProductDefinition {
 }
 
 export interface ProductView extends ProductDefinition {
+  readonly featureAccess?: 'enabled' | 'disabled' | 'unknown';
   readonly state: ProductState;
   /** Headline figure, or null when the product has none or it is unreadable. */
   readonly metric: number | null;
@@ -135,7 +136,10 @@ function resolve(
 export function resolveProducts(signals: HubSignals): ProductView[] {
   return PRODUCTS.map((p) => {
     const r = resolve(p.id, signals);
-    return { ...p, ...r, stateKey: STATE_KEYS[r.state] };
+    const gated = ['conversations', 'drafts', 'knowledge', 'media'].includes(p.id);
+    const enabled = p.id === 'media' ? signals.mediaFeatureEnabled : signals.draftFeatureEnabled;
+    const featureAccess = !gated || enabled === undefined ? undefined : enabled === null ? 'unknown' : enabled ? 'enabled' : 'disabled';
+    return { ...p, ...r, featureAccess, stateKey: STATE_KEYS[r.state] };
   });
 }
 

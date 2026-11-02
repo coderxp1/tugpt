@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file MediaJobList.test.tsx
  * @description The list shows each job's prompt, kind, and status, filters by
@@ -6,7 +7,7 @@
  * failed load offers a retry that actually re-runs the effect.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MediaJobList } from './MediaJobList';
 import { createTranslator } from '@/i18n';
@@ -135,3 +136,5 @@ describe('MediaJobList', () => {
     );
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

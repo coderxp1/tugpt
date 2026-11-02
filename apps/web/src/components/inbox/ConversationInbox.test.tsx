@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file ConversationInbox.test.tsx
  * @description The inbox as a reviewer sees it.
@@ -9,7 +10,7 @@
  * rather than "the page after however many I have counted".
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup, within } from '@testing-library/react';
+import { screen, waitFor, cleanup, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConversationInbox } from './ConversationInbox';
 import { createTranslator } from '@/i18n';
@@ -555,3 +556,5 @@ describe('assignment', () => {
     expect(screen.queryByRole('button', { name: t('inbox.claim') })).toBeNull();
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

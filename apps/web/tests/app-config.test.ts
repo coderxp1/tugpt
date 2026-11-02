@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { generateMetadata } from '../src/app/layout';
 import { APP_CONFIG } from '../src/config/locales';
-import { es } from '../src/i18n/es';
+import { en } from '../src/i18n/en';
 
 describe('TuGPT Product Identity & Localization Config', () => {
   it('has the correct product name and identity metadata', async () => {
@@ -13,21 +13,21 @@ describe('TuGPT Product Identity & Localization Config', () => {
     expect((await generateMetadata()).title).toBe('TuGPT');
   });
 
-  it('describes the product in Spanish outside a request context', async () => {
+  it('describes the product in English outside a request context', async () => {
     // `generateMetadata` resolves the organization's locale, and there is no
-    // request here to resolve one from. That path has to end in Spanish rather
+    // request here to resolve one from. That path has to end in English rather
     // than in a thrown error: it is also the path taken when Supabase is
     // unreachable, and a language lookup must not be able to 500 the layout.
-    expect((await generateMetadata()).description).toBe(es['app.description']);
+    expect((await generateMetadata()).description).toBe(en['app.description']);
   });
 
-  it('configures Spanish as the primary default language', () => {
-    expect(APP_CONFIG.primaryLocale).toBe('es');
+  it('configures English as the primary default language', () => {
+    expect(APP_CONFIG.primaryLocale).toBe('en');
   });
 
-  it('supports Spanish as primary and English as secondary language', () => {
+  it('supports English as primary and Spanish as secondary language', () => {
     expect(APP_CONFIG.supportedLocales).toContain('es');
     expect(APP_CONFIG.supportedLocales).toContain('en');
-    expect(APP_CONFIG.secondaryLocale).toBe('en');
+    expect(APP_CONFIG.secondaryLocale).toBe('es');
   });
 });

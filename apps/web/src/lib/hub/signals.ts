@@ -20,6 +20,9 @@ import { createAdminSupabaseClient, type TypedSupabaseClient } from '@tugpt/data
 import { getGoogleIntegrationStatus } from '@/lib/google-integrations/status';
 
 export interface HubSignals {
+  /** Existing server-side feature gate; never enables or changes it. */
+  readonly draftFeatureEnabled?: boolean | null;
+  readonly mediaFeatureEnabled?: boolean | null;
   /** Conversations a human has been asked to take over. */
   readonly needsHuman: number | null;
   /** Conversations still open (including those needing a human). */
@@ -37,6 +40,8 @@ export interface HubSignals {
 }
 
 export const UNAVAILABLE_SIGNALS: HubSignals = {
+  draftFeatureEnabled: null,
+  mediaFeatureEnabled: null,
   needsHuman: null,
   openConversations: null,
   draftsAwaitingReview: null,
@@ -117,6 +122,21 @@ async function calendarState(
   }
 }
 
+async function featureState(organizationId: string, flag: 'ai_draft_generation' | 'media_generation'): Promise<boolean | null> {
+  try {
+    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    if (!url || !key) return null;
+    const admin = createAdminSupabaseClient(url, key);
+    // Same flag and RPC as the existing draft/knowledge API, read-only.
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const { data, error } = await (admin as any).rpc('is_feature_enabled', {
+      p_organization_id: organizationId, p_flag_key: flag,
+    });
+    return error || typeof data !== 'boolean' ? null : data;
+  } catch { return null; }
+}
+
 export async function loadHubSignals(
   db: TypedSupabaseClient,
   organizationId: string
@@ -124,7 +144,7 @@ export async function loadHubSignals(
   const loose = db as unknown as LooseClient;
   const count = (table: string) => loose.from(table).select('id', { count: 'exact', head: true });
 
-  const [needsHuman, openConversations, draftsAwaitingReview, knowledgeEntries, activeMediaJobs, whatsapp, calendar] =
+  const [needsHuman, openConversations, draftsAwaitingReview, knowledgeEntries, activeMediaJobs, whatsapp, calendar, draftFeatureEnabled, mediaFeatureEnabled] =
     await Promise.all([
       countOf(count('conversations').eq('organization_id', organizationId).eq('status', 'needs_human')),
       countOf(count('conversations').eq('organization_id', organizationId).in('status', ['open', 'needs_human'])),
@@ -133,7 +153,9 @@ export async function loadHubSignals(
       countOf(count('media_generation_jobs').eq('organization_id', organizationId).in('status', ['queued', 'processing'])),
       whatsappState(loose, organizationId),
       calendarState(db, organizationId),
+      featureState(organizationId, 'ai_draft_generation'),
+      featureState(organizationId, 'media_generation'),
     ]);
 
-  return { needsHuman, openConversations, draftsAwaitingReview, knowledgeEntries, activeMediaJobs, whatsapp, calendar };
+  return { needsHuman, openConversations, draftsAwaitingReview, knowledgeEntries, activeMediaJobs, whatsapp, calendar, draftFeatureEnabled, mediaFeatureEnabled };
 }

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file DraftInbox.test.tsx
  * @description The inbox had no tests at all until 2026-08-31, which is how
@@ -15,7 +16,7 @@
  *     next person to touch this effect deserves to be told.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DraftInbox } from './DraftInbox';
 import { createTranslator } from '@/i18n';
@@ -164,3 +165,5 @@ describe('what the inbox must never offer', () => {
     expect(document.body.textContent).not.toMatch(/whatsapp/i);
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

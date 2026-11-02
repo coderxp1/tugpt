@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file MediaJobForm.test.tsx
  * @description The form never pays a round trip for a rejection the browser
@@ -7,7 +8,7 @@
  * posts the contract payload and lands on the job's detail page.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MediaJobForm } from './MediaJobForm';
 import { createTranslator } from '@/i18n';
@@ -158,3 +159,5 @@ describe('MediaJobForm', () => {
     );
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

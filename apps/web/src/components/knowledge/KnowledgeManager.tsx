@@ -1,4 +1,5 @@
 'use client';
+import styles from './knowledge.module.css';
 
 /**
  * KnowledgeManager — the owner's FAQ workshop.
@@ -171,7 +172,7 @@ export function KnowledgeManager() {
   };
 
   return (
-    <div>
+    <div className={styles.manager}>
       <h1>{t('knowledge.title')}</h1>
       <p>{t('knowledge.subtitle')}</p>
 
