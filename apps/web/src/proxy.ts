@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { createServerClient as createSSRClient } from '@supabase/ssr';
+import { sessionCookieOptions } from '@/lib/supabase/cookie-options';
 import type { Database } from '@tugpt/database';
 
 export type RouteType = 'auth' | 'protected' | 'public';
@@ -178,6 +179,7 @@ export async function proxy(request: NextRequest) {
     });
 
     const supabase = createSSRClient<Database>(supabaseUrl, supabaseKey, {
+      cookieOptions: sessionCookieOptions(),
       cookies: {
         getAll() {
           return request.cookies.getAll();
