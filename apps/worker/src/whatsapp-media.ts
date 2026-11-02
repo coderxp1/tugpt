@@ -71,7 +71,7 @@ import { createHash } from 'node:crypto';
 export const DEFAULT_MAX_MEDIA_BYTES = 8 * 1024 * 1024;
 
 /** Graph API version. Pinned: an unpinned version changes response shapes under us. */
-export const DEFAULT_GRAPH_VERSION = 'v21.0';
+export const DEFAULT_GRAPH_VERSION = 'v26.0';
 
 export const DEFAULT_GRAPH_BASE_URL = 'https://graph.facebook.com';
 
