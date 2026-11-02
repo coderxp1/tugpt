@@ -51,3 +51,16 @@ The previous launcher is backed up before activation. Rollback restores the prio
 
 Private credentials and test evidence remain outside the repository under the existing protected validation directories. No credentials are committed.
 Public website/login, workspace.tugpt.pro, MCP/admin authentication, GPU services, Supabase configuration and unrelated infrastructure are out of scope and unchanged.
+
+## Live deployment evidence
+
+Application commit `a5ab89d` was activated on the existing Dashboard service. The immediate startup probe briefly received 502 during process startup; the subsequent complete HTTPS browser suite passed.
+
+- Public HTTPS login and the authenticated redesign verified at dashboard.tugpt.pro.
+- Full candidate browser suite repeated on the live origin; host-only Secure session cookies and reload also passed.
+- Existing reviewer@tugpt.pro credentials worked unchanged, displaying TuGPT and English with Spanish browser preference. Reviewer organization response excluded every seeded test organization.
+- Reviewer confirmed the same existing restrictions: four capability cards show organization feature disabled; Conversations, Knowledge and Media list APIs returned 503, Usage API returned 200. No feature enablement or CRUD success is implied.
+- All reviewer browser requests stayed on dashboard.tugpt.pro.
+- Dashboard, Caddy, MCP, gateway, admin broker and GPU tunnel services remained active; public tugpt.pro responded 200. Only the Dashboard service was restarted.
+- Temporary candidate process stopped after deployment. Prior bundle and launcher backup retained for rollback.
+- Branch is committed locally. Git push was blocked by unavailable server HTTPS credentials; no branch publication or PR is claimed. GitHub main remains 7114ffb.
