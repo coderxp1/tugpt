@@ -35,6 +35,11 @@ export const NAV_ITEMS: readonly NavItem[] = [
   // answers "what is this costing", which is the owner's question, and it is
   // the one a reviewer opens least.
   { href: '/dashboard/analytics', labelKey: 'nav.analytics' },
+  // Last, and named for both halves: this is where a person checks which
+  // provider identities are one account. Not "settings" — there are no
+  // settings there yet, and a link that promises more than the page has is
+  // how a nav stops being trustworthy.
+  { href: '/dashboard/settings/accounts', labelKey: 'nav.accounts' },
 ];
 
 /**
