@@ -30,6 +30,7 @@ export const en: Dictionary = {
   'nav.drafts': 'Drafts',
   'nav.inbox': 'Conversations',
   'nav.media': 'Media',
+  'nav.accounts': 'Account & access',
   'nav.integrations': 'Integrations',
 
   'integrations.title': 'Integrations',
@@ -190,6 +191,32 @@ export const en: Dictionary = {
   'auth.login.submitting': 'Signing in…',
   'auth.logout.pending': 'Signing out…',
   'auth.callback.pending': 'Completing authentication…',
+  'auth.login.github': 'Continue with GitHub',
+  'auth.login.google': 'Continue with Google',
+  'auth.login.or': 'or',
+
+  'accounts.title': 'Account & access',
+  'accounts.subtitle':
+    'One TuGPT identity. Every provider below is explicitly linked to it.',
+  'accounts.canonicalId': 'Canonical identifier',
+  'accounts.canonicalHint':
+    'This identifier does not change when you sign in with another provider. It is the same on the site, the dashboard and the workspace.',
+  'accounts.linkedHeading': 'Linked providers',
+  'accounts.linked': 'Linked',
+  'accounts.noneLinked': 'No providers linked yet.',
+  'accounts.lastSignIn': 'Last sign-in: {at}',
+  'accounts.linkHeading': 'Link another provider',
+  'accounts.linkHint':
+    'Linking does not create a new account: it adds this provider to the account you are already signed in with.',
+  'accounts.link': 'Link {provider}',
+  'accounts.linking': 'Redirecting…',
+  'accounts.linkFailed': 'Could not link the provider. Please try again.',
+  'accounts.noAutoMerge':
+    'TuGPT never merges accounts by email address. If two providers share one email, they stay separate identities until you link them here.',
+  'accounts.provider.github': 'GitHub',
+  'accounts.provider.google': 'Google',
+  'accounts.provider.email': 'Email and password',
+  'accounts.provider.other': 'Other provider',
 
   'drafts.inbox.title': 'Draft inbox',
   'drafts.inbox.loading': 'Loading drafts…',

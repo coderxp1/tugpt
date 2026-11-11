@@ -42,6 +42,7 @@ export const es = {
   'nav.drafts': 'Borradores',
   'nav.inbox': 'Conversaciones',
   'nav.media': 'Multimedia',
+  'nav.accounts': 'Cuenta y accesos',
   'nav.integrations': 'Integraciones',
 
   'integrations.title': 'Integraciones',
@@ -202,6 +203,32 @@ export const es = {
   'auth.login.submitting': 'Iniciando sesión…',
   'auth.logout.pending': 'Cerrando sesión…',
   'auth.callback.pending': 'Completando la autenticación…',
+  'auth.login.github': 'Continuar con GitHub',
+  'auth.login.google': 'Continuar con Google',
+  'auth.login.or': 'o',
+
+  'accounts.title': 'Cuenta y accesos',
+  'accounts.subtitle':
+    'Una sola identidad de TuGPT. Cada proveedor que aparece abajo está vinculado explícitamente a ella.',
+  'accounts.canonicalId': 'Identificador canónico',
+  'accounts.canonicalHint':
+    'Este identificador no cambia cuando entra con otro proveedor. Es el mismo en el sitio, el panel y el espacio de trabajo.',
+  'accounts.linkedHeading': 'Proveedores vinculados',
+  'accounts.linked': 'Vinculado',
+  'accounts.noneLinked': 'Todavía no hay proveedores vinculados.',
+  'accounts.lastSignIn': 'Último acceso: {at}',
+  'accounts.linkHeading': 'Vincular otro proveedor',
+  'accounts.linkHint':
+    'Vincular no crea una cuenta nueva: añade este proveedor a la cuenta con la que ya inició sesión.',
+  'accounts.link': 'Vincular {provider}',
+  'accounts.linking': 'Redirigiendo…',
+  'accounts.linkFailed': 'No se pudo vincular el proveedor. Inténtelo de nuevo.',
+  'accounts.noAutoMerge':
+    'TuGPT nunca une cuentas por su dirección de correo. Si dos proveedores usan el mismo correo, siguen siendo identidades distintas hasta que usted las vincule aquí.',
+  'accounts.provider.github': 'GitHub',
+  'accounts.provider.google': 'Google',
+  'accounts.provider.email': 'Correo y contraseña',
+  'accounts.provider.other': 'Otro proveedor',
 
   'drafts.inbox.title': 'Bandeja de borradores',
   'drafts.inbox.loading': 'Cargando borradores…',

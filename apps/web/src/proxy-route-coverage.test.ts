@@ -88,6 +88,15 @@ const ROUTES: RouteExpectation[] = [
   // below it and has no URL of its own. If a `dashboard/page.tsx` is ever
   // added, the discovery test below fails until it is classified here.
   {
+    path: '/dashboard/settings/accounts',
+    kind: 'page',
+    type: 'protected',
+    why:
+      'Linked provider identities and the canonical user id. The page reads the user from ' +
+      'the session cookie rather than from the URL, so another person’s identities are ' +
+      'not addressable; the proxy is the only gate on the page shell.',
+  },
+  {
     path: '/dashboard/drafts/[draftId]',
     kind: 'page',
     type: 'protected',

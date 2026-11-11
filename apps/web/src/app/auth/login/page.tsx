@@ -32,6 +32,40 @@ function LoginForm() {
     checkSession();
   }, [router, redirect]);
 
+  /**
+   * OAuth entry points.
+   *
+   * GitHub is the provider the SSO journey starts from; Google is offered
+   * here as well because a person who has already linked it should not have
+   * to remember which button they used first. Both come back through
+   * /auth/callback, which exchanges the code for a session.
+   *
+   * A failure leaves `loading` true only until the finally block runs: on
+   * success the browser navigates away, and there is no page left to reset.
+   */
+  const signInWith = async (provider: 'github' | 'google') => {
+    setLoading(true);
+    setError(null);
+
+    try {
+      const supabase = getBrowserClient();
+      const redirectTo = `${window.location.origin}/auth/callback?next=${encodeURIComponent(
+        redirect
+      )}`;
+
+      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+        provider,
+        options: { redirectTo },
+      });
+
+      if (oauthError) setError(oauthError.message);
+    } catch {
+      setError(t('errors.INTERNAL_ERROR'));
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
@@ -74,6 +108,31 @@ function LoginForm() {
             <p className="text-sm text-red-700">{error}</p>
           </div>
         )}
+
+        <div className="space-y-2">
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => void signInWith('github')}
+            className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-100 disabled:opacity-50"
+          >
+            {t('auth.login.github')}
+          </button>
+          <button
+            type="button"
+            disabled={loading}
+            onClick={() => void signInWith('google')}
+            className="w-full rounded-lg border border-zinc-300 bg-white px-4 py-2 text-sm font-medium text-zinc-800 transition hover:bg-zinc-100 disabled:opacity-50"
+          >
+            {t('auth.login.google')}
+          </button>
+        </div>
+
+        <div className="my-4 flex items-center gap-2 text-xs text-zinc-400">
+          <span aria-hidden="true" className="h-px flex-1 bg-zinc-200" />
+          <span>{t('auth.login.or')}</span>
+          <span aria-hidden="true" className="h-px flex-1 bg-zinc-200" />
+        </div>
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div>
