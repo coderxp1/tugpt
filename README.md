@@ -209,6 +209,7 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 | [ADR-016](docs/adr/ADR-016-product-name-and-domain.md) | Product Name and Domain | Accepted |
 | [ADR-017](docs/adr/ADR-017-spanish-first-internationalization.md) | Spanish Is the Source of Truth; Locale Belongs to the Organization | Accepted |
 | [ADR-019](docs/adr/ADR-019-media-generation-capability.md) | Media Generation Capability (ComfyUI on the TuGPT GPU Host) | Proposed |
+| [ADR-020](docs/adr/ADR-020-tool-registry-and-agent-runtime.md) | Tool Registry, Capability Contracts, and the Agent Runtime | Proposed |
 
 `apps/worker/tests/readme-matches-the-repo.test.ts` checks this table against
 `docs/adr/` on every run: a new ADR that is not listed here fails, a row pointing
