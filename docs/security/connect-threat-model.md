@@ -67,7 +67,7 @@ designed but not yet implemented on the branch.
 | ID | Threat | Control | Status |
 |---|---|---|---|
 | T-MCP-01 | SSRF to internal services / metadata | Egress guard: HTTPS:443 only; resolved-IP denylist (RFC1918, loopback, link-local, CGNAT, ULA, metadata) checked per request after DNS; no cross-host redirects | Planned (test per range) |
-| T-MCP-02 | **Reaching the infrastructure admin MCP bridge** | Separate package with no import path (lint rule); bridge hostnames/IPs on registration denylist; bridge only on private interfaces, which the egress guard refuses; bridge credentials never in vault | Planned (tests: registration rejects; egress rejects; import lint fails) |
+| T-MCP-02 | **Reaching the infrastructure admin MCP bridge** | Separate package with no import path (lint rule); bridge hostnames/IPs on registration denylist; bridge only on private interfaces, which the egress guard refuses; bridge credentials never in vault | Partly implemented: static separation guards in `connect-runtime` and `credential-broker` (`src/separation.test.ts`, dependency allowlist + no process/eval imports + no bridge identifiers; 7 planted violations caught); egress proxy refuses the bridge host address (staging smoke 2026-11-14, `docs/connect/broker-egress.md`). Pending: registration denylist (with customer MCP registration). |
 | T-MCP-03 | Tool redefinition ("rug pull") | Immutable approved snapshots; new list → new snapshot needing approval | Planned (A1.1) |
 | T-MCP-04 | Customer server executing on our hosts | Remote Streamable HTTP only; no stdio; no spawning | Design rule |
 | T-MCP-05 | Cross-org use of a customer server | Snapshot/tool/grant FKs carry `organization_id`; pgTAP two-org tests | In progress (migration) |
