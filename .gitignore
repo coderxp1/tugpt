@@ -28,3 +28,6 @@ supabase/.branches/
 # Generated secret-scanning report output — regenerate locally, do not commit.
 # See docs/status/PHASE_2_RELEASE_GATE.md for the scan command.
 secrets_report.json
+
+# Isolated Dashboard review candidate build
+.next-redesign/

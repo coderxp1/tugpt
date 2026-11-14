@@ -52,7 +52,7 @@ const ROUTES: RouteExpectation[] = [
     // and useless: `/` was create-next-app boilerplate the entire time, and a
     // reason written about tenant data could never catch that. It now
     // redirects to the conversation inbox and renders nothing at all.
-    why: 'Redirects to /dashboard/inbox. Renders nothing and reads nothing; the proxy gates the destination.',
+    why: 'Redirects to /dashboard, the product hub. Renders nothing and reads nothing; the proxy gates the destination.',
   },
   {
     path: '/auth/login',
@@ -84,9 +84,12 @@ const ROUTES: RouteExpectation[] = [
     type: 'protected',
     why: 'Draft list. The proxy is the only gate on the page shell.',
   },
-  // No entry for /dashboard itself: `dashboard/layout.tsx` wraps the pages
-  // below it and has no URL of its own. If a `dashboard/page.tsx` is ever
-  // added, the discovery test below fails until it is classified here.
+  {
+    path: '/dashboard',
+    kind: 'page',
+    type: 'protected',
+    why: 'Product hub. Shows organization-scoped counts read through the signed-in user, so it must never be served without a session.',
+  },
   {
     path: '/dashboard/drafts/[draftId]',
     kind: 'page',

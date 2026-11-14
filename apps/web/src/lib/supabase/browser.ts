@@ -3,6 +3,7 @@
 // server can read the same session via the cookie-aware server client.
 
 import { createBrowserClient } from '@supabase/ssr';
+import { sessionCookieOptions } from './cookie-options';
 import type { Database } from '@tugpt/database';
 import type { TypedSupabaseClient } from '@tugpt/database';
 
@@ -30,6 +31,8 @@ export function getBrowserClient(): TypedSupabaseClient {
     );
   }
 
-  cachedClient = createBrowserClient<Database>(supabaseUrl, supabaseKey) as unknown as TypedSupabaseClient;
+  cachedClient = createBrowserClient<Database>(supabaseUrl, supabaseKey, {
+    cookieOptions: sessionCookieOptions(),
+  }) as unknown as TypedSupabaseClient;
   return cachedClient;
 }

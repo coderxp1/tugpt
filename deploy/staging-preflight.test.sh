@@ -133,7 +133,7 @@ services:
 YAML
 
 # --- env fixtures -------------------------------------------------------------------
-printf 'NEXT_PUBLIC_SUPABASE_URL=https://prodref.supabase.co\nTUGPT_DOMAIN=tugpt.app\n' > "$TMP/prod.env"
+printf 'NEXT_PUBLIC_SUPABASE_URL=https://prodref.supabase.co\nTUGPT_DOMAIN=dashboard.tugpt.pro\n' > "$TMP/prod.env"
 printf 'NEXT_PUBLIC_SUPABASE_URL=https://stagingref.supabase.co\n' > "$TMP/staging.env"
 chmod 600 "$TMP/staging.env"
 
@@ -256,7 +256,7 @@ esac
 # Case 12: production env file present, TUGPT_DOMAIN present, but
 # NEXT_PUBLIC_SUPABASE_URL missing entirely. env-isolation must
 # FAIL: differing from an empty production value proves nothing.
-printf 'TUGPT_DOMAIN=tugpt.app\n' > "$TMP/prod-nourl.env"
+printf 'TUGPT_DOMAIN=dashboard.tugpt.pro\n' > "$TMP/prod-nourl.env"
 PROD_ENV_OVERRIDE="$TMP/prod-nourl.env"
 out=$(run_case); rc=$?
 expect "missing production URL fails env-isolation" 1 "$rc" "FAIL env-isolation" "$out"
@@ -270,7 +270,7 @@ esac
 unset PROD_ENV_OVERRIDE
 
 # Case 13: same, with the production URL present but empty.
-printf 'NEXT_PUBLIC_SUPABASE_URL=\nTUGPT_DOMAIN=tugpt.app\n' > "$TMP/prod-emptyurl.env"
+printf 'NEXT_PUBLIC_SUPABASE_URL=\nTUGPT_DOMAIN=dashboard.tugpt.pro\n' > "$TMP/prod-emptyurl.env"
 PROD_ENV_OVERRIDE="$TMP/prod-emptyurl.env"
 out=$(run_case); rc=$?
 expect "empty production URL fails env-isolation" 1 "$rc" "FAIL env-isolation" "$out"

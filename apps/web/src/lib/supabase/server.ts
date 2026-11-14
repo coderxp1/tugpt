@@ -4,6 +4,7 @@
 
 import { cookies } from 'next/headers';
 import { createServerClient as createSSRClient } from '@supabase/ssr';
+import { sessionCookieOptions } from './cookie-options';
 import type { TypedSupabaseClient, Database } from '@tugpt/database';
 
 /**
@@ -33,6 +34,7 @@ export async function createAuthenticatedServerClient(): Promise<TypedSupabaseCl
   const cookieStore = await cookies();
 
   return createSSRClient<Database>(supabaseUrl, supabaseKey, {
+    cookieOptions: sessionCookieOptions(),
     cookies: {
       getAll() {
         return cookieStore.getAll();

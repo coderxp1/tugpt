@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * KnowledgeManager — the owner's FAQ workshop as the owner sees it.
  *
@@ -9,7 +10,7 @@
  * actually use — including the honest empty result.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { KnowledgeManager } from './KnowledgeManager';
 
@@ -143,3 +144,5 @@ describe('KnowledgeManager', () => {
     ).toBeTruthy();
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

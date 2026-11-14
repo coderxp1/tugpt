@@ -19,7 +19,7 @@ Every production environment deployment requires the following variables to be e
 | `LANGDOCK_MODEL` | Pins exactly one model and disables rotation. Kept for deployments predating rotation, and as the escape hatch. Ignored when `LANGDOCK_MODELS` is also set — the more specific variable wins, and the override is logged at boot. Allowed values: `gpt-5-mini`, `gpt-5.1`, `gpt-5.2`, `gpt-5`. Anything else is rejected at worker boot. | Server-side only. Not a secret. |
 | `GATEWAY_API_MASTRA_KEY` | Production Mastra Orchestrator API Key | **SECRET**. Server-side only. |
 | `GATEWAY_API_URL` | Production Mastra Endpoint URL | Server-side only. |
-| `TUGPT_DOMAIN` | Public hostname the dashboard is served on. `tugpt.app` since the 2026-08-28 migration (§5.4c). Read by the Caddy reverse proxy only (section 5.4b), and only when the `proxy` compose profile is enabled. | Not a secret. |
+| `TUGPT_DOMAIN` | Public hostname the dashboard is served on. `dashboard.tugpt.pro` since 2026-11-01 (§5.4d). Read by the Caddy reverse proxy only (section 5.4b), and only when the `proxy` compose profile is enabled. | Not a secret. |
 | `IONOS_API_KEY` | IONOS voice API key. **Present but empty on the server as of 2026-08-25** — the account is not configured yet. Nothing reads it at boot, so an empty value is safe; a wrong one would not be caught until something first calls it. | **SECRET**. Server-side only. |
 | `LANGDOCK_IMAGE_*` | Credentials for the Langdock image-generation agent. **No production code reads these names yet.** They are on the server so the values are not lost; whoever wires that agent must read exactly these names rather than inventing new ones. | **SECRET**. Server-side only. |
 | `LANGDOCK_DOCZIP_*` | Credentials for the Langdock doczip agent. Same status and same rule as `LANGDOCK_IMAGE_*`. | **SECRET**. Server-side only. |
@@ -328,7 +328,7 @@ than a build one.
 
 5.3 leaves the app listening on loopback only. A reviewer cannot open it. This adds TLS termination and public routing in front of it.
 
-**On the current host this is already done** — Caddy is running under the `proxy` profile with a Let's Encrypt certificate for `tugpt.app` and renewal on. The section stays as the reference for how it was set up, what to check, and how it fails.
+**On the current host this is already done** — Caddy is running under the `proxy` profile with a Let's Encrypt certificate for `dashboard.tugpt.pro` and renewal on. The section stays as the reference for how it was set up, what to check, and how it fails.
 
 Caddy rather than nginx: certificates are obtained and renewed from Let's Encrypt automatically, with no certbot and no cron entry to forget. The whole configuration is `deploy/caddy/Caddyfile`, about twenty lines.
 
@@ -397,7 +397,7 @@ cd /opt/tugpt
 set -a; . /etc/tugpt/web.env; set +a
 sh deploy/caddy/check-cert.sh
 # ok    dns   caddy resolves acme-v02.api.letsencrypt.org
-# ok    cert  tugpt.app valid for 89d
+# ok    cert  dashboard.tugpt.pro valid for 89d
 ```
 
 Invoked as `sh <path>` rather than `./<path>` because the file arrives through the GitHub API, which writes blobs as `0644` — the executable bit does not survive a fresh clone.
@@ -407,7 +407,7 @@ Optional, as root, to be told rather than to remember:
 ```cron
 0 7 * * 1 cd /opt/tugpt && set -a && . /etc/tugpt/web.env && set +a && \
   sh deploy/caddy/check-cert.sh || \
-  logger -t tugpt-cert -p daemon.err "TLS check failed on tugpt.app"
+  logger -t tugpt-cert -p daemon.err "TLS check failed on dashboard.tugpt.pro"
 ```
 
 Weekly gives roughly four warnings between the first failed renewal and an outage.
@@ -422,6 +422,8 @@ Where `site_url` and the redirect allowlist *do* matter:
 **On the WhatsApp webhook.** Once this is up, `https://<TUGPT_DOMAIN>/api/v1/webhooks/whatsapp` is publicly reachable, which is what Meta will eventually require. It returns 404 today and keeps returning 404 until `whatsapp_integration` is flipped in `packages/feature-flags/src/flags.ts` — a reviewed code change, per ADR-010 amendment 2. Exposing the path does not enable the feature and does not move it closer to enabled.
 
 ### 5.4c Domain migration to tugpt.app (2026-08-28)
+> **Superseded on 2026-11-01 (§5.4d).** `tugpt.app` is not part of the TuGPT setup. Kept only as a historical record; do not follow these steps.
+
 
 **`tugpt.ai` is no longer ours and is to be treated as hostile.** Control of the
 registration was lost. Nothing in this repository, on this host, or in any
@@ -492,6 +494,20 @@ secret keyed the HMAC on the empty string, which anyone can compute. The feature
 flag was the only thing standing in front of both. A flag is a product switch,
 not a security control, and it was one flip away from being the entire defence.
 
+### 5.4d Domains on tugpt.pro (2026-11-01)
+
+| Hostname | Purpose | Served by |
+|---|---|---|
+| `tugpt.pro` | Public website | IONOS web hosting. Not served or changed by this repository. |
+| `dashboard.tugpt.pro` | User Dashboard (this web app) | VPS Caddy → Next.js. Same-origin `/auth/v1/*` and `/rest/v1/*` go to the Supabase API gateway. |
+| `workspace.tugpt.pro` | AI Workspace | Reserved. Not routed until the Workspace is approved. |
+
+**DNS:** `dashboard.tugpt.pro` must have A `82.165.50.109` and either AAAA `2a01:239:4c6:8100::1` or no AAAA. An AAAA record that still points at IONOS web hosting sends IPv6 visitors and certificate validation to the wrong server.
+
+**Supabase → Auth → URL configuration:** Site URL `https://dashboard.tugpt.pro`; redirect allow-list `https://dashboard.tugpt.pro/auth/callback`. Delete every `tugpt.app` and `tugpt.ai` entry: the allow-list is the redirect security boundary, and a domain we do not control must never be on it.
+
+**Build:** `NEXT_PUBLIC_SUPABASE_URL` is compiled into the browser bundle. Rebuild the web image after changing it, and set `TUGPT_APP_ORIGIN=https://dashboard.tugpt.pro`.
+
 ### 5.5 Building and deploying a new release
 
 Two lines. `tugpt.service` carries `EnvironmentFile=/etc/tugpt/web.env`, so the
@@ -507,7 +523,7 @@ Then watch it come back:
 ```bash
 docker compose -p tugpt ps
 docker compose -p tugpt logs --tail=50 web whatsapp-worker draft-worker caddy
-curl -fsS https://tugpt.app/api/v1/health
+curl -fsS https://dashboard.tugpt.pro/api/v1/health
 ```
 
 Since 2026-08-26 the unit passes `--profile proxy`, so a restart recycles Caddy

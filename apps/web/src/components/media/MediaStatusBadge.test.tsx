@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file MediaStatusBadge.test.tsx
  * @description Every job status renders its translated label. A status added
@@ -6,7 +7,7 @@
  * the user-visible half — the words on screen.
  */
 import { describe, expect, it } from 'vitest';
-import { render, screen, cleanup } from '@testing-library/react';
+import { screen, cleanup } from '@testing-library/react';
 import { MediaStatusBadge } from './MediaStatusBadge';
 import { createTranslator } from '@/i18n';
 import type { MediaJobStatus } from '@/lib/media-api/types';
@@ -39,3 +40,5 @@ describe('MediaStatusBadge', () => {
     cleanup();
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

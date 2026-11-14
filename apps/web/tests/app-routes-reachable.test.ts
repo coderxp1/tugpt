@@ -39,7 +39,7 @@ import { NAV_ITEMS, isActive } from '../src/components/shell/nav-items';
 const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
   {
     path: '/',
-    by: 'Whatever a person types or bookmarks for the bare domain. It redirects to /dashboard/inbox and renders nothing.',
+    by: 'Whatever a person types or bookmarks for the bare domain. It redirects to /dashboard and renders nothing.',
   },
   {
     path: '/auth/login',
@@ -52,6 +52,10 @@ const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
   {
     path: '/auth/logout',
     by: 'The sign-out control in the app shell header (AppShell.tsx), asserted in AppShell.test.tsx.',
+  },
+  {
+    path: '/dashboard',
+    by: 'The bare domain redirects here (app/page.tsx), and the product name in every tool page header (AppShell.tsx) links back to it, asserted in AppShell.test.tsx.',
   },
   {
     path: '/dashboard/drafts/[draftId]',

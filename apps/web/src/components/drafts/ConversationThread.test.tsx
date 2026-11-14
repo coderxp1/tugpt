@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file ConversationThread.test.tsx
  * @description The thread as a reviewer sees it.
@@ -8,7 +9,7 @@
  * the two things the thread has to admit to rather than render past.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ConversationThread } from './ConversationThread';
 import { createTranslator } from '@/i18n';
@@ -364,3 +365,5 @@ describe('what the thread must never offer', () => {
     expect(container.textContent).not.toMatch(/\+\d{7,}/);
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file MediaJobDetail.test.tsx
  * @description The detail page shows the full prompt, the timeline, and the
@@ -7,7 +8,7 @@
  * download link.
  */
 import { describe, expect, it, vi, beforeEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MediaJobDetail } from './MediaJobDetail';
 import { createTranslator } from '@/i18n';
@@ -179,3 +180,5 @@ describe('MediaJobDetail', () => {
     expect(screen.getByText(t('media.status.dead_lettered'))).toBeTruthy();
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

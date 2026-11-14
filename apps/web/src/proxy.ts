@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
 import { createServerClient as createSSRClient } from '@supabase/ssr';
+import { sessionCookieOptions } from '@/lib/supabase/cookie-options';
 import type { Database } from '@tugpt/database';
 
 export type RouteType = 'auth' | 'protected' | 'public';
@@ -39,6 +40,11 @@ const PUBLIC_EXACT: ReadonlySet<string> = new Set([
   // Liveness probe. Returns no tenant data and is polled without credentials —
   // by the container healthcheck in docker-compose.yml, among others.
   '/api/v1/health',
+  // Public branding assets only; no broad application-route exemption.
+  '/dashboard-assets/ManyChatGravity-Normal.woff2',
+  '/dashboard-assets/Rooftop-Regular.woff2',
+  '/dashboard-assets/Rooftop-Bold.woff2',
+  '/dashboard-assets/reference-social.jpg',
 ]);
 
 const PUBLIC_PREFIXES: readonly string[] = [
@@ -178,6 +184,7 @@ export async function proxy(request: NextRequest) {
     });
 
     const supabase = createSSRClient<Database>(supabaseUrl, supabaseKey, {
+      cookieOptions: sessionCookieOptions(),
       cookies: {
         getAll() {
           return request.cookies.getAll();

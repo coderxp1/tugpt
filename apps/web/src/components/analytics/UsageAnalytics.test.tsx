@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file UsageAnalytics.test.tsx
  * @description The usage & cost screen as an owner sees it.
@@ -11,7 +12,7 @@
  * with the most money behind it in this file.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { UsageAnalytics } from './UsageAnalytics';
 import { createTranslator } from '@/i18n';
@@ -272,3 +273,5 @@ describe('unknown is never rendered as zero', () => {
     expect(screen.getByText(t('analytics.modality.audio'))).toBeTruthy();
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

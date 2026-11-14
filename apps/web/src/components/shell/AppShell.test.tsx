@@ -40,7 +40,7 @@ vi.mock('next/link', () => ({
   ),
 }));
 
-const t = createTranslator('es');
+const t = createTranslator('en');
 
 function renderShell(overrides: { organizationName?: string | null; email?: string | null } = {}) {
   return render(
@@ -84,7 +84,7 @@ describe('what the header tells a reviewer', () => {
   it('omits the identity line rather than rendering an empty one', () => {
     const { container } = renderShell({ email: null });
     expect(container.textContent).not.toContain('revisor@example.com');
-    expect(screen.getByRole('link', { name: t('shell.signOut') })).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Sign out ↗' })).toBeTruthy();
   });
 });
 
@@ -94,7 +94,7 @@ describe('signing out', () => {
     // perfectly and was reachable only by typing it. app-routes-reachable
     // excuses that route from the navigation because of this link.
     renderShell();
-    const signOut = screen.getByRole('link', { name: t('shell.signOut') });
+    const signOut = screen.getByRole('link', { name: 'Sign out ↗' });
     expect(signOut.getAttribute('href')).toBe('/auth/logout');
   });
 
@@ -105,7 +105,7 @@ describe('signing out', () => {
     // the session, and that change has no reason to come back here.
     renderShell();
     expect(
-      screen.getByRole('link', { name: t('shell.signOut') }).getAttribute('data-prefetch')
+      screen.getByRole('link', { name: 'Sign out ↗' }).getAttribute('data-prefetch')
     ).toBe('false');
   });
 });
@@ -113,14 +113,14 @@ describe('signing out', () => {
 describe('navigation', () => {
   it('marks the section the reviewer is in', () => {
     renderShell();
-    const drafts = screen.getByRole('link', { name: t('nav.drafts') });
+    const drafts = screen.getByRole('link', { name: 'AI Drafts' });
     expect(drafts.getAttribute('aria-current')).toBe('page');
   });
 
   it('keeps the section marked while a draft under it is open', () => {
     pathname.value = '/dashboard/drafts/11111111-1111-1111-1111-111111111111';
     renderShell();
-    expect(screen.getByRole('link', { name: t('nav.drafts') }).getAttribute('aria-current')).toBe(
+    expect(screen.getByRole('link', { name: 'AI Drafts' }).getAttribute('aria-current')).toBe(
       'page'
     );
   });
@@ -129,13 +129,21 @@ describe('navigation', () => {
     pathname.value = '/dashboard/somewhere-new';
     renderShell();
     expect(
-      screen.getByRole('link', { name: t('nav.drafts') }).getAttribute('aria-current')
+      screen.getByRole('link', { name: 'AI Drafts' }).getAttribute('aria-current')
     ).toBeNull();
   });
 
   it('carries a label, so it is not just "navigation" to a screen reader', () => {
     renderShell();
-    expect(screen.getByRole('navigation', { name: t('shell.primaryNavLabel') })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Application modules' })).toBeTruthy();
+  });
+});
+
+describe('the way back to the Dashboard hub', () => {
+  it('links the product name to /dashboard from every tool page', () => {
+    renderShell();
+    const home = screen.getByRole('link', { name: 'TuGPT Dashboard' });
+    expect(home.getAttribute('href')).toBe('/dashboard');
   });
 });
 

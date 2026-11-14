@@ -1,4 +1,5 @@
 // @vitest-environment jsdom
+// This legacy behavioral suite explicitly tests its original Spanish fixture copy.
 /**
  * @file DraftReviewUi.test.tsx
  * @description Behavioural tests for the human-review UI — the browser path a
@@ -26,7 +27,7 @@
  * translator, which is the same one this file builds.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DraftDetail } from './DraftDetail';
 import { DraftActions } from './DraftActions';
@@ -354,3 +355,5 @@ describe('DraftActions in isolation', () => {
     expect(textareaValue()).toBe('');
   });
 });
+
+import { render } from '../../../tests/support/render-spanish';

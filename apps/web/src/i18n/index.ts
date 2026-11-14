@@ -12,7 +12,7 @@
  * components call `useT()` from `./provider`.
  */
 
-import { ORGANIZATION_LOCALES, DEFAULT_ORGANIZATION_LOCALE } from '@tugpt/database';
+import { ORGANIZATION_LOCALES } from '@tugpt/database';
 import { es } from './es';
 import { en } from './en';
 import type {
@@ -25,7 +25,7 @@ import type {
 
 export type { Dictionary, Locale, MessageKey, TranslationParams, Translator };
 export { ORGANIZATION_LOCALES as SUPPORTED_LOCALES };
-export { DEFAULT_ORGANIZATION_LOCALE as DEFAULT_LOCALE };
+export const DEFAULT_LOCALE: Locale = 'en';
 
 /**
  * Both dictionaries, eagerly. Together they are a few kilobytes; a dynamic
@@ -38,7 +38,7 @@ const DICTIONARIES: Record<Locale, Dictionary> = {
 };
 
 export function getDictionary(locale: Locale): Dictionary {
-  return DICTIONARIES[locale] ?? DICTIONARIES[DEFAULT_ORGANIZATION_LOCALE];
+  return DICTIONARIES[locale] ?? DICTIONARIES[DEFAULT_LOCALE];
 }
 
 const PLACEHOLDER = /\{(\w+)\}/g;

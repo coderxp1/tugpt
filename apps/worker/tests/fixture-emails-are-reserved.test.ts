@@ -146,8 +146,9 @@ describe('the reserved-domain rule', () => {
   });
 
   it('T5: rejects the tempting wrong fix', () => {
-    // `tugpt.app` is ours and it resolves. A fixture address there is the same
-    // defect as `tugpt.ai` was, with a domain we would then have to keep.
+    // Real, resolving domains are never fixtures: neither the canonical
+    // tugpt.pro nor tugpt.app (not part of the TuGPT setup since 2026-11-01).
+    expect(isReservedEmailDomain('tugpt.pro')).toBe(false);
     expect(isReservedEmailDomain('tugpt.app')).toBe(false);
     // And a domain that merely contains a reserved word is not reserved.
     expect(isReservedEmailDomain('example.com.attacker.net')).toBe(false);
