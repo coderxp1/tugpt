@@ -49,6 +49,17 @@ const REPO_ROOT = path.resolve(__dirname, '..', '..', '..');
 const DEAD_DOMAIN = /tugpt\\?[._-](?:ai|app)(?![-a-z0-9])/i;
 
 /** Directories that run or deploy. Prose lives elsewhere and is not guarded. */
+/**
+ * Identifiers that contain the pattern but name no domain. Exact tokens only,
+ * removed before matching, so `TUGPT_APP_ORIGIN=https://tugpt.app` still
+ * fails on its value. TUGPT_APP_ORIGIN is the deployed environment variable
+ * that pins the dashboard's public HTTPS origin (docs/production_environment.md).
+ */
+const NOT_A_DOMAIN = /\bTUGPT_APP_ORIGIN\b/g;
+function referencesDeadDomain(text: string): boolean {
+  return DEAD_DOMAIN.test(text.replace(NOT_A_DOMAIN, ''));
+}
+
 const GUARDED_ROOTS = ['apps', 'packages', 'deploy', 'supabase'];
 
 /** Individual files outside those roots that still ship or deploy. */
@@ -148,6 +159,11 @@ describe('the dead domain does not come back', () => {
     // Must NOT match: the live domains.
     expect(DEAD_DOMAIN.test('https://dashboard.tugpt.pro/api/v1/health')).toBe(false);
     expect(DEAD_DOMAIN.test('https://tugpt.pro')).toBe(false);
+    // The environment-variable exemption is an exact token, never a value.
+    expect(referencesDeadDomain('process.env.TUGPT_APP_ORIGIN')).toBe(false);
+    expect(referencesDeadDomain('TUGPT_APP_ORIGIN=https://tugpt.app')).toBe(true);
+    expect(referencesDeadDomain('TUGPT_APP_ORIGINS')).toBe(true);
+    expect(referencesDeadDomain('TUGPT_APP_URL')).toBe(true);
   });
 
   it('no runtime or deploy file references it', () => {
@@ -165,7 +181,7 @@ describe('the dead domain does not come back', () => {
       )
       .filter((rel) => {
         try {
-          return DEAD_DOMAIN.test(readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
+          return referencesDeadDomain(readFileSync(path.join(REPO_ROOT, rel), 'utf8'));
         } catch {
           return false;
         }

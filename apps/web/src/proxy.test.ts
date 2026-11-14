@@ -178,23 +178,23 @@ describe('Next.js 16 Proxy Execution', () => {
 
   /**
    * The proxy does NOT strip or validate a client-supplied x-tenant-id; it
-   * only chooses which REQUEST to forward. Authorization happens in the
-   * handlers, which check membership with AuthService.resolveTenantContext
-   * and answer 403 for a non-member org (google-oauth-org-isolation.test.ts,
-   * routes.test.ts). This pins the precedence so a client header can never
-   * override the organization the user selected in the switcher.
+   * forwards a HINT using the one canonical rule in lib/tenant/request.ts
+   * (explicit header over the switcher cookie, pinned by request.test.ts).
+   * Authorization happens in the handlers, which resolve the hint against
+   * current memberships and answer 403 for a non-member org
+   * (google-oauth-org-isolation.test.ts, routes.test.ts, chat request.ts).
    */
-  it('prefers the switcher cookie over a conflicting client-supplied x-tenant-id', async () => {
+  it('forwards the tenant hint with the canonical precedence (header over cookie)', async () => {
     const req = new NextRequest('http://localhost/api/v1/health', {
       headers: {
         cookie: 'tugpt_tenant_id=org-from-cookie',
-        'x-tenant-id': 'org-from-forged-header',
+        'x-tenant-id': 'org-from-header',
       },
     });
     const res = await proxy(req);
 
     expect(res.status).toBe(200);
-    expect(res.headers.get('x-tenant-id')).toBe('org-from-cookie');
+    expect(res.headers.get('x-tenant-id')).toBe('org-from-header');
   });
 
   /**

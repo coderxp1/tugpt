@@ -244,7 +244,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await approvePOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -268,7 +267,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await approvePOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -297,8 +295,7 @@ describe('Draft API Routes', () => {
       const makeReq = () =>
         makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ expectedLockVersion: 1 }),
+            body: JSON.stringify({ expectedLockVersion: 1 }),
         });
       const [first, second] = await Promise.all([
         approvePOST(makeReq(), { params: makeParams(VALID_DRAFT_ID) }),
@@ -315,7 +312,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await approvePOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -330,7 +326,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await approvePOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -345,7 +340,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await approvePOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -360,7 +354,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await approvePOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -379,7 +372,6 @@ describe('Draft API Routes', () => {
     it('Returns 400 for missing expectedLockVersion', async () => {
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({}),
       });
       const res = await approvePOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -393,7 +385,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await approvePOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -413,7 +404,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/edit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1, body: 'Edited content' }),
       });
       const res = await editPOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -428,7 +418,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/edit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1, body: 'test' }),
       });
       const res = await editPOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -438,7 +427,6 @@ describe('Draft API Routes', () => {
     it('Returns 400 for empty body', async () => {
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/edit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1, body: '' }),
       });
       const res = await editPOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -458,7 +446,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/reject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await rejectPOST(req, { params: makeParams(VALID_DRAFT_ID) });
@@ -473,7 +460,6 @@ describe('Draft API Routes', () => {
 
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/reject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ expectedLockVersion: 1 }),
       });
       const res = await rejectPOST(req, { params: makeParams(VALID_DRAFT_ID) });

@@ -1,8 +1,10 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { createAuthenticatedServerClient, createFeatureServerClient } from './server';
-const mocks = vi.hoisted(() => ({ load: vi.fn(), create: vi.fn(), fetch: vi.fn(), bridge: vi.fn(() => 'unit-bridge'), headers: new Headers(), options: null as any }));
+/** The third argument the server helpers pass to createSupabaseClient. */
+interface CapturedClientOptions { auth: Record<string, unknown>; global: { fetch: (input: RequestInfo | URL, init?: RequestInit) => Promise<Response> } }
+const mocks = vi.hoisted(() => ({ load: vi.fn(), create: vi.fn(), fetch: vi.fn(), bridge: vi.fn(() => 'unit-bridge'), headers: new Headers(), options: null as unknown as CapturedClientOptions }));
 vi.mock('next/headers', () => ({ headers: async () => mocks.headers, cookies: async () => ({ getAll: () => [] }) }));
-vi.mock('@tugpt/database', () => ({ createSupabaseClient: (...args: any[]) => { mocks.options = args[2]; mocks.create(...args); return { auth: {} }; } }));
+vi.mock('@tugpt/database', () => ({ createSupabaseClient: (...args: unknown[]) => { mocks.options = args[2] as CapturedClientOptions; mocks.create(...args); return { auth: {} }; } }));
 vi.mock('@/lib/sso/core', async original => ({ ...await original<typeof import('@/lib/sso/core')>(), loadSession: mocks.load, bridgeToken: mocks.bridge, dbUrl: () => 'http://127.0.0.1:3002' }));
 beforeEach(() => { vi.clearAllMocks(); mocks.headers = new Headers(); mocks.load.mockResolvedValue(null); vi.stubGlobal('fetch', mocks.fetch); mocks.fetch.mockResolvedValue(Response.json([])); });
 afterEach(() => vi.unstubAllGlobals());

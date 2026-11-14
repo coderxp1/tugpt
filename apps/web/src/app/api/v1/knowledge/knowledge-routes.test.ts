@@ -208,13 +208,13 @@ describe('knowledge routes', () => {
 
   it('DELETE removes the entry; a second delete is 404', async () => {
     mockFrom.mockReturnValue(makeChain({ data: [{ id: ENTRY_ID }], error: null }));
-    const res = await deleteDELETE(makeRequest(`/api/v1/knowledge/${ENTRY_ID}`), {
+    const res = await deleteDELETE(jsonRequest(`/api/v1/knowledge/${ENTRY_ID}`, 'DELETE', {}), {
       params: Promise.resolve({ entryId: ENTRY_ID }),
     });
     expect(res.status).toBe(200);
 
     mockFrom.mockReturnValue(makeChain({ data: [], error: null }));
-    const again = await deleteDELETE(makeRequest(`/api/v1/knowledge/${ENTRY_ID}`), {
+    const again = await deleteDELETE(jsonRequest(`/api/v1/knowledge/${ENTRY_ID}`, 'DELETE', {}), {
       params: Promise.resolve({ entryId: ENTRY_ID }),
     });
     expect(again.status).toBe(404);
