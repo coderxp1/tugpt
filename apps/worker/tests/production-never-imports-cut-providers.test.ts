@@ -68,6 +68,8 @@ export const PRODUCTION_ROOTS = [
   'packages/ai-orchestration/src',
   'packages/appointments/src',
   'packages/auth/src',
+  'packages/connect-runtime/src',
+  'packages/credential-broker/src',
   'packages/database/src',
   'packages/feature-flags/src',
   'packages/jobs/src',

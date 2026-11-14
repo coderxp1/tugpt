@@ -36,6 +36,8 @@ tugpt-nextjs-recovered/
 │   ├── ai-providers/           # AI provider adapter pattern (active: Langdock; Logicc/Anymize adapters retained, unused)
 │   ├── appointments/           # Appointment availability & request persistence (no booking writes yet)
 │   ├── auth/                   # Supabase auth service & session management
+│   ├── connect-runtime/        # TuGPT Connect tool runtime: authorize, execute, audit integration tool calls (ADR-021)
+│   ├── credential-broker/      # Internal credential broker: only holder of the key ring (ADR-021; not yet deployed)
 │   ├── database/               # Supabase client, migrations, RLS policies
 │   ├── feature-flags/          # Feature flag architecture
 │   ├── jobs/                   # Background job abstraction
@@ -46,7 +48,7 @@ tugpt-nextjs-recovered/
 │   └── tests/database/         # pgTAP tests
 ├── deploy/                     # systemd unit, Caddy config, host preflight (check-host.sh)
 ├── docs/
-│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-017, ADR-019; ADR-018 reserved)
+│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-017, ADR-019 to ADR-021; ADR-018 reserved)
 │   ├── status/                 # Phase status reports
 │   └── production_environment.md
 ├── turbo.json
@@ -151,7 +153,7 @@ pnpm exec turbo typecheck     # TypeScript
 pnpm exec turbo test          # Vitest
 ```
 
-Each of the four runs across **11 workspaces** — the 9 `packages/*`, plus `web`
+Each of the four runs across **13 workspaces** — the 11 `packages/*`, plus `web`
 and `worker` — so a full cold gate is 39 tasks (`build` is skipped for the
 packages, which have no build step). Run it as one command:
 
@@ -209,7 +211,8 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 | [ADR-016](docs/adr/ADR-016-product-name-and-domain.md) | Product Name and Domain | Accepted |
 | [ADR-017](docs/adr/ADR-017-spanish-first-internationalization.md) | Spanish Is the Source of Truth; Locale Belongs to the Organization | Accepted |
 | [ADR-019](docs/adr/ADR-019-media-generation-capability.md) | Media Generation Capability (ComfyUI on the TuGPT GPU Host) | Proposed |
-| [ADR-020](docs/adr/ADR-020-tool-registry-and-agent-runtime.md) | Tool Registry, Capability Contracts, and the Agent Runtime | Proposed |
+| [ADR-020](docs/adr/ADR-020-tool-registry-and-agent-runtime.md) | Tool Registry, Capability Contracts, and the Agent Runtime | Accepted |
+| [ADR-021](docs/adr/ADR-021-tugpt-connect-integration-platform.md) | TuGPT Connect — Integration Platform | Proposed |
 
 `apps/worker/tests/readme-matches-the-repo.test.ts` checks this table against
 `docs/adr/` on every run: a new ADR that is not listed here fails, a row pointing
