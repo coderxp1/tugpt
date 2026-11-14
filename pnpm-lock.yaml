@@ -228,6 +228,28 @@ importers:
         specifier: ^4.1.10
         version: 4.1.10(@types/node@20.19.43)(jsdom@26.1.0)(vite@8.1.5(@types/node@20.19.43)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5))
 
+  packages/connect-runtime:
+    dependencies:
+      '@tugpt/ai-providers':
+        specifier: workspace:*
+        version: link:../ai-providers
+      '@tugpt/appointments':
+        specifier: workspace:*
+        version: link:../appointments
+      '@tugpt/credential-broker':
+        specifier: workspace:*
+        version: link:../credential-broker
+    devDependencies:
+      '@types/node':
+        specifier: ^20
+        version: 20.19.43
+      typescript:
+        specifier: ^5
+        version: 5.9.3
+      vitest:
+        specifier: ^4.1.10
+        version: 4.1.10(@types/node@20.19.43)(jsdom@26.1.0)(vite@8.1.5(@types/node@20.19.43)(esbuild@0.28.1)(jiti@2.7.0)(tsx@4.23.5))
+
   packages/credential-broker:
     devDependencies:
       '@types/node':

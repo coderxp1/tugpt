@@ -1,0 +1,24 @@
+{
+  // Build-only config. `tsconfig.json` stays the typecheck config and keeps
+  // covering tests; this one exists so the emit has a deterministic shape.
+  //
+  // Two things matter here and are easy to get wrong:
+  //
+  //   rootDir  pins the output layout. Without it tsc infers the common
+  //            ancestor of every input, so a package whose tsconfig also
+  //            includes tests/ would emit dist/src/index.js and `main`
+  //            would point at nothing.
+  //   exclude  keeps *.test.ts out of dist/. They typecheck via
+  //            tsconfig.json and run under vitest; they have no business
+  //            being shipped.
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "rootDir": "./src",
+    "outDir": "./dist",
+    "declaration": true,
+    "declarationMap": true,
+    "sourceMap": true
+  },
+  "include": ["src/**/*"],
+  "exclude": ["dist/**/*", "**/*.test.ts"]
+}
