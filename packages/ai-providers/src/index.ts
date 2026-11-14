@@ -48,4 +48,5 @@ export * from './langdock-rotation';
 export * from './logicc';
 export * from './mastra';
 export * from './openai';
+export * from './tool-calling';
 export * from './transcription';
