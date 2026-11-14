@@ -262,7 +262,7 @@ reference date, and a source naming both.
 The following is expected output for this candidate checkout after an approved deployment, not a statement of current production state. The four authorization-review migrations remain unapproved for production.
 
 ```
-  [ok]   all 77 migration(s) in this checkout are applied (database has 77, latest 20261112000001)
+  [ok]   all 78 migration(s) in this checkout are applied (database has 78, latest 20261115000001)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
