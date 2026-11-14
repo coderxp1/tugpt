@@ -154,8 +154,13 @@ pnpm exec turbo test          # Vitest
 ```
 
 Each of the four runs across **13 workspaces** — the 11 `packages/*`, plus `web`
-and `worker` — so a full cold gate is 39 tasks (`build` is skipped for the
-packages, which have no build step). Run it as one command:
+and `worker` — so the single command below schedules **52 tasks** (13 × lint,
+typecheck, test and build). `typecheck` and `test` depend on `^build`, but turbo
+runs each package build once per invocation. Run the four separately and turbo
+reports 13 + 23 + 23 + 13 = 72, because each `typecheck`/`test` run also counts
+the 10 package builds it depends on. Verify with
+`pnpm exec turbo run lint typecheck test build --dry=json | jq '.tasks | length'`.
+Run it as one command:
 
 ```bash
 pnpm exec turbo run lint typecheck test build --force
