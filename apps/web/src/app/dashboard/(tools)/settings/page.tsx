@@ -18,7 +18,7 @@ export default async function SettingsPage() {
         <section className={s.card} aria-labelledby="profile-h">
           <h2 id="profile-h">Your profile</h2>
           <p className={s.next}>This is you. It stays the same in every organization you belong to.</p>
-          <dl className={s.facts}><dt>Email</dt><dd>{session?.email || 'Not available'}</dd></dl>
+          <dl className={s.facts}><dt>Name</dt><dd>{session?.fullName ?? 'Not set'}</dd><dt>Email</dt><dd>{session?.email || 'Not available'}</dd></dl>
           <Link className={s.secondary} href="/auth/logout" prefetch={false}>Sign out</Link>
         </section>
         <section className={s.card} aria-labelledby="org-h">

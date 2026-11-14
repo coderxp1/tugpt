@@ -23,6 +23,8 @@ export interface SessionContext {
   readonly userId: string;
   /** May be empty: Supabase permits users with no email on some providers. */
   readonly email: string;
+  /** The person's own display name from their profile row; null when unset. */
+  readonly fullName: string | null;
   /** Null when the user belongs to no organization. */
   readonly tenant: TenantContext | null;
   /**
@@ -88,7 +90,17 @@ export const getSessionContext = cache(async (): Promise<SessionContext | null> 
       user.id,
       await requestedTenantId(),
     );
-    return { userId: user.id, email: user.email ?? '', tenant, requestedTenantRejected };
+    // The SSO bridge carries no email; the person's identity is their own
+    // profile row (RLS: a user reads only their own). Never the organization's.
+    let email = user.email ?? '';
+    let fullName: string | null = null;
+    try {
+      const { data: profile } = await supabase.from('profiles').select('email, full_name').eq('id', user.id).maybeSingle();
+      const row = profile as { email?: string | null; full_name?: string | null } | null;
+      if (row?.email) email = row.email;
+      fullName = row?.full_name?.trim() || null;
+    } catch { /* profile is display-only; fall back to the bare session */ }
+    return { userId: user.id, email, fullName, tenant, requestedTenantRejected };
   } catch {
     // Supabase unreachable, or its environment missing.
     return null;

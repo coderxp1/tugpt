@@ -4,6 +4,9 @@ import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import s from './chat.module.css';
 
+/** Same-origin JSON + non-simple header: what isSameOriginMutation() requires. */
+export const MUTATION_HEADERS = { 'content-type': 'application/json', 'x-tugpt-csrf': '1' } as const;
+
 export interface PublicModel { key: string; label: string; description: string; private: boolean; toolCalling: boolean }
 interface Thread { id: string; title: string; modelKey: string; updatedAt: string }
 interface Message { id: string; role: 'user' | 'assistant' | 'tool'; content: string; status: 'complete' | 'error' | 'stopped'; mentions: { capability: string; provider: string }[]; capabilityKey: string | null }
@@ -106,7 +109,7 @@ export function ChatWorkspace({ models, organizationName }: { models: PublicMode
     try {
       if (!id) {
         const d = await json<{ thread: Thread }>(await fetch('/api/v1/chat/threads', {
-          method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ modelKey: model.key }),
+          method: 'POST', headers: MUTATION_HEADERS, body: JSON.stringify({ modelKey: model.key }),
         }));
         id = d.thread.id; setActiveId(id); setThreads((t) => [d.thread, ...(t ?? [])]);
       }
@@ -116,7 +119,7 @@ export function ChatWorkspace({ models, organizationName }: { models: PublicMode
     const mentions = attached.map((c) => ({ capability: c.capabilityKey, provider: c.providerKey }));
     try {
       const res = await fetch(`/api/v1/chat/threads/${id}/messages`, {
-        method: 'POST', signal: controller.signal, headers: { 'Content-Type': 'application/json' },
+        method: 'POST', signal: controller.signal, headers: MUTATION_HEADERS,
         body: JSON.stringify({ content, modelKey: model.key, mentions, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone }),
       });
       if (!res.ok || !res.body) {
