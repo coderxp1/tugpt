@@ -183,6 +183,27 @@ describe('Next.js 16 Proxy Execution', () => {
   });
 
   /**
+   * The proxy does NOT strip or validate a client-supplied x-tenant-id; it
+   * only chooses which REQUEST to forward. Authorization happens in the
+   * handlers, which check membership with AuthService.resolveTenantContext
+   * and answer 403 for a non-member org (google-oauth-org-isolation.test.ts,
+   * routes.test.ts). This pins the precedence so a client header can never
+   * override the organization the user selected in the switcher.
+   */
+  it('prefers the switcher cookie over a conflicting client-supplied x-tenant-id', async () => {
+    const req = new NextRequest('http://localhost/api/v1/health', {
+      headers: {
+        cookie: 'tugpt_tenant_id=org-from-cookie',
+        'x-tenant-id': 'org-from-forged-header',
+      },
+    });
+    const res = await proxy(req);
+
+    expect(res.status).toBe(200);
+    expect(res.headers.get('x-tenant-id')).toBe('org-from-cookie');
+  });
+
+  /**
    * A web image built without the NEXT_PUBLIC_* build args has no Supabase
    * config at all. That used to bounce every dashboard request to the login
    * page forever, which reads like an authentication bug rather than a build
