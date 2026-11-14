@@ -50,6 +50,12 @@ importers:
       '@tugpt/auth':
         specifier: workspace:*
         version: link:../../packages/auth
+      '@tugpt/connect-runtime':
+        specifier: workspace:*
+        version: link:../../packages/connect-runtime
+      '@tugpt/credential-broker':
+        specifier: workspace:*
+        version: link:../../packages/credential-broker
       '@tugpt/database':
         specifier: workspace:*
         version: link:../../packages/database

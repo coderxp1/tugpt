@@ -17,6 +17,8 @@
     "@tugpt/ai-providers": "workspace:*",
     "@tugpt/appointments": "workspace:*",
     "@tugpt/auth": "workspace:*",
+    "@tugpt/connect-runtime": "workspace:*",
+    "@tugpt/credential-broker": "workspace:*",
     "@tugpt/database": "workspace:*",
     "@tugpt/feature-flags": "workspace:*",
     "@tugpt/jobs": "workspace:*",
