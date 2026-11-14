@@ -10,9 +10,13 @@
  */
 
 import { cache } from 'react';
-import { cookies } from 'next/headers';
+import { cookies, headers } from 'next/headers';
 import { AuthService, type TenantContext } from '@tugpt/auth';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
+import { resolveSessionTenant } from './resolve';
+
+/** Cookie the organization switcher writes; the proxy mirrors it into `x-tenant-id`. */
+export const ACTIVE_TENANT_COOKIE = 'tugpt_tenant_id';
 
 export interface SessionContext {
   readonly userId: string;
@@ -20,6 +24,19 @@ export interface SessionContext {
   readonly email: string;
   /** Null when the user belongs to no organization. */
   readonly tenant: TenantContext | null;
+  /**
+   * True when the request selected an organization the user is not an active
+   * member of. `tenant` is then the default organization, and API routes
+   * will refuse the stale selection with 403.
+   */
+  readonly requestedTenantRejected: boolean;
+}
+
+/** The organization this request asked for, as forwarded by the proxy. */
+async function requestedTenantId(): Promise<string | null> {
+  const forwarded = (await headers()).get('x-tenant-id');
+  if (forwarded) return forwarded;
+  return (await cookies()).get(ACTIVE_TENANT_COOKIE)?.value ?? null;
 }
 
 /**
@@ -64,8 +81,14 @@ export const getSessionContext = cache(async (): Promise<SessionContext | null> 
     } = await supabase.auth.getUser();
     if (!user) return null;
 
-    const tenant = await new AuthService(supabase).resolveTenantContext(user.id);
-    return { userId: user.id, email: user.email ?? '', tenant };
+    // Same source and same membership check as the API routes, so a page and
+    // the actions on it agree on which organization is active.
+    const { tenant, requestedTenantRejected } = await resolveSessionTenant(
+      new AuthService(supabase),
+      user.id,
+      await requestedTenantId(),
+    );
+    return { userId: user.id, email: user.email ?? '', tenant, requestedTenantRejected };
   } catch {
     // Supabase unreachable, or its environment missing.
     return null;
