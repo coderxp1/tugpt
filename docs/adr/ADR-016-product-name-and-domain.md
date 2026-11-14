@@ -80,3 +80,13 @@ because fixtures went red and a second, looser sweep was run.
   scheduled to become `example.com` (RFC 2606) in the follow-up to PR #47. A real
   domain in a fixture is the underlying defect; swapping one live domain for
   another would repeat it.
+
+---
+
+## Amendment (2026-11-12): canonical domain for vendor callbacks
+
+Owner decision: **`tugpt.pro` is canonical.** New vendor app registrations and
+OAuth callbacks use `dashboard.tugpt.pro` (see
+`docs/connect/redirect-uris.md`). `tugpt.app` must not be used for new
+registrations or callbacks. Existing registrations are unchanged until
+separately migrated. No DNS change is made by this amendment.

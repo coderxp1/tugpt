@@ -2,11 +2,11 @@
 
 ## Status
 
-**Proposed** — design for owner review before implementation. Tier 1.4 of
-[ADR-015](ADR-015-ai-business-operating-system.md), with the capability
-contract it depends on (Tier 1.1). Nothing described here is implemented; the
-tables and interfaces below are a proposal, and the first migration is a
-separate PR.
+**Accepted** by the owner on 2026-11-12, together with Amendment 1 (below).
+Tier 1.4 of [ADR-015](ADR-015-ai-business-operating-system.md), with the
+capability contract it depends on (Tier 1.1). Implementation proceeds in
+milestones on `feat/connect-*` branches; production migrations require a
+separate approval each.
 
 This ADR answers the two questions ADR-015 §5.3 deliberately left open: the
 tool registry's concrete interface, and how a tool-calling agent loop coexists
@@ -338,3 +338,77 @@ existing pipeline.
   ADR-015 2.4/2.5 work.
 - Employee manifest format (ADR-015 D7) — it consumes this registry, but is its
   own record.
+
+---
+
+## Amendment 1 — Organization-scoped external tool snapshots (accepted 2026-11-12)
+
+### Why
+
+D1 says tool definitions are platform data. That stays true for TuGPT's own
+tools. Customers also need to bring their own tools: a customer MCP server or an
+OpenAPI description of an internal API (ADR-021). Those tools are, by
+definition, not reviewed by TuGPT and differ per organization. This amendment
+admits them **without weakening any D1-D10 property**.
+
+### Decision
+
+A1.1 **Snapshots, not live discovery.** An organization admin registers an
+external endpoint. TuGPT fetches its tool list once, validates every schema, and
+stores an immutable, versioned `external_tool_snapshots` row
+(organization-scoped; content hash; fetched-at; approved-by). The agent runtime
+only ever sees tools from an *approved* snapshot. A server that changes its tool
+list does not change what agents can do. A new snapshot is created, diffed, and
+must be approved again. This blocks "rug-pull" tool redefinition.
+
+A1.2 **Owner requirements, enforced as follows:**
+
+| # | Requirement | Enforcement |
+|---|---|---|
+| 1 | Org isolation | `external_tool_snapshots`, `external_tools`, and grants carry `organization_id` with composite FKs `(id, organization_id)`; RLS on every table; privileged RPCs derive the org from the run row (D4 calling convention). A snapshot from org A cannot be granted to an agent of org B: the FK makes it unrepresentable. pgTAP two-org denial tests are part of the migration. |
+| 2 | Explicit per-agent permissions | Same `agent_tool_grants` ladder as D4, keyed by `external_tool_id`. **No wildcard grants.** Registering a server grants nothing. Each tool needs a grant per agent. |
+| 3 | Least privilege | External tools default to `permission_class = 'write'` unless the admin explicitly classifies them `read`. `trust_state` defaults to `draft_review` (every call needs approval). Only the tools selected from a snapshot are exposed, not the whole server. The connection used to call the endpoint is a `connected_accounts` row whose scopes are shown at grant time. |
+| 4 | User authorization and revocation | Endpoints that need user-delegated auth use the shared OAuth broker (ADR-021); the connection belongs to a user or to the organization, and revoking it (or the grant, or the snapshot) takes effect on the next invocation (the D4 check runs inside the `executing` transition). Revocation is a timestamp, never a delete, so history stays auditable. |
+| 5 | Audit of tool execution | Every call is a `tool_invocations` row written by the state transition (D6), plus an `audit_logs` entry with org, actor, agent, run, tool key, snapshot version, and outcome. Arguments and results are stored as redacted, size-bounded references, never credentials. |
+| 6 | No access to the internal admin MCP bridge | See A1.3. |
+
+A1.3 **Customer MCP and the infrastructure admin MCP are separate security
+boundaries.** This is a hard rule:
+
+- **Different code paths.** The customer MCP client lives in
+  `packages/connect-mcp` (ADR-021). It has no import path to the admin bridge
+  and is not configured with it. A lint rule (`no-restricted-imports`) forbids
+  the agent runtime and connector packages from importing any admin-bridge
+  module.
+- **Different network identity.** Customer MCP traffic leaves only through the
+  egress proxy with the SSRF policy (ADR-021 §Egress): no RFC 1918, link-local,
+  loopback, metadata, or `*.internal` destinations, and no ports other than
+  443. The admin bridge listens only on private interfaces and so is
+  unreachable from that egress path by construction.
+- **Different credentials.** Admin bridge credentials are operator secrets that
+  live outside the vault and are never written to `organization_secrets`,
+  `platform_secrets`, or `connected_accounts`. No tenant RPC can return them.
+- **Registration denylist.** Endpoint registration rejects the admin bridge's
+  hostnames and IPs, private ranges, and any non-HTTPS URL. It re-checks after
+  DNS resolution at every call (DNS-rebinding defence).
+- **No stdio.** Customer MCP servers are remote (Streamable HTTP) only. TuGPT
+  never spawns customer-supplied processes on platform hosts.
+- **Tested.** The threat model lists these as T-MCP-01..07 with a test per
+  control.
+
+A1.4 **Prompt-injection posture.** External tool descriptions and results are
+untrusted data. They are passed to the model inside delimited tool-result
+blocks. They are never concatenated into the system prompt and never used to
+change grants, trust state, or approval routing. A tool result cannot trigger
+another tool call that skips the D4 ladder. Every call goes through the ladder
+again.
+
+### Schema additions (delivered in the ADR-021 registry migration)
+
+```sql
+external_tool_endpoints   -- (org, kind: mcp|openapi, url, auth connection, status)
+external_tool_snapshots   -- (org, endpoint, version, content_hash, approved_by/at)
+external_tools            -- (org, snapshot, name, schema, permission_class)
+agent_tool_grants         -- gains nullable external_tool_id; CHECK exactly one of
+                          -- (tool_key, external_tool_id) is set
+```
