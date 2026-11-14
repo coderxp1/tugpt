@@ -155,10 +155,9 @@ SET LOCAL ROLE service_role;
 SELECT throws_ok($q$SELECT * FROM public.sso_get_outbound_delivery_for_draft(NULL::uuid,NULL::uuid)$q$,'42501',NULL,'DB01_direct_execute_denied_service_role_sso_get_outbound_delivery_for_draft');
 SELECT throws_ok($q$SELECT * FROM public.sso_list_outbound_deliveries_for_drafts(NULL::uuid,NULL::uuid[])$q$,'42501',NULL,'DB01_direct_execute_denied_service_role_sso_list_outbound_deliveries_for_drafts');
 RESET ROLE;
-SET LOCAL ROLE sso_control;
-SELECT throws_ok($q$SELECT * FROM public.sso_get_outbound_delivery_for_draft(NULL::uuid,NULL::uuid)$q$,'42501',NULL,'DB01_direct_execute_denied_sso_control_sso_get_outbound_delivery_for_draft');
-SELECT throws_ok($q$SELECT * FROM public.sso_list_outbound_deliveries_for_drafts(NULL::uuid,NULL::uuid[])$q$,'42501',NULL,'DB01_direct_execute_denied_sso_control_sso_list_outbound_deliveries_for_drafts');
-RESET ROLE;
+-- sso_control cannot resolve pgTAP itself (no USAGE on extensions), so the denial is asserted on the ACL.
+SELECT ok(NOT has_function_privilege('sso_control','public.sso_get_outbound_delivery_for_draft(uuid,uuid)','EXECUTE'),'DB01_direct_execute_denied_sso_control_sso_get_outbound_delivery_for_draft');
+SELECT ok(NOT has_function_privilege('sso_control','public.sso_list_outbound_deliveries_for_drafts(uuid,uuid[])','EXECUTE'),'DB01_direct_execute_denied_sso_control_sso_list_outbound_deliveries_for_drafts');
 SELECT ok(NOT EXISTS(SELECT 1 FROM pg_proc p CROSS JOIN LATERAL aclexplode(coalesce(p.proacl,acldefault('f',p.proowner))) a WHERE p.oid IN ('public.sso_get_outbound_delivery_for_draft(uuid,uuid)'::regprocedure,'public.sso_list_outbound_deliveries_for_drafts(uuid,uuid[])'::regprocedure) AND ((a.grantee<>p.proowner AND a.grantee<>'authenticated'::regrole) OR (a.grantee='authenticated'::regrole AND a.is_grantable))),'DB01_exact_grantees_no_grant_option');
 SELECT * FROM finish();
 ROLLBACK;
