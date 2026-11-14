@@ -1,0 +1,26 @@
+.page{max-width:1180px;margin:0 auto;padding:12px 12px 48px}
+.head{margin-bottom:24px;max-width:720px}
+.eyebrow{font-size:12px;font-weight:700;letter-spacing:.11em;text-transform:uppercase;margin:0 0 8px}
+.head h1{font:normal clamp(30px,3vw,44px)/1.04 Gravity,Arial,sans-serif;letter-spacing:-1.2px;margin:0}
+.head p:not(.eyebrow){color:#686963;margin:10px 0 0}
+.head kbd{background:#f3f1e8;border:1px solid #deded6;border-radius:4px;padding:0 5px;font:inherit}
+.grid{list-style:none;padding:0;margin:0;display:grid;grid-template-columns:repeat(auto-fill,minmax(320px,1fr));gap:16px}
+.card{background:#fff;border:1px solid #e1e1d8;border-radius:12px;padding:22px;display:flex;flex-direction:column;gap:12px}
+.card h2{font:normal 22px/1.1 Gravity,Arial,sans-serif;margin:0}
+.cardHead{display:grid;grid-template-columns:auto 1fr;gap:4px 14px;align-items:start}
+.cardHead p{margin:4px 0 0;font-size:13px;color:#686963}
+.cardHead .badge{grid-column:1/-1;justify-self:start;margin-top:6px}
+.logo{width:42px;height:42px;border-radius:10px;background:#171715;color:#ffe436;display:grid;place-items:center;font:normal 20px Gravity,Arial,sans-serif}
+.badge{font-size:11px;font-weight:700;border-radius:100px;padding:4px 10px;border:1px solid}
+.ok{color:#1f5137;background:#eaf6ef;border-color:#b9dcc7}.idle{color:#5c4a00;background:#fff8c9;border-color:#e3d782}.off{color:#4e4f49;background:#f3f1e8;border-color:#deded6}
+.sub{font-size:11px;letter-spacing:.1em;text-transform:uppercase;margin:6px 0 0;color:#686963}
+.caps{list-style:none;margin:0;padding:0;display:grid;gap:8px}
+.caps li{display:flex;justify-content:space-between;gap:10px;font-size:14px;border-top:1px solid #f1f1ec;padding-top:8px}
+.caps small{color:#686963;font-size:12px;white-space:nowrap}
+.next{font-size:13px;color:#4e4f49;margin:0}
+.primary,.secondary{align-self:flex-start;border-radius:8px;padding:11px 16px;font-weight:700;font-size:14px;min-height:44px;display:inline-flex;align-items:center}
+.primary{background:#ffe436;color:#171715}.primary:hover{background:#ffed78}
+.secondary{border:1px solid #d7d7cf;background:#fff;color:#171715}.secondary:hover{background:#f6f6ef}
+.facts{display:grid;grid-template-columns:auto 1fr;gap:6px 16px;margin:0;font-size:14px}.facts dt{color:#686963}.facts dd{margin:0;overflow-wrap:anywhere}
+.error{padding:10px 12px;border-radius:8px;background:#fff6f6;color:#9b1c1c;font-size:13px;border:1px solid #f0c4c4}
+.foot{font-size:12px;color:#686963;margin-top:20px;max-width:720px}

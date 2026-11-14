@@ -14,9 +14,16 @@ const modules: readonly { href: string; title: string; icon: ProductGlyph; held?
   { href: '/dashboard/drafts', title: 'AI Drafts', icon: 'draft' },
   { href: '/dashboard/knowledge', title: 'Knowledge', icon: 'book' },
   { href: '/dashboard/media', title: 'Media Studio', icon: 'film', held: true },
-  { href: '/settings/integrations', title: 'Integrations', icon: 'calendar', held: true },
   { href: '/dashboard/analytics', title: 'Usage & Costs', icon: 'chart' },
 ];
+const destinations: readonly { href: string; title: string }[] = [
+  { href: '/dashboard/chat', title: 'Chat' },
+  { href: '/dashboard/connect', title: 'Connect' },
+  { href: '/dashboard/create', title: 'Create' },
+  { href: '/dashboard/settings', title: 'Settings' },
+  ...modules,
+];
+const ROLE_LABEL: Record<string, string> = { owner: 'Owner', admin: 'Administrator', manager: 'Manager', agent: 'Member', viewer: 'Viewer' };
 export interface DashboardFrameProps {
   organizationName: string | null; email: string | null; role?: string | null;
   children: React.ReactNode; overview?: boolean;
@@ -24,7 +31,9 @@ export interface DashboardFrameProps {
 export function DashboardFrame({ organizationName, email, role, children, overview = false }: DashboardFrameProps) {
   const t = useT();
   const pathname = usePathname() ?? '/dashboard';
-  const current = modules.find(m => pathname === m.href || pathname.startsWith(m.href + '/'));
+  const current = destinations.find(m => pathname === m.href || pathname.startsWith(m.href + '/'));
+  const is = (href: string) => current?.href === href;
+  const initial = (email || organizationName || 'T').charAt(0).toUpperCase();
   const [open, setOpen] = useState(false);
   const sidebar = useRef<HTMLElement>(null);
   const menu = useRef<HTMLButtonElement>(null);
@@ -59,12 +68,12 @@ export function DashboardFrame({ organizationName, email, role, children, overvi
       <button type="button" className={s.mobileClose} onClick={close} aria-label="Close navigation">×</button>
       <nav className={s.sideNav} aria-label="Overview navigation">
         {navLink('/dashboard', 'Overview', 'chart', overview)}
-        <span className={`${s.sideBtn} ${s.unavailable}`}><Glyph name="spark" />Workspace <small className={s.future}>Later</small></span>
+        {navLink('/dashboard/chat', 'Chat', 'chat', is('/dashboard/chat'))}
       </nav>
       <div className={s.sideLabel}>Your platform</div>
       <nav className={s.sideNav} aria-label="Platform navigation">
-        {navLink('/dashboard#group-Connect', 'Connect', 'chat')}
-        {navLink('/dashboard#group-Create', 'Create', 'spark')}
+        {navLink('/dashboard/connect', 'Connect', 'calendar', is('/dashboard/connect'))}
+        {navLink('/dashboard/create', 'Create', 'spark', is('/dashboard/create'))}
         {navLink('/dashboard#group-Operate', 'Operate', 'calendar')}
       </nav>
       <div className={s.sideLabel}>{overview ? 'Explore' : 'Your tools'}</div>
@@ -72,12 +81,14 @@ export function DashboardFrame({ organizationName, email, role, children, overvi
         {modules.filter(m => !overview || m.href.startsWith('/settings') || m.href.endsWith('/analytics')).map(m =>
           <div key={m.href}>{m.held ? <span className={`${s.sideBtn} ${s.unavailable}`}><Glyph name={m.icon} /><span>{m.title}<small>{t('hub.state.held')}</small></span></span> : navLink(m.href, m.title, m.icon, current?.href === m.href)}</div>)}
       </nav>
-      <div className={s.sideBottom}>One place for work that moves.
-        <div className={s.profile}><span className={s.avatar} aria-hidden="true">{organizationName?.charAt(0).toUpperCase() || 'T'}</span>
-          <div className={s.identity}><strong>{organizationName ?? 'Organization unavailable'}</strong><small>{role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Organization account'}</small></div>
-        </div>
+      <div className={s.sideBottom}>
+        <div className={s.sideLabel}>Organization</div>
+        <div className={s.identity}><strong className={s.orgName}>{organizationName ?? 'Organization unavailable'}</strong>{role && <small className={s.orgRole}>Your role: {ROLE_LABEL[role] ?? role}</small>}</div>
         <OrganizationSwitcher label={t('session.switchOrganization')} />
-        {email && <span className={s.email}>{email}</span>}
+        <Link href="/dashboard/settings" prefetch={false} onClick={follow} className={s.profile} aria-current={is('/dashboard/settings') ? 'page' : undefined}>
+          <span className={s.avatar} aria-hidden="true">{initial}</span>
+          <span className={s.identity}><strong>{email || 'Your account'}</strong><small>Profile &amp; settings</small></span>
+        </Link>
         <Link href="/auth/logout" prefetch={false} className={s.signOut}>Sign out ↗</Link>
       </div>
     </aside>
@@ -86,7 +97,7 @@ export function DashboardFrame({ organizationName, email, role, children, overvi
       <header className={s.topbar}>
         <button ref={menu} className={s.mobileMenu} type="button" aria-label="Open navigation" aria-controls="dashboard-sidebar" aria-expanded={open} onClick={() => setOpen(!open)}><span aria-hidden="true">☰</span></button>
         <div className={s.crumb}>TuGPT <span aria-hidden="true"> / </span><strong>{overview ? 'Overview' : current?.title ?? 'Dashboard'}</strong></div>
-        <div className={s.topActions}><span className={s.reviewTag}>Review environment</span><span className={s.accountMark} aria-label="Authenticated account">{organizationName?.charAt(0).toUpperCase() || 'T'}</span></div>
+        <div className={s.topActions}><Link href="/dashboard/settings" prefetch={false} className={s.accountMark} aria-label={`Your account${email ? `: ${email}` : ''}`}>{initial}</Link></div>
       </header>
       <main id="contenido" className={overview ? s.content : s.toolContent}>{children}</main>
     </div>

@@ -37,6 +37,10 @@ import { NAV_ITEMS, isActive } from '../src/components/shell/nav-items';
 
 /** Pages that are arrived at some way other than the primary navigation. */
 const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
+  { path: '/dashboard/chat', by: 'DashboardFrame sidebar "Chat" link directly under Overview (components/hub/DashboardFrame.tsx), on every dashboard page.' },
+  { path: '/dashboard/connect', by: 'DashboardFrame sidebar "Connect" link, the Chat @ picker empty state, and Settings "Manage connections".' },
+  { path: '/dashboard/create', by: 'DashboardFrame sidebar "Create" link (components/hub/DashboardFrame.tsx), on every dashboard page.' },
+  { path: '/dashboard/settings', by: 'DashboardFrame profile block in the sidebar footer and the account mark in the top bar both link here.' },
   { path: '/auth/website/error', by: 'Historical error page retained for old bookmarks; start/callback are explicitly retired410 with no new OAuth redirects.' },
   {
     path: '/',

@@ -136,6 +136,30 @@ const ROUTES: RouteExpectation[] = [
     type: 'protected',
     why: 'Usage & cost report. The proxy is the only gate on the page shell; the data itself comes from a membership-checked RPC.',
   },
+  {
+    path: '/dashboard/chat',
+    kind: 'page',
+    type: 'protected',
+    why: 'Workspace chat shell. Threads and messages are loaded by the /api/v1/chat handlers through the user\'s RLS-bound client; owner-only per 20261115000001.',
+  },
+  {
+    path: '/dashboard/connect',
+    kind: 'page',
+    type: 'protected',
+    why: 'Connect: integration catalogue and the caller\'s connection states from list_chat_capabilities(); metadata only, never credentials.',
+  },
+  {
+    path: '/dashboard/create',
+    kind: 'page',
+    type: 'protected',
+    why: 'Create: media generation entry point. Shows availability only; generation itself is not exposed by this page.',
+  },
+  {
+    path: '/dashboard/settings',
+    kind: 'page',
+    type: 'protected',
+    why: 'Profile and organization settings. Reads the session user and active membership only.',
+  },
 
   // Every /api/v1 route below is 'public' to the proxy on purpose: the proxy
   // performs no authentication for them, and each handler authenticates for
@@ -227,6 +251,30 @@ const ROUTES: RouteExpectation[] = [
       'draft routes before reading; every query is scoped by organization_id and RLS ' +
       'scopes conversations to org members. Returns masked contacts and no message text ' +
       'at all, asserted in conversations-route.test.ts.',
+  },
+  {
+    path: '/api/v1/chat/threads',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Handler authenticates and resolves the tenant strictly (stale hint = 403); RLS limits threads to their owner while an active member. Same-origin check on POST.',
+  },
+  {
+    path: '/api/v1/chat/threads/[threadId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Handler authenticates and resolves the tenant; RLS returns the thread and messages only to their owner (pgTAP workspace_chat 18-23).',
+  },
+  {
+    path: '/api/v1/chat/threads/[threadId]/messages',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Same-origin POST; handler authenticates, re-validates @-mentions against list_chat_capabilities() and audits each tool call through record_connect_tool_call().',
+  },
+  {
+    path: '/api/v1/chat/capabilities',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Handler authenticates and resolves the tenant; invoker-rights RPC returns catalogue states for the caller only, without connection ids.',
   },
   {
     path: '/api/v1/analytics/usage',

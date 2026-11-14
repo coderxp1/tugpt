@@ -32,6 +32,7 @@ export default async function DashboardLayout({
     <AppShell
       organizationName={session?.tenant?.organizationName ?? null}
       email={session?.email || null}
+      role={session?.tenant?.role ?? null}
       t={t}
     >
       {children}
