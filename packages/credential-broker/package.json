@@ -1,0 +1,19 @@
+{
+  "name": "@tugpt/credential-broker",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Internal credential broker (ADR-021): the only process that holds the key ring.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}
