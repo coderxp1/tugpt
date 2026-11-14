@@ -1,3 +1,5 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
+import { getRequestedTenantId } from '@/lib/tenant/request';
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
@@ -5,7 +7,7 @@ import { AuthService } from '@tugpt/auth';
 
 export async function GET(request: Request) {
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const supabase = await createAuthenticatedServerClient();
@@ -13,7 +15,7 @@ export async function GET(request: Request) {
     const user = await authService.getCurrentUser();
 
     if (!user) {
-      return NextResponse.json(
+      return privateJson(
         { error: 'Unauthenticated' },
         { status: 401 }
       );
@@ -22,7 +24,7 @@ export async function GET(request: Request) {
     // Server-side validation of active tenant
     const activeTenant = await authService.resolveTenantContext(user.id, rawTenantId);
     if (rawTenantId && (!activeTenant || activeTenant.organizationId !== rawTenantId)) {
-      return NextResponse.json(
+      return privateJson(
         { error: 'Access denied to requested tenant' },
         { status: 403 }
       );
@@ -36,7 +38,7 @@ export async function GET(request: Request) {
       count: orgs.length,
     });
 
-    return NextResponse.json({
+    return privateJson({
       organizations: orgs,
       activeTenant,
       total: orgs.length,
@@ -44,11 +46,12 @@ export async function GET(request: Request) {
     });
   } catch (err) {
     defaultLogger.error('Organizations list failed', err as Error, { requestId });
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return privateJson({ error: 'Internal Server Error' }, { status: 500 });
   }
 }
 
 export async function POST(request: Request) {
+  if (!isSameOriginMutation(request)) return privateJson({ error: 'Same-origin JSON request required' }, { status: 403 });
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
 
   try {
@@ -57,16 +60,18 @@ export async function POST(request: Request) {
     const user = await authService.getCurrentUser();
 
     if (!user) {
-      return NextResponse.json(
+      return privateJson(
         { error: 'Unauthenticated' },
         { status: 401 }
       );
     }
 
-    const body = (await request.json()) as { name?: string; slug?: string };
+    let body: Record<string, unknown>;
+    try { body = await readJsonRecord(request, ['name', 'slug']); }
+    catch { return privateJson({ error: 'Invalid JSON body' }, { status: 400 }); }
 
-    if (!body.name || !body.slug) {
-      return NextResponse.json(
+    if (typeof body.name !== 'string' || !body.name.trim() || body.name.trim().length > 120 || typeof body.slug !== 'string' || !/^[a-z0-9][a-z0-9-]{1,61}[a-z0-9]$/.test(body.slug)) {
+      return privateJson(
         { error: 'Missing required fields: name and slug' },
         { status: 400 }
       );
@@ -85,7 +90,7 @@ export async function POST(request: Request) {
 
     if (rpcError) {
       defaultLogger.error('Failed atomic organization creation RPC', rpcError, { requestId });
-      return NextResponse.json({ error: 'Failed to create organization' }, { status: 400 });
+      return privateJson({ error: 'Failed to create organization' }, { status: 400 });
     }
 
     defaultLogger.info('Organization created successfully', {
@@ -94,7 +99,7 @@ export async function POST(request: Request) {
       userId: user.id,
     });
 
-    return NextResponse.json({
+    return privateJson({
       success: true,
       organization: {
         id: orgId,
@@ -104,6 +109,12 @@ export async function POST(request: Request) {
     });
   } catch (err) {
     defaultLogger.error('Organization creation failed', err as Error, { requestId });
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return privateJson({ error: 'Internal Server Error' }, { status: 500 });
   }
+}
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

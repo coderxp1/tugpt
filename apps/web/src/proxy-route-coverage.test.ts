@@ -44,6 +44,16 @@ interface RouteExpectation {
 }
 
 const ROUTES: RouteExpectation[] = [
+  { path: '/api/auth/handoff', kind: 'api', type: 'auth', why: 'Accepted independent SSO handler enforces its own token, origin or opaque-session boundary.' },
+  { path: '/api/auth/revoke', kind: 'api', type: 'auth', why: 'Accepted independent SSO handler enforces its own token, origin or opaque-session boundary.' },
+  { path: '/api/auth/logout', kind: 'api', type: 'auth', why: 'Accepted independent SSO handler enforces its own token, origin or opaque-session boundary.' },
+  { path: '/api/auth/session', kind: 'api', type: 'auth', why: 'Accepted independent SSO handler enforces its own token, origin or opaque-session boundary.' },
+  { path: '/auth/complete', kind: 'api', type: 'auth', why: 'Accepted independent SSO handler enforces its own token, origin or opaque-session boundary.' },
+  { path: '/api/v1/organizations/active', kind: 'api', type: 'public', why: 'Handler checks current membership; explicit selection requires configured-origin JSON and CSRF.' },
+
+  { path: '/auth/website/start', kind: 'api', type: 'auth', why: 'Retired route: fixed410, no PKCE state or authentication side effects.' },
+  { path: '/auth/website/callback', kind: 'api', type: 'auth', why: 'Retired route: fixed410, no code exchange or authentication side effects.' },
+  { path: '/auth/website/error', kind: 'page', type: 'auth', why: 'Safe OAuth failure and membership guidance without sensitive provider error or account details.' },
   {
     path: '/',
     kind: 'page',
@@ -409,4 +419,16 @@ describe('proxy route classification coverage', () => {
       expect(discovered.get(route.path), `${route.path} kind`).toBe(route.kind);
     }
   });
+});
+
+it('records held runtime prefixes separately from public handler classification', async () => {
+  const { proxy } = await import('./proxy'); const { NextRequest } = await import('next/server');
+  for (const prefix of ['/api/v1/media', '/api/v1/integrations', '/api/v1/workspace', '/api/v1/webhooks']) {
+    for (const suffix of ['', '/x']) {
+      const response = await proxy(new NextRequest('https://dashboard.example' + prefix + suffix));
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({ error: 'privileged_bridge_pending_review' });
+    }
+    expect(classifyRoute(prefix + 'other')).toBe('protected');
+  }
 });

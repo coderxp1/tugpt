@@ -1,3 +1,4 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 /**
  * POST /api/v1/invitations/accept
  *
@@ -34,10 +35,11 @@ import type { ApiError } from '@/lib/draft-api/types';
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 export async function POST(request: Request) {
+  if (!isSameOriginMutation(request)) return errorResponse(403, 'FORBIDDEN', 'Same-origin JSON request required');
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
 
   try {
@@ -51,12 +53,12 @@ export async function POST(request: Request) {
 
     let body: { token?: unknown };
     try {
-      body = await request.json();
+      body = await readJsonRecord(request, ["token"]);
     } catch {
       return errorResponse(400, 'INVALID_BODY', 'Invalid JSON request body');
     }
 
-    if (typeof body.token !== 'string' || body.token.trim() === '') {
+    if (typeof body.token !== 'string' || body.token.trim() === '' || body.token.length > 512) {
       return errorResponse(400, 'INVALID_BODY', 'token is required');
     }
 
@@ -76,7 +78,9 @@ export async function POST(request: Request) {
         sqlstateCode: (rpcError as { code?: string }).code,
         httpStatus: mapped.status,
       });
-      return errorResponse(mapped.status, mapped.code, mapped.message);
+      return errorResponse(mapped.status, mapped.code, mapped.code === 'VERIFIED_EMAIL_REQUIRED'
+        ? 'Fresh verified email evidence is required. Continue through TuGPT sign-in and retry this explicit invitation action.'
+        : mapped.message);
     }
 
     const result = data as { organization_id: string; membership_created: boolean; role: string };
@@ -88,9 +92,16 @@ export async function POST(request: Request) {
       role: result.role,
     });
 
-    return NextResponse.json({ membership: result });
+    return privateJson({ membership: result });
   } catch (err) {
     defaultLogger.error('Invitation accept failed', err as Error, { requestId });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

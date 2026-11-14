@@ -6,8 +6,8 @@
  * organization through the same cached resolver every layout uses, then reads
  * organization-scoped signals through the user's own RLS-bound client.
  *
- * It renders even when signals cannot be read: every product still opens, and
- * unreadable figures say so instead of showing zero.
+ * It renders even when signals cannot be read: ordinary pages remain linked, and
+ * unreadable figures say so instead of showing zero. Held products never open.
  */
 
 import type { Metadata } from 'next';

@@ -367,7 +367,7 @@ SELECT throws_ok(
   $$UPDATE public.conversations
        SET assigned_to = 'ffffffff-ffff-ffff-ffff-ffffffffffff'
      WHERE id = 'e0000000-0000-0000-0000-000000000001'$$,
-  '23503',
+  'P3C03',
   NULL,
   'I1: a conversation cannot be assigned to an id with no profile'
 );

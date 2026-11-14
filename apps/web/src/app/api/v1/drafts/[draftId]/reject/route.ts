@@ -1,3 +1,5 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
+import { getRequestedTenantId } from '@/lib/tenant/request';
 // Stage 5A: POST /api/v1/drafts/:draftId/reject — Reject a draft
 // Calls reject_draft(draftId, expectedLockVersion) RPC via user-session client.
 // Amendment 2: Confirms draft is visible under active org before calling RPC.
@@ -6,7 +8,7 @@
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
+import { createFeatureServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { checkDraftFeatureGate } from '@/lib/draft-api/feature-gate';
 import { mapDraftRpcError } from '@/lib/draft-api/error-mapper';
@@ -16,15 +18,17 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ draftId: string }> }
 ) {
-  const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  if (!isSameOriginMutation(request)) return errorResponse(403, 'FORBIDDEN', 'Same-origin JSON request required');
+  // Diagnostic correlation is server-generated; never copy arbitrary header text.
+  const requestId = `req-${Date.now()}`;
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const { draftId } = await params;
@@ -46,18 +50,15 @@ export async function POST(
       return errorResponse(403, 'FORBIDDEN', 'No active organization found');
     }
 
-    const adminClient = createAdminSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    const gate = await checkDraftFeatureGate(adminClient, activeTenant.organizationId);
+    const featureClient = await createFeatureServerClient(activeTenant.organizationId);
+    const gate = await checkDraftFeatureGate(featureClient, activeTenant.organizationId);
     if (!gate.allowed) {
       return errorResponse(gate.statusCode, 'FEATURE_UNAVAILABLE', gate.message);
     }
 
     let body: { expectedLockVersion?: unknown };
     try {
-      body = await request.json();
+      body = await readJsonRecord(request, ["expectedLockVersion"]);
     } catch {
       return errorResponse(400, 'INVALID_BODY', 'Invalid JSON request body');
     }
@@ -86,24 +87,23 @@ export async function POST(
     if (rpcError) {
       const mapped = mapDraftRpcError(rpcError);
       defaultLogger.warn('Draft reject RPC failed', {
-        requestId,
-        draftId,
-        organizationId: activeTenant.organizationId,
-        sqlstateCode: rpcError.code,
-        httpStatus: mapped.status,
+        requestId, failureKind: 'rpc',
+        httpStatus: [400, 401, 403, 404, 409, 422, 500, 503].includes(mapped.status) ? mapped.status : 500,
       });
       return errorResponse(mapped.status, mapped.code, mapped.message);
     }
 
-    defaultLogger.info('Draft rejected', {
-      requestId,
-      draftId,
-      organizationId: activeTenant.organizationId,
-    });
+    defaultLogger.info('Draft rejected', { requestId, outcome: 'success' });
 
-    return NextResponse.json({ draft: data });
-  } catch (err) {
-    defaultLogger.error('Draft reject failed', err as Error, { requestId });
+    return privateJson({ draft: data });
+  } catch {
+    defaultLogger.error('Draft reject failed', undefined, { requestId, failureKind: 'unexpected', httpStatus: 500 });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

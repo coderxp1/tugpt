@@ -1,4 +1,6 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { GET as threadGET } from './[draftId]/thread/route';
 import { GET as listDraftsGET } from './route';
 import { GET as draftDetailGET } from './[draftId]/route';
 import { GET as revisionsGET } from './[draftId]/revisions/route';
@@ -8,10 +10,22 @@ import { GET as deliveryGET } from './[draftId]/delivery/route';
 import { POST as editPOST } from './[draftId]/edit/route';
 import { POST as rejectPOST } from './[draftId]/reject/route';
 
+// Structural coverage is intentionally direct-source only, not a transitive
+// no-network proof. Runtime isolation remains a separate P3 obligation.
+const draftRouteSources = [
+  './route.ts', './[draftId]/route.ts', './[draftId]/approve/route.ts',
+  './[draftId]/edit/route.ts', './[draftId]/reject/route.ts',
+  './[draftId]/delivery/route.ts', './[draftId]/events/route.ts',
+  './[draftId]/revisions/route.ts', './[draftId]/thread/route.ts',
+];
+function sourceText(relative: string) {
+  return readFileSync(new URL(relative, import.meta.url), 'utf8');
+}
+
 // --- Mocks ---
 
 const mockRpc = vi.fn();
-const mockAdminRpc = vi.fn();
+const mockFeatureRpc = vi.fn();
 
 // Build a chainable mock that supports .select().eq().eq().single() and .select().eq().order().range()
 function createChainableMock(overrides?: {
@@ -37,6 +51,7 @@ const mockFrom = vi.fn();
 
 // Mock the cookie-aware server client used by all draft routes
 vi.mock('@/lib/supabase/server', () => ({
+  createFeatureServerClient: vi.fn(async () => ({ rpc: mockFeatureRpc })),
   createAuthenticatedServerClient: vi.fn(() =>
     Promise.resolve({
       rpc: mockRpc,
@@ -45,11 +60,9 @@ vi.mock('@/lib/supabase/server', () => ({
   ),
 }));
 
-// Still mock @tugpt/database for createAdminSupabaseClient (used in draft routes)
+// Tripwire: no draft route may fall back to the privileged admin factory.
 vi.mock('@tugpt/database', () => ({
-  createAdminSupabaseClient: vi.fn(() => ({
-    rpc: mockAdminRpc,
-  })),
+  createAdminSupabaseClient: vi.fn(() => { throw new Error('Privileged transport forbidden'); }),
 }));
 
 const mockGetCurrentUser = vi.fn();
@@ -70,8 +83,8 @@ const VALID_DRAFT_ID = 'a1b2c3d4-e5f6-7890-abcd-ef1234567890';
 
 function makeRequest(url: string, options?: RequestInit) {
   return new Request(`http://localhost${url}`, {
-    headers: { 'x-tenant-id': 'org-1', ...options?.headers },
     ...options,
+    headers: { 'x-tenant-id': 'org-1', origin: 'https://dashboard.example', 'x-tugpt-csrf': '1', 'content-type': 'application/json', ...options?.headers },
   });
 }
 
@@ -87,11 +100,17 @@ function setupSuccessAuth() {
     organizationName: 'Test Org',
     role: 'owner',
   });
-  mockAdminRpc.mockResolvedValue({ data: true, error: null });
+  mockFeatureRpc.mockImplementation(async (name: string) => {
+    if (name !== 'is_feature_enabled') throw new Error('Feature adapter widening forbidden');
+    return { data: true, error: null };
+  });
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mockRpc.mockReset();
+  mockFeatureRpc.mockReset();
+  mockFrom.mockReset();
   setupSuccessAuth();
 });
 
@@ -129,7 +148,7 @@ describe('Draft API Routes', () => {
     });
 
     it('T18: Feature flag disabled returns 503', async () => {
-      mockAdminRpc.mockResolvedValueOnce({ data: false, error: null });
+      mockFeatureRpc.mockResolvedValueOnce({ data: false, error: null });
       const res = await listDraftsGET(makeRequest('/api/v1/drafts'));
       expect(res.status).toBe(503);
     });
@@ -170,7 +189,7 @@ describe('Draft API Routes', () => {
     });
 
     it('Returns 503 when feature flag disabled', async () => {
-      mockAdminRpc.mockResolvedValueOnce({ data: false, error: null });
+      mockFeatureRpc.mockResolvedValueOnce({ data: false, error: null });
       const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}`);
       const res = await draftDetailGET(req, { params: makeParams(VALID_DRAFT_ID) });
       expect(res.status).toBe(503);
@@ -464,8 +483,8 @@ describe('Draft API Routes', () => {
 
   describe('GET /api/v1/drafts/:draftId/delivery', () => {
     // The delivery route: session → tenant → gate → draft visibility
-    // (session client) → delivery read (admin RPC). The gate consumes
-    // one mockAdminRpc call before the delivery read.
+    // (session client) -> authenticated wrapper. The feature mock may
+    // only answer is_feature_enabled; delivery uses the ordinary mock.
 
     it('D1: Returns 401 when unauthenticated', async () => {
       mockGetCurrentUser.mockResolvedValueOnce(null);
@@ -491,9 +510,7 @@ describe('Draft API Routes', () => {
       mockFrom.mockReturnValueOnce(createChainableMock({
         singleResult: { data: { id: VALID_DRAFT_ID }, error: null },
       }));
-      mockAdminRpc
-        .mockResolvedValueOnce({ data: true, error: null }) // feature gate
-        .mockResolvedValueOnce({ data: [], error: null }); // delivery read
+      mockRpc.mockResolvedValueOnce({ data: [], error: null }); // delivery read
       const res = await deliveryGET(makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/delivery`), {
         params: makeParams(VALID_DRAFT_ID),
       });
@@ -506,9 +523,7 @@ describe('Draft API Routes', () => {
       mockFrom.mockReturnValueOnce(createChainableMock({
         singleResult: { data: { id: VALID_DRAFT_ID }, error: null },
       }));
-      mockAdminRpc
-        .mockResolvedValueOnce({ data: true, error: null })
-        .mockResolvedValueOnce({
+      mockRpc.mockResolvedValueOnce({
           data: [{
             id: 'del-1', draft_id: VALID_DRAFT_ID, status: 'sent',
             provider_message_id: 'wamid.123', attempts: 2,
@@ -530,9 +545,7 @@ describe('Draft API Routes', () => {
       mockFrom.mockReturnValueOnce(createChainableMock({
         singleResult: { data: { id: VALID_DRAFT_ID }, error: null },
       }));
-      mockAdminRpc
-        .mockResolvedValueOnce({ data: true, error: null })
-        .mockResolvedValueOnce({
+      mockRpc.mockResolvedValueOnce({
           data: [{
             id: 'del-1', draft_id: VALID_DRAFT_ID, status: 'dead_lettered',
             provider_message_id: null, attempts: 1,
@@ -561,9 +574,7 @@ describe('Draft API Routes', () => {
         rangeResult: { data: [draftRow], error: null, count: 1 },
         singleResult: { data: null, error: { code: 'PGRST116' } },
       }));
-      mockAdminRpc
-        .mockResolvedValueOnce({ data: true, error: null }) // feature gate
-        .mockResolvedValueOnce({
+      mockRpc.mockResolvedValueOnce({
           data: [{
             id: 'del-1', draft_id: VALID_DRAFT_ID, status: 'queued',
             provider_message_id: null, attempts: 0,
@@ -581,25 +592,173 @@ describe('Draft API Routes', () => {
 
   describe('T19: No outbound WhatsApp call', () => {
     it('No whatsapp-normalizer import in any draft route or service file', async () => {
-      // Structural test: verified by absence of imports in the route files
-      // The route modules loaded without error and don't reference whatsapp-normalizer
-      expect(true).toBe(true);
+      const files = [...draftRouteSources, '../../../../lib/draft-api/service.ts'];
+      expect(files).toHaveLength(10);
+      for (const file of files) expect(sourceText(file)).not.toMatch(/(?:from\s*|import\s*\(|import\s+|require\s*\()[\s]*['"][^'"]*whatsapp-normalizer/);
     });
   });
 
   describe('T20: No provider call', () => {
     it('No ai-providers or ai-orchestration import in draft routes', async () => {
-      // Structural test: verified by absence of imports in the route files
-      expect(true).toBe(true);
+      expect(draftRouteSources).toHaveLength(9);
+      for (const file of draftRouteSources) expect(sourceText(file)).not.toMatch(/(?:from\s*|import\s*\(|import\s+|require\s*\()[\s]*['"][^'"]*(?:ai-providers|ai-orchestration)/);
     });
   });
 
   describe('T21: No customer content in logs', () => {
     it('Logger calls only include sanitized metadata', async () => {
-      // The route handlers log: requestId, draftId, organizationId, count, sqlstateCode, httpStatus
-      // They never log: draft body, source message text, contact phone, provider message ID
-      // Verified by code inspection: no body/content fields are passed to defaultLogger
-      expect(true).toBe(true);
+      // Observe the real shared logger's serialized console output, not a logger mock.
+      const cases = [
+        { path: '', method: 'GET', call: (r: Request) => listDraftsGET(r), event: 'Draft list failed' },
+        { path: `/${VALID_DRAFT_ID}`, method: 'GET', call: (r: Request) => draftDetailGET(r, { params: makeParams(VALID_DRAFT_ID) }), event: 'Draft detail failed' },
+        { path: `/${VALID_DRAFT_ID}/approve`, method: 'POST', call: (r: Request) => approvePOST(r, { params: makeParams(VALID_DRAFT_ID) }), event: 'Draft approve failed' },
+        { path: `/${VALID_DRAFT_ID}/edit`, method: 'POST', call: (r: Request) => editPOST(r, { params: makeParams(VALID_DRAFT_ID) }), event: 'Draft edit failed' },
+        { path: `/${VALID_DRAFT_ID}/reject`, method: 'POST', call: (r: Request) => rejectPOST(r, { params: makeParams(VALID_DRAFT_ID) }), event: 'Draft reject failed' },
+        { path: `/${VALID_DRAFT_ID}/delivery`, method: 'GET', call: (r: Request) => deliveryGET(r, { params: makeParams(VALID_DRAFT_ID) }), event: 'Delivery read failed' },
+        { path: `/${VALID_DRAFT_ID}/events`, method: 'GET', call: (r: Request) => eventsGET(r, { params: makeParams(VALID_DRAFT_ID) }), event: 'Draft review events failed' },
+        { path: `/${VALID_DRAFT_ID}/revisions`, method: 'GET', call: (r: Request) => revisionsGET(r, { params: makeParams(VALID_DRAFT_ID) }), event: 'Draft revisions failed' },
+        { path: `/${VALID_DRAFT_ID}/thread`, method: 'GET', call: (r: Request) => threadGET(r, { params: makeParams(VALID_DRAFT_ID) }), event: 'Conversation thread failed' },
+      ];
+      const sentinels = ['SYNTHETIC_CUSTOMER_MESSAGE_41', 'SYNTHETIC_STACK_42', 'SYNTHETIC_NAME_43', 'SYNTHETIC_HEADER_44', 'SYNTHETIC_BODY_45', 'SYNTHETIC_TOKEN_46'];
+      const errorOut = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const warnOut = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const infoOut = vi.spyOn(console, 'log').mockImplementation(() => {});
+      try {
+        for (const item of cases) {
+          errorOut.mockClear(); warnOut.mockClear(); infoOut.mockClear();
+          const failure = new Error(sentinels[0]);
+          failure.stack = sentinels[1]; failure.name = sentinels[2];
+          mockGetCurrentUser.mockRejectedValueOnce(failure);
+          const res = await item.call(makeRequest(`/api/v1/drafts${item.path}`, {
+            method: item.method,
+            headers: { 'x-request-id': sentinels[3], authorization: `Bearer ${sentinels[5]}` },
+            ...(item.method === 'POST' ? { body: JSON.stringify({ expectedLockVersion: 1, body: sentinels[4] }) } : {}),
+          }));
+          expect(res.status).toBe(500);
+          expect(res.headers.get('cache-control')).toBe('private, no-store');
+          expect(await res.json()).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } });
+          expect(errorOut).toHaveBeenCalledOnce();
+          const payload = JSON.parse(String(errorOut.mock.calls[0][0]));
+          expect(payload.level).toBe('error'); expect(payload.message).toBe(item.event);
+          expect(payload).not.toHaveProperty('error');
+          expect(payload.context).toEqual({ service: 'tugpt-platform', requestId: expect.stringMatching(/^req-\d+$/), failureKind: 'unexpected', httpStatus: 500 });
+          const emitted = JSON.stringify([errorOut.mock.calls, warnOut.mock.calls, infoOut.mock.calls]);
+          for (const sentinel of sentinels) expect(emitted).not.toContain(sentinel);
+        }
+      } finally { errorOut.mockRestore(); warnOut.mockRestore(); infoOut.mockRestore(); }
     });
+  });
+});
+// Synthetic unit fixture only; no host or network configuration is changed.
+beforeEach(() => vi.stubEnv('TUGPT_APP_ORIGIN', 'https://dashboard.example'));
+afterEach(() => vi.unstubAllEnvs());
+
+// P2-DB-01 transport/response regression assertions; source only, NOT RUN.
+describe('P2-DB-01 delivery read transport', () => {
+  const row = {
+    id: 'delivery-1', organization_id: 'org-1', draft_id: VALID_DRAFT_ID,
+    status: 'sent', provider_message_id: 'synthetic-provider-id', attempts: 2,
+    error_code: null, updated_at: '2026-01-01T00:02:00Z',
+    delivered_at: '2026-01-01T00:00:00Z', read_at: '2026-01-01T00:01:00Z',
+  };
+  function visible() {
+    mockFrom.mockReturnValueOnce(createChainableMock({
+      singleResult: { data: { id: VALID_DRAFT_ID }, error: null },
+    }));
+  }
+  it('DB01 single uses ordinary scoped RPC and preserves receipt fields', async () => {
+    visible(); mockRpc.mockResolvedValueOnce({ data: [row], error: null });
+    const res = await deliveryGET(makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/delivery`), { params: makeParams(VALID_DRAFT_ID) });
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toBe('private, no-store');
+    expect(mockRpc).toHaveBeenCalledWith('sso_get_outbound_delivery_for_draft', { p_organization_id: 'org-1', p_draft_id: VALID_DRAFT_ID });
+    expect(mockRpc).toHaveBeenCalledTimes(1); expect(mockFeatureRpc).toHaveBeenCalledTimes(1);
+    expect(mockFeatureRpc).toHaveBeenCalledWith('is_feature_enabled', { p_organization_id: 'org-1', p_flag_key: 'ai_draft_generation' });
+    expect(await res.json()).toEqual({ delivery: {
+      id: 'delivery-1', status: 'sent', providerMessageId: 'synthetic-provider-id',
+      attempts: 2, errorCode: null, updatedAt: row.updated_at,
+      deliveredAt: row.delivered_at, readAt: row.read_at,
+    } });
+  });
+  it('DB01 single preserves sanitized database failure without fallback', async () => {
+    visible(); mockRpc.mockResolvedValueOnce({ data: null, error: { code: '28000', message: 'synthetic-private-detail' } });
+    const res = await deliveryGET(makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/delivery`), { params: makeParams(VALID_DRAFT_ID) });
+    expect(res.status).toBe(500);
+    expect(await res.json()).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } });
+    expect(mockRpc).toHaveBeenCalledTimes(1); expect(mockFeatureRpc).toHaveBeenCalledTimes(1);
+  });
+  it('DB01 foreign or missing draft stops before delivery RPC', async () => {
+    mockFrom.mockReturnValueOnce(createChainableMock());
+    const res = await deliveryGET(makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/delivery`), { params: makeParams(VALID_DRAFT_ID) });
+    expect(res.status).toBe(404); expect(mockRpc).not.toHaveBeenCalled();
+  });
+  it('DB01 disabled feature stops before visibility and delivery RPC', async () => {
+    mockFeatureRpc.mockResolvedValueOnce({ data: false, error: null });
+    const res = await deliveryGET(makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/delivery`), { params: makeParams(VALID_DRAFT_ID) });
+    expect(res.status).toBe(503); expect(mockRpc).not.toHaveBeenCalled(); expect(mockFrom).not.toHaveBeenCalled();
+  });
+  for (const failure of [false, true]) {
+    it(`DB01 bulk ordinary client preserves ${failure ? 'degraded list' : 'delivery enrichment'}`, async () => {
+      const draft = { id: VALID_DRAFT_ID, status: 'approved', version: 1, source_message_id: 'message-1', created_at: row.updated_at, updated_at: row.updated_at };
+      mockFrom.mockReturnValue(createChainableMock({ rangeResult: { data: [draft], error: null, count: 1 } }));
+      mockRpc.mockResolvedValueOnce(failure ? { data: null, error: { code: '28000' } } : { data: [row], error: null });
+      const res = await listDraftsGET(makeRequest('/api/v1/drafts')); const body = await res.json();
+      expect(res.status).toBe(200); expect(body.total).toBe(1);
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+      expect(mockRpc).toHaveBeenCalledWith('sso_list_outbound_deliveries_for_drafts', { p_organization_id: 'org-1', p_draft_ids: [VALID_DRAFT_ID] });
+      expect(mockFeatureRpc).toHaveBeenCalledTimes(1);
+      if (failure) expect(body.drafts[0]).not.toHaveProperty('delivery');
+      else expect(body.drafts[0].delivery.readAt).toBe(row.read_at);
+    });
+  }
+});
+
+// P2-CLOSE-LOG-01 supplemental service, RPC-warning and success diagnostics.
+describe('draft diagnostic metadata selection', () => {
+  it('does not emit customer exception text thrown by the draft service', async () => {
+    const failure = new Error('SYNTHETIC_SERVICE_MESSAGE_51');
+    failure.stack = 'SYNTHETIC_SERVICE_STACK_52';
+    mockFrom.mockReturnValue(createChainableMock({ rangeResult: { data: null, count: 0, error: failure } }));
+    const output = vi.spyOn(console, 'error').mockImplementation(() => {});
+    try {
+      const res = await listDraftsGET(makeRequest('/api/v1/drafts'));
+      expect(res.status).toBe(500);
+      expect(res.headers.get('cache-control')).toBe('private, no-store');
+      expect(await res.json()).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } });
+      expect(output).toHaveBeenCalledOnce();
+      const emitted = JSON.stringify(output.mock.calls);
+      expect(emitted).not.toContain(failure.message); expect(emitted).not.toContain(failure.stack);
+      expect(JSON.parse(String(output.mock.calls[0][0]))).not.toHaveProperty('error');
+    } finally { output.mockRestore(); }
+  });
+  it.each(['approve', 'edit', 'reject', 'delivery'] as const)('selects validated metadata for %s RPC warnings', async (operation) => {
+    const failure = { code: 'SYNTHETIC_RPC_CODE_61', message: 'SYNTHETIC_RPC_MESSAGE_62', stack: 'SYNTHETIC_RPC_STACK_63', name: 'SYNTHETIC_RPC_NAME_64' };
+    mockFrom.mockReturnValue(createChainableMock({ singleResult: { data: { id: VALID_DRAFT_ID }, error: null } }));
+    mockRpc.mockResolvedValueOnce({ data: null, error: failure });
+    const output = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      const method = operation === 'delivery' ? 'GET' : 'POST';
+      const req = makeRequest(`/api/v1/drafts/${VALID_DRAFT_ID}/${operation}`, { method, headers: { 'x-request-id': 'SYNTHETIC_HEADER_65' }, ...(method === 'POST' ? { body: JSON.stringify({ expectedLockVersion: 1, ...(operation === 'edit' ? { body: 'SYNTHETIC_BODY_66' } : {}) }) } : {}) });
+      const handler = { approve: approvePOST, edit: editPOST, reject: rejectPOST, delivery: deliveryGET }[operation];
+      const res = await handler(req, { params: makeParams(VALID_DRAFT_ID) });
+      expect(res.status).toBe(500); expect(res.headers.get('cache-control')).toBe('private, no-store');
+      expect(await res.json()).toEqual({ error: { code: 'INTERNAL_ERROR', message: 'An unexpected error occurred' } });
+      expect(output).toHaveBeenCalledOnce();
+      const emitted = JSON.stringify(output.mock.calls);
+      for (const sentinel of [...Object.values(failure), 'SYNTHETIC_HEADER_65', 'SYNTHETIC_BODY_66']) expect(emitted).not.toContain(sentinel);
+      expect(JSON.parse(String(output.mock.calls[0][0])).context).toEqual({ service: 'tugpt-platform', requestId: expect.stringMatching(/^req-\d+$/), failureKind: 'rpc', httpStatus: 500 });
+    } finally { output.mockRestore(); }
+  });
+  it('does not copy arbitrary tenant or request-header text into success diagnostics', async () => {
+    mockResolveTenantContext.mockResolvedValueOnce({ organizationId: 'SYNTHETIC_TENANT_71', organizationName: 'Synthetic', role: 'owner' });
+    mockFrom.mockReturnValue(createChainableMock({ rangeResult: { data: [], error: null, count: 0 } }));
+    const output = vi.spyOn(console, 'log').mockImplementation(() => {});
+    try {
+      const res = await listDraftsGET(makeRequest('/api/v1/drafts', { headers: { 'x-request-id': 'SYNTHETIC_HEADER_72' } }));
+      expect(res.status).toBe(200); expect(await res.json()).toEqual({ drafts: [], total: 0, page: 1, limit: 20 });
+      expect(res.headers.get('cache-control')).toBe('private, no-store'); expect(output).toHaveBeenCalledOnce();
+      const emitted = JSON.stringify(output.mock.calls); expect(emitted).not.toContain('SYNTHETIC_TENANT_71'); expect(emitted).not.toContain('SYNTHETIC_HEADER_72');
+      expect(JSON.parse(String(output.mock.calls[0][0])).context).toEqual({ service: 'tugpt-platform', requestId: expect.stringMatching(/^req-\d+$/), outcome: 'success' });
+    } finally { output.mockRestore(); }
   });
 });

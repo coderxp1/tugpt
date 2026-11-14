@@ -79,14 +79,15 @@ const mockFrom = vi.fn((table: string) => {
   return chain;
 });
 
-const mockAdminRpc = vi.fn();
+const mockFeatureRpc = vi.fn();
 
 vi.mock('@/lib/supabase/server', () => ({
+  createFeatureServerClient: vi.fn(async () => ({ rpc: mockFeatureRpc })),
   createAuthenticatedServerClient: vi.fn(() => Promise.resolve({ from: mockFrom, rpc: vi.fn() })),
 }));
 
 vi.mock('@tugpt/database', () => ({
-  createAdminSupabaseClient: vi.fn(() => ({ rpc: mockAdminRpc })),
+  createAdminSupabaseClient: vi.fn(() => { throw new Error('Privileged transport forbidden'); }),
 }));
 
 const mockGetCurrentUser = vi.fn();
@@ -139,7 +140,7 @@ function setup(
     organizationName: 'Panadería La Espiga',
     role: 'owner',
   });
-  mockAdminRpc.mockResolvedValue({ data: opts.gateOpen ?? true, error: null });
+  mockFeatureRpc.mockResolvedValue({ data: opts.gateOpen ?? true, error: null });
 
   tables['conversations'] = {
     limit: { data: opts.conversations ?? conversationRows(3), error: null },

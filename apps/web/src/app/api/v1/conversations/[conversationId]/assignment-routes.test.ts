@@ -12,19 +12,20 @@
  * that stops the AI drafting for a customer.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { POST as assignPOST } from './assign/route';
 import { POST as handoffPOST } from './handoff/route';
 
 const mockRpc = vi.fn();
-const mockAdminRpc = vi.fn();
+const mockFeatureRpc = vi.fn();
 
 vi.mock('@/lib/supabase/server', () => ({
+  createFeatureServerClient: vi.fn(async () => ({ rpc: mockFeatureRpc })),
   createAuthenticatedServerClient: vi.fn(() => Promise.resolve({ rpc: mockRpc, from: vi.fn() })),
 }));
 
 vi.mock('@tugpt/database', () => ({
-  createAdminSupabaseClient: vi.fn(() => ({ rpc: mockAdminRpc })),
+  createAdminSupabaseClient: vi.fn(() => { throw new Error('Privileged transport forbidden'); }),
 }));
 
 const mockGetCurrentUser = vi.fn();
@@ -52,7 +53,7 @@ function setup(opts: { gateOpen?: boolean; rpcError?: unknown; rpcData?: unknown
     organizationName: 'Panadería La Espiga',
     role: 'agent',
   });
-  mockAdminRpc.mockResolvedValue({ data: opts.gateOpen ?? true, error: null });
+  mockFeatureRpc.mockResolvedValue({ data: opts.gateOpen ?? true, error: null });
   mockRpc.mockResolvedValue({
     data: opts.rpcData ?? { conversation_id: CONV_ID, status: 'open', assigned_to: USER_ID },
     error: opts.rpcError ?? null,
@@ -62,7 +63,7 @@ function setup(opts: { gateOpen?: boolean; rpcError?: unknown; rpcData?: unknown
 function req(body: unknown) {
   return new Request(`http://localhost/api/v1/conversations/${CONV_ID}/assign`, {
     method: 'POST',
-    headers: { 'x-tenant-id': ORG_ID, 'content-type': 'application/json' },
+    headers: { 'x-tenant-id': ORG_ID, 'content-type': 'application/json', origin: 'https://dashboard.example', 'x-tugpt-csrf': '1' },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 }
@@ -286,3 +287,7 @@ describe('both routes — the gate and the session', () => {
     expect(JSON.stringify(body)).not.toContain('contact_phone');
   });
 });
+
+// Synthetic unit fixture only; no host or network configuration is changed.
+beforeEach(() => vi.stubEnv('TUGPT_APP_ORIGIN', 'https://dashboard.example'));
+afterEach(() => vi.unstubAllEnvs());

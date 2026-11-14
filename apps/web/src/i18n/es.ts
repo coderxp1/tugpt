@@ -390,6 +390,7 @@ export const es = {
   'errors.ALREADY_A_MEMBER': 'Esa persona ya pertenece a esta organización',
   'errors.ROLE_ABOVE_YOUR_OWN': 'No puede invitar a alguien con un rol superior al suyo',
   'errors.INVALID_EMAIL': 'Esa dirección de correo no es válida',
+  'errors.VERIFIED_EMAIL_REQUIRED': 'Verifica el correo de tu cuenta antes de aceptar una invitación.',
   'errors.INVALID_QUERY': 'Los parámetros de la consulta no son válidos',
   'errors.QUERY_WINDOW_TOO_LARGE': 'El período solicitado es demasiado grande',
   'errors.INTERNAL_ERROR': 'Ocurrió un error inesperado',
@@ -457,4 +458,7 @@ export const es = {
   'hub.metric.awaitingReview': 'por revisar',
   'hub.metric.entries': 'entradas',
   'hub.metric.inProgress': 'en curso',
+  "hub.state.held": "En espera de revisión",
+  "session.switchOrganization": "Cambiar de organización",
+  "integrations.reconciliationHold": "Las operaciones de integración están en espera. No se consulta el estado de conexión y las acciones de conectar y desconectar no están disponibles.",
 } as const;

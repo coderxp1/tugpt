@@ -1,0 +1,4 @@
+ 'use client';
+import {useEffect,useState} from 'react';
+import {usePathname} from 'next/navigation';
+export function SessionRenewal(){const pathname=usePathname();const [expired,setExpired]=useState(false);useEffect(()=>{if(pathname.startsWith('/auth'))return;let active=true;const check=async()=>{try{const r=await fetch('/api/auth/session',{cache:'no-store'});if(active&&r.status===401)setExpired(true);}catch{}};void check();const timer=setInterval(check,15000);window.addEventListener('focus',check);return()=>{active=false;clearInterval(timer);window.removeEventListener('focus',check);};},[pathname]);return expired&&!pathname.startsWith('/auth')?<div role="alert" className="fixed inset-x-0 top-0 z-50 bg-amber-100 p-4 text-center">Your Dashboard session expired. <a href="https://tugpt.pro/login.html?dashboard=1">Continue through TuGPT</a></div>:null;}

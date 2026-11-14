@@ -1,3 +1,9 @@
+## P2 source-only SSO reconciliation overlay (P2-DB-01)
+
+This derivative is not a deployed environment. P3, migration application, gateway/credential/DNS changes and production operations remain unauthorized. Historical instructions below are retained context, not current execution authority.
+
+The frozen admin factory must continue to reject the Dashboard gateway environment. The frozen feature adapter remains limited to its existing feature operation. Delivery reads use the ordinary authenticated client and the two public SSO delivery wrappers documented in `auth/sso-reconciliation.md`; they do not require a service key or new application secret. No environment variable may bypass a guard. Credentials and synthetic signing/runtime configuration belong only to separately approved disposable runtime roots, never candidate source or browser mounts. M2 is ON HOLD; CF-01 through CF-07 remain OPEN.
+
 # TuGPT Production Environment & Security Hardening Guide
 
 This document describes the environment variable configurations, secret handling, and security boundaries required for deploying the TuGPT platform to production.

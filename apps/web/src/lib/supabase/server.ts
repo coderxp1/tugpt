@@ -1,55 +1,55 @@
-// Cookie-aware Supabase server client for Next.js route handlers and server components.
-// Uses @supabase/ssr createServerClient to read auth session from request cookies,
-// so server-side code shares the same session as the browser.
+// Independent opaque Dashboard session; no legacy Auth or privileged fallback.
+import { cookies, headers as requestHeaders } from 'next/headers';
+import { createSupabaseClient, type TypedSupabaseClient } from '@tugpt/database';
+import { loadSession, bridgeToken, dbUrl, SsoError } from '@/lib/sso/core';
+import { scopedFeatureAdapter } from '@/lib/sso/feature-adapter';
 
-import { cookies } from 'next/headers';
-import { createServerClient as createSSRClient } from '@supabase/ssr';
-import { sessionCookieOptions } from './cookie-options';
-import type { TypedSupabaseClient, Database } from '@tugpt/database';
+async function sessionForRequest() {
+  // Raw headers retain duplicate cookies for the frozen parser to reject.
+  const raw = (await requestHeaders()).get('cookie');
+  const cookieHeader = raw ?? (await cookies()).getAll().map(c => `${c.name}=${c.value}`).join('; ');
+  return loadSession(cookieHeader);
+}
 
-/**
- * Create a cookie-aware Supabase client for use in Next.js server contexts
- * (route handlers, server components, server actions).
- *
- * Reads the auth session from the request cookies set by the @supabase/ssr
- * browser client, so `supabase.auth.getUser()` resolves the authenticated user.
- *
- * Must be called per-request (async) because `cookies()` is async in Next.js 16.
- */
 export async function createAuthenticatedServerClient(): Promise<TypedSupabaseClient> {
-  const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const session = await sessionForRequest();
+  const base = dbUrl(); // Missing configuration fails closed, never to legacy Auth.
+  const client = createSupabaseClient(base, 'server-only-dashboard-adapter', {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: async (input, init) => {
+      if (!session?.mapped) {
+        return Response.json({ code: '28000', message: 'Unauthenticated' }, { status: 401 });
+      }
+      const incoming = new Request(input, init);
+      const url = new URL(incoming.url);
+      if (url.origin !== base || !url.pathname.startsWith('/rest/v1/') || url.username || url.password || url.hash) {
+        throw new SsoError(503, 'configuration_unavailable');
+      }
+      const headers = new Headers(incoming.headers);
+      // Ordinary transport has no selectable SSO/control or private schema profile.
+      for (const name of ['accept-profile', 'content-profile']) {
+        if (headers.has(name) && headers.get(name) !== 'public') throw new SsoError(403, 'forbidden');
+        headers.set(name, 'public');
+      }
+      headers.set('Authorization', 'Bearer ' + bridgeToken('authenticated', session));
+      headers.delete('apikey');
+      const outgoing = new Request(base + '/' + url.pathname.slice('/rest/v1/'.length) + url.search, incoming);
+      return fetch(outgoing, {
+        headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000),
+      });
+    } },
+  });
+  // Identity is from the verified server-side session only. Profile enrichment
+  // continues through the ordinary RLS-bound AuthService, not a second Auth SDK.
+  client.auth.getUser = async () => ({ data: { user: session ? {
+    id: session.subject, email: '', user_metadata: {}, app_metadata: {},
+    aud: 'authenticated', created_at: '',
+  } : null }, error: null }) as Awaited<ReturnType<typeof client.auth.getUser>>;
+  return client;
+}
 
-  if (!supabaseUrl) {
-    throw new Error(
-      'Supabase URL is missing. Ensure NEXT_PUBLIC_SUPABASE_URL environment variable is set.'
-    );
-  }
-  if (!supabaseKey) {
-    throw new Error(
-      'Supabase Key is missing. Ensure NEXT_PUBLIC_SUPABASE_ANON_KEY environment variable is set.'
-    );
-  }
-
-  const cookieStore = await cookies();
-
-  return createSSRClient<Database>(supabaseUrl, supabaseKey, {
-    cookieOptions: sessionCookieOptions(),
-    cookies: {
-      getAll() {
-        return cookieStore.getAll();
-      },
-      setAll(cookiesToSet) {
-        try {
-          cookiesToSet.forEach(({ name, value, options }) =>
-            cookieStore.set(name, value, options)
-          );
-        } catch {
-          // The `setAll` method was called from a Server Component, which
-          // cannot set cookies. This can be ignored if you have middleware
-          // refreshing the user's session.
-        }
-      },
-    },
-  }) as unknown as TypedSupabaseClient;
+export async function createFeatureServerClient(organizationId: string): Promise<TypedSupabaseClient> {
+  const session = await sessionForRequest();
+  if (!session?.mapped) throw new SsoError(401, 'session_invalid');
+  return scopedFeatureAdapter(session, organizationId);
 }

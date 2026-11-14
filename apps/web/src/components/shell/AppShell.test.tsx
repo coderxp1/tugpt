@@ -193,15 +193,21 @@ describe('where the server/client boundary sits', () => {
     expect(source).not.toMatch(/^\s*['"]use client['"]/m);
   });
 
-  it('keeps exactly one client component in the shell', () => {
-    // Only the active-item highlight needs the current path. If a second file
-    // here goes client-side, the organization name and the reviewer's email
-    // start crossing into the browser bundle as serialised props on every
-    // navigation — worth noticing on purpose rather than discovering later.
+  it('keeps PrimaryNav client-side and nav-items free of a client directive', () => {
+    // These two file checks do not count every transitive client component.
+    // The explicit organization switcher is intentional; AppShell remains
+    // server-side. Build/runtime serialization validation is still required.
     const nav = readFileSync(path.join(__dirname, 'PrimaryNav.tsx'), 'utf8');
     expect(nav).toMatch(/^\s*['"]use client['"]/m);
 
     const items = readFileSync(path.join(__dirname, 'nav-items.ts'), 'utf8');
     expect(items).not.toMatch(/^\s*['"]use client['"]/m);
   });
+});
+
+it('keeps organization selection explicit and held modules non-operational', () => {
+  const { container } = renderShell();
+  expect(screen.getByRole('button', { name: 'Switch organization' })).toBeTruthy();
+  expect(container.querySelector('a[href="/dashboard/media"]')).toBeNull();
+  expect(container.querySelector('a[href="/settings/integrations"]')).toBeNull();
 });

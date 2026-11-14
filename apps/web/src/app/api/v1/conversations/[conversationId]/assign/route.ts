@@ -1,3 +1,5 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
+import { getRequestedTenantId } from '@/lib/tenant/request';
 /**
  * POST /api/v1/conversations/:conversationId/assign
  *
@@ -21,7 +23,7 @@
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
+import { createFeatureServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { checkDraftFeatureGate } from '@/lib/draft-api/feature-gate';
 import { mapDraftRpcError } from '@/lib/draft-api/error-mapper';
@@ -31,7 +33,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 /** `null`, a UUID, or invalid. Anything else is not an assignee. */
@@ -45,8 +47,9 @@ export async function POST(
   request: Request,
   { params }: { params: Promise<{ conversationId: string }> }
 ) {
+  if (!isSameOriginMutation(request)) return errorResponse(403, 'FORBIDDEN', 'Same-origin JSON request required');
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const { conversationId } = await params;
@@ -68,18 +71,15 @@ export async function POST(
       return errorResponse(403, 'FORBIDDEN', 'No active organization found');
     }
 
-    const adminClient = createAdminSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    const gate = await checkDraftFeatureGate(adminClient, activeTenant.organizationId);
+    const featureClient = await createFeatureServerClient(activeTenant.organizationId);
+    const gate = await checkDraftFeatureGate(featureClient, activeTenant.organizationId);
     if (!gate.allowed) {
       return errorResponse(gate.statusCode, 'FEATURE_UNAVAILABLE', gate.message);
     }
 
     let body: { assignee?: unknown; expectedAssignee?: unknown };
     try {
-      body = await request.json();
+      body = await readJsonRecord(request, ["assignee", "expectedAssignee"]);
     } catch {
       return errorResponse(400, 'INVALID_BODY', 'Invalid JSON request body');
     }
@@ -134,9 +134,16 @@ export async function POST(
       selfAssigned: assignee.value === user.id,
     });
 
-    return NextResponse.json({ conversation: data });
+    return privateJson({ conversation: data });
   } catch (err) {
     defaultLogger.error('Conversation assign failed', err as Error, { requestId });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

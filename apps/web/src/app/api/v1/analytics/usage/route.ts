@@ -1,3 +1,4 @@
+import { getRequestedTenantId } from '@/lib/tenant/request';
 /**
  * GET /api/v1/analytics/usage
  *
@@ -42,12 +43,12 @@ import type { ApiError } from '@/lib/draft-api/types';
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 export async function GET(request: Request) {
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const supabase = await createAuthenticatedServerClient();
@@ -107,7 +108,7 @@ export async function GET(request: Request) {
       unpricedEvents: summary?.totals?.unpriced_events ?? 0,
     });
 
-    return NextResponse.json({
+    return privateJson({
       range: window.range,
       window: { from: window.from, to: window.to },
       summary,
@@ -116,4 +117,11 @@ export async function GET(request: Request) {
     defaultLogger.error('Usage summary failed', err as Error, { requestId });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

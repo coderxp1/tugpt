@@ -1,13 +1,11 @@
+import { getRequestedTenantId } from '@/lib/tenant/request';
 // GET /api/v1/drafts/:draftId/delivery — the outbound delivery state
 // for one draft, for the review UI.
 //
-// Read path: session → tenant → feature gate → draft visible under
-// the active org (session client, RLS) → the delivery row via the
-// service-role RPC get_outbound_delivery_for_draft (migration
-// 20261022000003), which derives the organization from the draft
-// itself. A draft from another organization fails the visibility
-// check and gets the same 404 as a missing draft — delivery state
-// is never leaked across tenants.
+// Read path: session -> tenant -> feature gate -> draft visibility (RLS)
+// -> authenticated P2-DB-01 wrapper. The wrapper independently validates
+// bridge/session/membership/feature and both draft and delivery tenants.
+// Foreign and missing drafts retain the same 404 visibility contract.
 //
 // A draft with no delivery returns 200 { delivery: null }: pending
 // and rejected drafts legitimately have none, and an approved draft
@@ -17,7 +15,7 @@
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
+import { createFeatureServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { checkDraftFeatureGate } from '@/lib/draft-api/feature-gate';
 import {
@@ -30,15 +28,16 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 export async function GET(
   request: Request,
   { params }: { params: Promise<{ draftId: string }> }
 ) {
-  const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  // Diagnostic correlation is server-generated; never copy arbitrary header text.
+  const requestId = `req-${Date.now()}`;
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const { draftId } = await params;
@@ -60,11 +59,8 @@ export async function GET(
       return errorResponse(403, 'FORBIDDEN', 'No active organization found');
     }
 
-    const adminClient = createAdminSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    const gate = await checkDraftFeatureGate(adminClient, activeTenant.organizationId);
+    const featureClient = await createFeatureServerClient(activeTenant.organizationId);
+    const gate = await checkDraftFeatureGate(featureClient, activeTenant.organizationId);
     if (!gate.allowed) {
       return errorResponse(gate.statusCode, 'FEATURE_UNAVAILABLE', gate.message);
     }
@@ -80,18 +76,15 @@ export async function GET(
       return errorResponse(404, 'DRAFT_NOT_FOUND', 'Draft not found');
     }
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error: rpcError } = await (adminClient as any).rpc(
-      'get_outbound_delivery_for_draft',
-      { p_draft_id: draftId }
+    const { data, error: rpcError } = await supabase.rpc(
+      'sso_get_outbound_delivery_for_draft',
+      { p_organization_id: activeTenant.organizationId, p_draft_id: draftId }
     );
 
     if (rpcError) {
       defaultLogger.warn('Delivery read RPC failed', {
-        requestId,
-        draftId,
-        organizationId: activeTenant.organizationId,
-        sqlstateCode: rpcError.code,
+        requestId, failureKind: 'rpc',
+        httpStatus: 500,
       });
       return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
     }
@@ -99,9 +92,16 @@ export async function GET(
     const rows = (data ?? []) as DeliveryRow[];
     const delivery = rows.length > 0 ? toDeliveryView(rows[0]) : null;
 
-    return NextResponse.json({ delivery });
-  } catch (err) {
-    defaultLogger.error('Delivery read failed', err as Error, { requestId });
+    return privateJson({ delivery });
+  } catch {
+    defaultLogger.error('Delivery read failed', undefined, { requestId, failureKind: 'unexpected', httpStatus: 500 });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 import { APP_CONFIG } from "@/config/locales";
 import { createTranslator } from "@/i18n";
+import { SessionRenewal } from "@/components/shell/SessionRenewal";
 import { I18nProvider } from "@/i18n/provider";
 import { getRequestLocale } from "@/i18n/server";
 
@@ -41,7 +42,7 @@ export default async function RootLayout({
   return (
     <html lang={locale}>
       <body className="min-h-screen flex flex-col antialiased">
-        <I18nProvider locale={locale}>{children}</I18nProvider>
+        <I18nProvider locale={locale}><SessionRenewal />{children}</I18nProvider>
       </body>
     </html>
   );

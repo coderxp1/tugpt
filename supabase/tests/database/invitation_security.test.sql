@@ -25,12 +25,12 @@ SELECT plan(42);
 -- SETUP
 -- =============================================================================
 
-INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
-  ('a0000000-0000-0000-0000-000000000001', 'owner@acme.test',    '{"full_name":"Owner"}'),
-  ('a0000000-0000-0000-0000-000000000002', 'admin@acme.test',    '{"full_name":"Admin"}'),
-  ('a0000000-0000-0000-0000-000000000003', 'agent@acme.test',    '{"full_name":"Agent"}'),
-  ('a0000000-0000-0000-0000-000000000004', 'invitee@acme.test',  '{"full_name":"Invitee"}'),
-  ('a0000000-0000-0000-0000-000000000005', 'outsider@other.test','{"full_name":"Outsider"}')
+INSERT INTO auth.users (id, email, raw_user_meta_data, email_confirmed_at) VALUES
+  ('a0000000-0000-0000-0000-000000000001', 'owner@acme.test',    '{"full_name":"Owner"}', now()),
+  ('a0000000-0000-0000-0000-000000000002', 'admin@acme.test',    '{"full_name":"Admin"}', now()),
+  ('a0000000-0000-0000-0000-000000000003', 'agent@acme.test',    '{"full_name":"Agent"}', now()),
+  ('a0000000-0000-0000-0000-000000000004', 'invitee@acme.test',  '{"full_name":"Invitee"}', now()),
+  ('a0000000-0000-0000-0000-000000000005', 'outsider@other.test','{"full_name":"Outsider"}', now())
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO public.profiles (id, email, full_name) VALUES

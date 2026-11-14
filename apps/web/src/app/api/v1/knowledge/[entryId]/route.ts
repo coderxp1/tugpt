@@ -1,3 +1,4 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 // Knowledge entry — update and delete one entry.
 //
 // PATCH  /api/v1/knowledge/:entryId — edit question/answer and/or
@@ -26,6 +27,7 @@ export async function PATCH(
   request: Request,
   { params }: { params: Promise<{ entryId: string }> }
 ) {
+  if (!isSameOriginMutation(request)) return knowledgeError(403, 'FORBIDDEN', 'Same-origin JSON request required');
   const { entryId } = await params;
   if (!UUID_REGEX.test(entryId)) {
     return knowledgeError(400, 'INVALID_UUID', 'Invalid entry ID format');
@@ -36,9 +38,7 @@ export async function PATCH(
   const { supabase, organizationId, requestId } = resolved.context;
 
   try {
-    const body = (await request.json().catch(() => null)) as
-      | { question?: unknown; answer?: unknown; enabled?: unknown }
-      | null;
+    const body = await readJsonRecord(request, ["question", "answer", "enabled"]).catch(() => null);
     if (!body) {
       return knowledgeError(400, 'VALIDATION_ERROR', 'A JSON body is required');
     }
@@ -83,7 +83,7 @@ export async function PATCH(
       return knowledgeError(404, 'KNOWLEDGE_ENTRY_NOT_FOUND', 'Knowledge entry not found');
     }
 
-    return NextResponse.json({ entry: rows[0] });
+    return privateJson({ entry: rows[0] });
   } catch (err) {
     defaultLogger.error('Knowledge update failed', err as Error, { requestId });
     return knowledgeError(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
@@ -94,6 +94,8 @@ export async function DELETE(
   request: Request,
   { params }: { params: Promise<{ entryId: string }> }
 ) {
+  if (!isSameOriginMutation(request)) return knowledgeError(403, 'FORBIDDEN', 'Same-origin JSON request required');
+  try { await readJsonRecord(request, []); } catch { return knowledgeError(400, 'VALIDATION_ERROR', 'An empty JSON object is required'); }
   const { entryId } = await params;
   if (!UUID_REGEX.test(entryId)) {
     return knowledgeError(400, 'INVALID_UUID', 'Invalid entry ID format');
@@ -118,9 +120,16 @@ export async function DELETE(
       return knowledgeError(404, 'KNOWLEDGE_ENTRY_NOT_FOUND', 'Knowledge entry not found');
     }
 
-    return NextResponse.json({ deleted: true });
+    return privateJson({ deleted: true });
   } catch (err) {
     defaultLogger.error('Knowledge delete failed', err as Error, { requestId });
     return knowledgeError(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

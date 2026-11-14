@@ -1,4 +1,4 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, afterEach, describe, expect, it, vi } from 'vitest';
 import { GET as sessionGET } from './auth/session/route';
 import { GET as orgsGET, POST as orgsPOST } from './organizations/route';
 
@@ -125,6 +125,7 @@ describe('API v1 Organizations Route', () => {
 
     const req = new Request('http://localhost/api/v1/organizations', {
       method: 'POST',
+      headers: { origin: 'https://dashboard.example', 'x-tugpt-csrf': '1', 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'New Org', slug: 'new-org' }),
     });
     const res = await orgsPOST(req);
@@ -137,6 +138,7 @@ describe('API v1 Organizations Route', () => {
 
     const req = new Request('http://localhost/api/v1/organizations', {
       method: 'POST',
+      headers: { origin: 'https://dashboard.example', 'x-tugpt-csrf': '1', 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Only Name' }),
     });
     const res = await orgsPOST(req);
@@ -150,7 +152,7 @@ describe('API v1 Organizations Route', () => {
 
     const req = new Request('http://localhost/api/v1/organizations', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { origin: 'https://dashboard.example', 'x-tugpt-csrf': '1', 'content-type': 'application/json' },
       body: JSON.stringify({ name: 'Acme Corp', slug: 'acme-corp' }),
     });
     const res = await orgsPOST(req);
@@ -168,3 +170,6 @@ describe('API v1 Organizations Route', () => {
     });
   });
 });
+// Synthetic unit fixture only; no host or network configuration is changed.
+beforeEach(() => vi.stubEnv('TUGPT_APP_ORIGIN', 'https://dashboard.example'));
+afterEach(() => vi.unstubAllEnvs());

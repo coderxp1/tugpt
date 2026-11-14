@@ -1,3 +1,5 @@
+import { vi } from 'vitest';
+vi.mock('@/lib/supabase/server', () => ({ createFeatureServerClient: vi.fn() }));
 import { describe, expect, it } from 'vitest';
 import { PRODUCTS, attentionCount, resolveProducts, type ProductId } from './products';
 import { UNAVAILABLE_SIGNALS, summarizeWhatsapp, type HubSignals } from './signals';
@@ -51,8 +53,8 @@ describe('signals become honest states', () => {
     expect(v.conversations.state).toBe('live');
     expect(v.conversations.metric).toBe(12);
     expect(v.drafts.state).toBe('live');
-    expect(v.calendar.state).toBe('connected');
-    expect(v.whatsapp.state).toBe('connected');
+    expect(v.calendar.state).toBe('held');
+    expect(v.whatsapp.state).toBe('held');
     expect(attentionCount(resolveProducts(healthy))).toBe(0);
   });
 
@@ -70,7 +72,7 @@ describe('signals become honest states', () => {
     const products = resolveProducts(UNAVAILABLE_SIGNALS);
     for (const p of products) {
       if (p.id === 'analytics' || p.id === 'workspace') continue;
-      expect(p.state, p.id).toBe('unknown');
+      expect(p.state, p.id).toBe(['media', 'calendar', 'whatsapp'].includes(p.id) ? 'held' : 'unknown');
       expect(p.metric, p.id).toBeNull();
     }
     expect(attentionCount(products)).toBe(0);
@@ -78,14 +80,14 @@ describe('signals become honest states', () => {
 
   it('marks an expired calendar credential and a failed WhatsApp connection as attention', () => {
     const v = byId({ ...healthy, calendar: 'expired', whatsapp: 'error' });
-    expect(v.calendar.state).toBe('attention');
-    expect(v.whatsapp.state).toBe('attention');
+    expect(v.calendar.state).toBe('held');
+    expect(v.whatsapp.state).toBe('held');
   });
 
   it('asks for setup when nothing is connected or no knowledge exists', () => {
     const v = byId({ ...healthy, calendar: 'available', whatsapp: 'none', knowledgeEntries: 0 });
-    expect(v.calendar.state).toBe('setup');
-    expect(v.whatsapp.state).toBe('setup');
+    expect(v.calendar.state).toBe('held');
+    expect(v.whatsapp.state).toBe('held');
     expect(v.knowledge.state).toBe('setup');
   });
 });
@@ -102,4 +104,11 @@ describe('summarizeWhatsapp', () => {
     expect(summarizeWhatsapp(null)).toBeNull();
     expect(summarizeWhatsapp({ status: 'active' })).toBeNull();
   });
+});
+
+it('held products never acquire links or metrics from enabled flags', () => {
+  for (const p of resolveProducts({ ...healthy, mediaFeatureEnabled: true })) {
+    if (!['media', 'calendar', 'whatsapp'].includes(p.id)) continue;
+    expect(p.href).toBeNull(); expect(p.metric).toBeNull(); expect(p.state).toBe('held');
+  }
 });

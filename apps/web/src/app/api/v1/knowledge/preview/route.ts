@@ -1,3 +1,4 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 // Knowledge retrieval preview — "what would the assistant use
 // for this customer question?"
 //
@@ -24,14 +25,13 @@ import {
 const QUESTION_MAX = 2000;
 
 export async function POST(request: Request) {
+  if (!isSameOriginMutation(request)) return knowledgeError(403, 'FORBIDDEN', 'Same-origin JSON request required');
   const resolved = await resolveKnowledgeContext(request);
   if ('response' in resolved) return resolved.response;
   const { supabase, organizationId, requestId } = resolved.context;
 
   try {
-    const body = (await request.json().catch(() => null)) as
-      | { question?: unknown }
-      | null;
+    const body = await readJsonRecord(request, ["question"]).catch(() => null);
     if (!body) {
       return knowledgeError(400, 'VALIDATION_ERROR', 'A JSON body is required');
     }
@@ -57,9 +57,16 @@ export async function POST(request: Request) {
     }
 
     const selected = selectKnowledgeEntries(data ?? [], question.text);
-    return NextResponse.json({ selected });
+    return privateJson({ selected });
   } catch (err) {
     defaultLogger.error('Knowledge preview failed', err as Error, { requestId });
     return knowledgeError(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

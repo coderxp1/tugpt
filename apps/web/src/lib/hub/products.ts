@@ -43,6 +43,8 @@ export type ProductState =
   | 'setup'
   /** Designed, not yet built. Never linked. */
   | 'planned'
+  /** Intentionally unavailable pending separate security review. */
+  | 'held'
   /** The signal could not be read. */
   | 'unknown';
 
@@ -76,13 +78,14 @@ export const PRODUCTS: readonly ProductDefinition[] = [
   { id: 'drafts', titleKey: 'hub.product.drafts', descriptionKey: 'hub.product.drafts.desc', glyph: 'draft', href: '/dashboard/drafts', slot: { x: 20, y: 39 } },
   { id: 'knowledge', titleKey: 'hub.product.knowledge', descriptionKey: 'hub.product.knowledge.desc', glyph: 'book', href: '/dashboard/knowledge', slot: { x: 20, y: 61 } },
   { id: 'whatsapp', titleKey: 'hub.product.whatsapp', descriptionKey: 'hub.product.whatsapp.desc', glyph: 'phone', href: null, slot: { x: 26, y: 82 } },
-  { id: 'media', titleKey: 'hub.product.media', descriptionKey: 'hub.product.media.desc', glyph: 'film', href: '/dashboard/media', slot: { x: 74, y: 18 } },
-  { id: 'calendar', titleKey: 'hub.product.calendar', descriptionKey: 'hub.product.calendar.desc', glyph: 'calendar', href: '/settings/integrations', slot: { x: 80, y: 39 } },
+  { id: 'media', titleKey: 'hub.product.media', descriptionKey: 'hub.product.media.desc', glyph: 'film', href: null, slot: { x: 74, y: 18 } },
+  { id: 'calendar', titleKey: 'hub.product.calendar', descriptionKey: 'hub.product.calendar.desc', glyph: 'calendar', href: null, slot: { x: 80, y: 39 } },
   { id: 'analytics', titleKey: 'hub.product.analytics', descriptionKey: 'hub.product.analytics.desc', glyph: 'chart', href: '/dashboard/analytics', slot: { x: 80, y: 61 } },
   { id: 'workspace', titleKey: 'hub.product.workspace', descriptionKey: 'hub.product.workspace.desc', glyph: 'spark', href: null, slot: { x: 74, y: 82 } },
 ];
 
 const STATE_KEYS: Record<ProductState, MessageKey> = {
+  held: 'hub.state.held',
   live: 'hub.state.live',
   attention: 'hub.state.attention',
   connected: 'hub.state.connected',
@@ -108,24 +111,9 @@ function resolve(
       if (s.knowledgeEntries === null) return { state: 'unknown', metric: null, metricKey: null };
       return { state: s.knowledgeEntries > 0 ? 'live' : 'setup', metric: s.knowledgeEntries, metricKey: 'hub.metric.entries' };
     case 'media':
-      if (s.activeMediaJobs === null) return { state: 'unknown', metric: null, metricKey: null };
-      return { state: 'live', metric: s.activeMediaJobs, metricKey: 'hub.metric.inProgress' };
     case 'calendar':
-      switch (s.calendar) {
-        case 'connected': return { state: 'connected', metric: null, metricKey: null };
-        case 'expired': return { state: 'attention', metric: null, metricKey: null };
-        case 'available':
-        case 'unconfigured': return { state: 'setup', metric: null, metricKey: null };
-        default: return { state: 'unknown', metric: null, metricKey: null };
-      }
     case 'whatsapp':
-      switch (s.whatsapp) {
-        case 'active': return { state: 'connected', metric: null, metricKey: null };
-        case 'error': return { state: 'attention', metric: null, metricKey: null };
-        case 'pending':
-        case 'none': return { state: 'setup', metric: null, metricKey: null };
-        default: return { state: 'unknown', metric: null, metricKey: null };
-      }
+      return { state: 'held', metric: null, metricKey: null };
     case 'analytics':
       return { state: 'live', metric: null, metricKey: null };
     case 'workspace':
@@ -136,8 +124,8 @@ function resolve(
 export function resolveProducts(signals: HubSignals): ProductView[] {
   return PRODUCTS.map((p) => {
     const r = resolve(p.id, signals);
-    const gated = ['conversations', 'drafts', 'knowledge', 'media'].includes(p.id);
-    const enabled = p.id === 'media' ? signals.mediaFeatureEnabled : signals.draftFeatureEnabled;
+    const gated = ['conversations', 'drafts', 'knowledge'].includes(p.id);
+    const enabled = signals.draftFeatureEnabled;
     const featureAccess = !gated || enabled === undefined ? undefined : enabled === null ? 'unknown' : enabled ? 'enabled' : 'disabled';
     return { ...p, ...r, featureAccess, stateKey: STATE_KEYS[r.state] };
   });

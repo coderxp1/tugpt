@@ -373,6 +373,7 @@ export const en: Dictionary = {
   'errors.ALREADY_A_MEMBER': 'That person is already in this organization',
   'errors.ROLE_ABOVE_YOUR_OWN': 'You cannot invite someone at a role above your own',
   'errors.INVALID_EMAIL': 'That is not a valid email address',
+  'errors.VERIFIED_EMAIL_REQUIRED': 'Verify your account email before accepting an invitation.',
   'errors.INVALID_QUERY': 'The query parameters are not valid',
   'errors.QUERY_WINDOW_TOO_LARGE': 'The requested time window is too large',
   'errors.INTERNAL_ERROR': 'An unexpected error occurred',
@@ -439,4 +440,7 @@ export const en: Dictionary = {
   'hub.metric.awaitingReview': 'awaiting review',
   'hub.metric.entries': 'entries',
   'hub.metric.inProgress': 'in progress',
+  "hub.state.held": "On hold pending review",
+  "session.switchOrganization": "Switch organization",
+  "integrations.reconciliationHold": "Integration operations are on hold. Connection status is not queried, and connect/disconnect actions are unavailable.",
 };

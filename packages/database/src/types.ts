@@ -686,9 +686,25 @@ export interface FailedJob {
   created_at: string;
 }
 
-export interface Database {
+interface DatabaseDefinition {
+  sso: SsoSchema;
   public: {
     Tables: {
+      // Existing held module: type-only read schema; no access or feature is enabled.
+      media_generation_jobs: {
+        Row: {
+          id: string; organization_id: string; kind: 'image' | 'video';
+          status: 'queued' | 'processing' | 'completed' | 'skipped' | 'cancelled' | 'dead_lettered';
+          prompt: string; params: Record<string, unknown>; prompt_id: string | null;
+          attempts: number; pgmq_msg_id: number | null; created_by: string;
+          started_at: string | null; finished_at: string | null; gpu_seconds: number | null;
+          idempotency_key: string | null; error_code: string | null; error_reason: string | null;
+          cancel_reason: string | null; skip_reason: string | null; result_path: string | null;
+          created_at: string; updated_at: string;
+        };
+        Insert: never;
+        Update: never;
+      };
       profiles: {
         Row: Profile;
         Insert: Omit<Profile, 'created_at' | 'updated_at'> & { created_at?: string; updated_at?: string };
@@ -887,6 +903,33 @@ export interface Database {
       [_ in never]: never;
     };
     Functions: {
+      // P2-DB-01: authenticated bridge-only delivery reads.
+      sso_get_outbound_delivery_for_draft: {
+        Args: { p_organization_id: string; p_draft_id: string };
+        Returns: {
+          id: string; organization_id: string; draft_id: string; status: string;
+          provider_message_id: string | null; attempts: number; error_code: string | null;
+          updated_at: string; delivered_at: string | null; read_at: string | null;
+        }[];
+      };
+      sso_list_outbound_deliveries_for_drafts: {
+        Args: { p_organization_id: string; p_draft_ids: string[] };
+        Returns: {
+          id: string; organization_id: string; draft_id: string; status: string;
+          provider_message_id: string | null; attempts: number; error_code: string | null;
+          updated_at: string; delivered_at: string | null; read_at: string | null;
+        }[];
+      };
+      // Authorization review: browser membership DML is replaced by checked RPCs.
+      manage_organization_member: {
+        Args: { p_organization_id: string; p_user_id: string; p_action: 'add' | 'set_role' | 'remove'; p_role?: OrganizationRole | null };
+        Returns: { organization_id: string; user_id: string; action: string; role: OrganizationRole | null };
+      };
+      transfer_organization_ownership: {
+        Args: { p_organization_id: string; p_new_owner_id: string };
+        Returns: { organization_id: string; owner_id: string };
+      };
+
       organization_connected_accounts: {
         Args: { p_organization_id: string };
         Returns: ConnectedAccount[];
@@ -1128,3 +1171,55 @@ export interface Database {
     };
   };
 }
+
+/** Reconciliation metadata types only: direct SSO table access is denied by SQL ACLs. */
+export type SsoJson = null | boolean | number | string | SsoJson[] | { [key: string]: SsoJson };
+export interface SsoSessionRow {
+  hash: string; subject: string; auth_session: string; issued_at: string;
+  expires_at: string; revoked_at: string | null;
+  canonical_email: string | null; email_verified_at: string | null;
+}
+type SsoReadOnlyTable<T> = { Row: T; Insert: never; Update: never; Relationships: [] };
+export interface SsoSchema {
+  Tables: {
+    identity_bindings: SsoReadOnlyTable<{ canonical_sub: string; dashboard_user_id: string; canonical_issuer: string; reviewed_at: string }>;
+    revoked_auth_sessions: SsoReadOnlyTable<{ subject: string; auth_session: string; revoked_at: string }>;
+    tickets: SsoReadOnlyTable<{ hash: string; subject: string; auth_session: string; expires_at: string; verified_at: string; session_deadline: string; canonical_email: string | null }>;
+    sessions: SsoReadOnlyTable<SsoSessionRow>;
+    rate_limits: SsoReadOnlyTable<{ bucket: string; window_start: string; attempts: number }>;
+  };
+  Views: Record<never, never>;
+  Functions: {
+    limit_request: { Args: { p_bucket: string; p_limit: number }; Returns: boolean };
+    issue_ticket: { Args: { p_hash: string; p_subject: string; p_auth_session: string; p_token_exp: number; p_token_iat: number }; Returns: boolean };
+    issue_verified_ticket: { Args: { p_hash: string; p_subject: string; p_auth_session: string; p_token_exp: number; p_token_iat: number; p_canonical_email?: string | null }; Returns: boolean };
+    consume_ticket: { Args: { p_ticket_hash: string; p_session_hash: string }; Returns: SsoJson };
+    load_session: { Args: { p_hash: string }; Returns: SsoJson };
+    logout_session: { Args: { p_hash: string; p_ticket_hash?: string | null }; Returns: undefined };
+    revoke_auth_session: { Args: { p_subject: string; p_auth_session: string }; Returns: undefined };
+    pre_request: { Args: Record<never, never>; Returns: undefined };
+    cleanup_expired: { Args: Record<never, never>; Returns: undefined };
+    require_session: { Args: Record<never, never>; Returns: string };
+    require_actor: { Args: { p_org: string; p_write?: boolean }; Returns: string };
+    feature_enabled: { Args: { p_organization_id: string; p_flag_key: string }; Returns: boolean };
+  };
+  Enums: Record<never, never>;
+  CompositeTypes: Record<never, never>;
+}
+
+/** Normalize hand-authored table interfaces to the SDK's structural schema.
+ * This is type-only: no SQL grants, transport, policies or runtime behavior change.
+ * No foreign-key relationship metadata was previously declared here.
+ */
+type RecordShape<T> = { [K in keyof T]: T[K] };
+type SdkTable<T extends { Row: unknown; Insert: unknown; Update: unknown }> = {
+  Row: RecordShape<T['Row']>;
+  Insert: RecordShape<T['Insert']>;
+  Update: RecordShape<T['Update']>;
+  Relationships: [];
+};
+export type Database = Omit<DatabaseDefinition, 'public'> & {
+  public: Omit<DatabaseDefinition['public'], 'Tables'> & {
+    Tables: { [K in keyof DatabaseDefinition['public']['Tables']]: SdkTable<DatabaseDefinition['public']['Tables'][K]> };
+  };
+};

@@ -1,3 +1,4 @@
+import { getRequestedTenantId } from '@/lib/tenant/request';
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
@@ -5,7 +6,7 @@ import { AuthService } from '@tugpt/auth';
 
 export async function GET(request: Request) {
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const supabase = await createAuthenticatedServerClient();
@@ -15,7 +16,7 @@ export async function GET(request: Request) {
 
     if (!user) {
       defaultLogger.info('Session check: unauthenticated', { requestId });
-      return NextResponse.json(
+      return privateJson(
         { authenticated: false, user: null, activeTenant: null },
         { status: 401 }
       );
@@ -23,6 +24,9 @@ export async function GET(request: Request) {
 
     // Resolve active tenant context server-side (validating user membership)
     const activeTenant = await authService.resolveTenantContext(user.id, rawTenantId);
+    if (rawTenantId && !activeTenant) {
+      return privateJson({ error: 'Access denied to requested tenant' }, { status: 403 });
+    }
 
     defaultLogger.info('Session check: authenticated', {
       requestId,
@@ -30,7 +34,7 @@ export async function GET(request: Request) {
       tenantId: activeTenant?.organizationId || null,
     });
 
-    return NextResponse.json({
+    return privateJson({
       authenticated: true,
       user: {
         id: user.id,
@@ -43,6 +47,12 @@ export async function GET(request: Request) {
     });
   } catch (err) {
     defaultLogger.error('Session check failed', err as Error, { requestId });
-    return NextResponse.json({ error: 'Internal Server Error' }, { status: 500 });
+    return privateJson({ error: 'Internal Server Error' }, { status: 500 });
   }
+}
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

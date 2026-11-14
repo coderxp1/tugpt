@@ -1,3 +1,5 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
+import { getRequestedTenantId } from '@/lib/tenant/request';
 /**
  * POST /api/v1/invitations/:invitationId/revoke
  *
@@ -24,15 +26,17 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ invitationId: string }> }
 ) {
+  if (!isSameOriginMutation(request)) return errorResponse(403, 'FORBIDDEN', 'Same-origin JSON request required');
+  try { await readJsonRecord(request, []); } catch { return errorResponse(400, 'INVALID_BODY', 'An empty JSON object is required'); }
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const { invitationId } = await params;
@@ -71,9 +75,16 @@ export async function POST(
       invitationId,
     });
 
-    return NextResponse.json({ invitation: data });
+    return privateJson({ invitation: data });
   } catch (err) {
     defaultLogger.error('Invitation revoke failed', err as Error, { requestId });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

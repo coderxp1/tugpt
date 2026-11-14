@@ -9,11 +9,11 @@ SELECT plan(10);
 -- =============================================================================
 
 -- Seed Users in auth.users
-INSERT INTO auth.users (id, email, raw_user_meta_data) VALUES
-  ('11111111-1111-1111-1111-111111111111', 'owner_a@example.com', '{"full_name": "Owner A"}'),
-  ('22222222-2222-2222-2222-222222222222', 'admin_b@example.com', '{"full_name": "Admin B"}'),
-  ('33333333-3333-3333-3333-333333333333', 'invitee_c@example.com', '{"full_name": "Invitee C"}'),
-  ('44444444-4444-4444-4444-444444444444', 'rollback_d@example.com', '{"full_name": "Rollback D"}')
+INSERT INTO auth.users (id, email, raw_user_meta_data, email_confirmed_at) VALUES
+  ('11111111-1111-1111-1111-111111111111', 'owner_a@example.com', '{"full_name": "Owner A"}', now()),
+  ('22222222-2222-2222-2222-222222222222', 'admin_b@example.com', '{"full_name": "Admin B"}', now()),
+  ('33333333-3333-3333-3333-333333333333', 'invitee_c@example.com', '{"full_name": "Invitee C"}', now()),
+  ('44444444-4444-4444-4444-444444444444', 'rollback_d@example.com', '{"full_name": "Rollback D"}', now())
 ON CONFLICT (id) DO NOTHING;
 
 -- Seed Profiles
@@ -185,16 +185,16 @@ SELECT is(
 -- Try to downgrade User B (currently the last and only owner of Acme Hardening Corp)
 SELECT throws_ok(
   $$UPDATE public.organization_members SET role = 'admin' WHERE organization_id = 'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1' AND user_id = '22222222-2222-2222-2222-222222222222'$$,
-  'P0001',
-  'Action blocked: An organization must have at least one active owner',
+  'P3S05',
+  'An organization must retain an owner',
   'Test 6a: Last owner downgrade is blocked'
 );
 
 -- Try to delete User B (last owner) membership record
 SELECT throws_ok(
   $$DELETE FROM public.organization_members WHERE organization_id = 'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1' AND user_id = '22222222-2222-2222-2222-222222222222'$$,
-  'P0001',
-  'Action blocked: An organization must have at least one active owner',
+  'P3S05',
+  'An organization must retain an owner',
   'Test 6b: Last owner deletion is blocked'
 );
 
@@ -212,19 +212,14 @@ SET LOCAL ROLE postgres;
 -- unlike the previous "$$DO $$$ ... $$$$" construction which the Postgres
 -- parser could not tokenize (outer $$ was closed by the inner DO's $$).
 --
--- The exception handler intentionally catches only SQLSTATE 'P0001' — the
--- specific code raised by private.prevent_last_owner_removal() (a bare
--- `RAISE EXCEPTION` with no explicit SQLSTATE defaults to P0001, matching
--- every other throws_ok() assertion in this file). Catching WHEN OTHERS here
--- would silently swallow an unrelated failure (e.g. a broken INSERT) and let
--- this test pass for the wrong reason; anything other than P0001 re-raises
--- and correctly fails the test instead of being hidden.
+-- Catch only the explicit last-owner SQLSTATE P3S05. Unrelated errors must
+-- still fail this test rather than being swallowed by WHEN OTHERS.
 --
 -- Uses User D ('44444444-...'), seeded as a profile only with no existing
 -- organization_members row. User C ('33333333-...') was used originally,
 -- but Test 3 already grants User C real membership via accept_invitation(),
 -- so inserting User C again here raised 23505 (duplicate key) before the
--- test could ever reach the intended P0001 ownership-protection path, and
+-- test could ever reach the intended P3S05 ownership-protection path, and
 -- Test 7b then observed User C's pre-existing row instead of a genuine
 -- rollback. User D has no membership until this block runs, so the INSERT
 -- below is guaranteed to be new, and Test 7b's zero-count assertion proves
@@ -237,14 +232,14 @@ SELECT lives_ok(
     INSERT INTO public.organization_members (organization_id, user_id, role)
     VALUES ('d1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1', '44444444-4444-4444-4444-444444444444', 'agent');
 
-    -- This triggers P0001 via private.prevent_last_owner_removal()
+    -- This triggers P3S05 via private.prevent_last_owner_removal()
     -- (User B is currently the organization's sole owner; see Tests 4-5).
     UPDATE public.organization_members
     SET role = 'admin'
     WHERE organization_id = 'd1d1d1d1-d1d1-d1d1-d1d1-d1d1d1d1d1d1'
       AND user_id = '22222222-2222-2222-2222-222222222222';
   EXCEPTION
-    WHEN SQLSTATE 'P0001' THEN
+    WHEN SQLSTATE 'P3S05' THEN
       -- Expected ownership-protection exception: the PL/pgSQL exception
       -- block's implicit subtransaction rolls back everything since BEGIN,
       -- including the earlier valid INSERT above. Swallow only this code.

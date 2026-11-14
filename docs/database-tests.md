@@ -1,3 +1,29 @@
+## Consolidated P2 closure source pass - current status
+
+The owner approved the closure proposal, H09/H12/H17 SQL-text exception and A15-A23 diagnostic-privacy addition: 24 existing editable rows, unchanged 155 candidate / 21 review-path allowlist. This section supersedes earlier unfinished-source descriptions; the previous text below remains historical context, not current execution evidence.
+
+Source is authored for review, not accepted as P2 complete. All derivative execution remains NOT RUN. M2 is ON HOLD; CF-01-CF-07 are OPEN; P3 is unauthorized. D6, hosted/data-owner/identity validation and production release are separate. This pass performed no dependency installation/resolution, build, lint, typecheck, tests, SQL, migration, runtime, service, container, infrastructure, gateway, DNS, credential, deployment or publication operation.
+
+### Assertion reconciliation and evidence completeness
+
+T10's three tautologies are replaced. Two checks inspect direct imports, including side-effect import syntax; they are not transitive dependency or runtime-egress proof. Logging checks invoke all nine real handlers with independent message/stack/name/header/body/token sentinels and observe actual serialized console diagnostics from the unchanged logger. Supplemental service-exception, RPC-warning and success-log cases check unchanged sanitized HTTP errors and private/no-store. None has run.
+
+T02 titles disclose already-approved 410 retirement while retaining original identities. T19 preserves the three ordinary gated products and adds per-product false/null/true checks with unconditional holds. T22 describes actual server/client/data assertions rather than a global component count. T01 is reviewed and unchanged: local logout confirmation/failure/retry is not coordinated M2 logout. Preserve 39 original identities (35 retained expectations and four P2-AC-01 substitutions), ten W1 groups/32 assertions and W1-10 accounting.
+
+The 185-stage register records existing web/worker/package scripts and exact test/SQL files. TAP rejects not-ok, bailout, skip/TODO, missing/duplicate plans and incomplete identities even with exit zero. Vitest requires exact files and every assertion passing. Historical appointment_requests service-role DELETE, transcription-worker lease-extension and aggregate no-dead-domain residuals are reproduction/classification obligations, not presumed failures or waived green CI.
+
+H17's ten identities remain separate from H19's delivery races. Sequential stale-CAS requests are conflict evidence, not concurrent transaction races; H17/H19/unchanged SQL tests retain their specific concurrency boundaries. UI-only intercepted inbox/analytics errors are presentation evidence, not real backend-failure evidence. Source declarations and syntax parsing are not executable test results.
+
+## Historical checkpoint and prior operational guidance
+
+## P2-DB-01 test source and evidence status
+
+All derivative tests are NOT RUN. No build, lint, typecheck, dependency resolution or SQL execution occurred. The separate review-root `test-map.json` is the assertion/feature/path register; it separates historical results, derivative expectations and absent coverage.
+
+T10 asserts the ordinary client, scoped parameters, narrow feature client, delivery/receipt JSON, nondisclosure, error degradation and no fallback. T34 covers two wrapper return contracts, feature/session/revocation and array bounds. T35 covers effective privileges, actual role-execution denials, owner/search-path/overloads and preservation of the old service-only grants. T36 covers mixed-tenant input, duplicate/missing/foreign IDs, removed membership and removed mapping. H19 adds real HTTP/raw-PostgREST probes and 12 observed-blocker delivery race cases; H16 adds a separate real-login browser/API read journey. They are authored test sources, not execution evidence.
+
+Original SQL regression files remain unchanged, including approval/enqueue, outbound delivery and receipt suites. Existing weak structural placeholder assertions are disclosed in H21 and are not proof of absence of provider calls. Wider ordinary write journeys, baseline/unit/worker comparison and migration failure/upgrade evidence remain unfinished outside this narrow amendment. No worker or provider execution is authorized. Historical 39-check accounting is 35 retained expectations plus four approved P2-AC-01 substitutions; W1 remains 10 groups/32 assertions with explicit W1-10 accounting.
+
 # The database test suite
 
 **Status:** active

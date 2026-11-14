@@ -11,13 +11,12 @@
  * query failed is lying in the most dangerous direction: it tells a reviewer
  * nobody needs them.
  *
- * Google status reuses the integrations page's helper unchanged. It returns
- * metadata booleans only; no token, secret name or scope list reaches the
- * browser from here.
+ * Held capabilities have no status lookups. Feature queries use the narrow
+ * session-bound adapter, not privileged credentials; they may take DB locks.
  */
 
-import { createAdminSupabaseClient, type TypedSupabaseClient } from '@tugpt/database';
-import { getGoogleIntegrationStatus } from '@/lib/google-integrations/status';
+import type { TypedSupabaseClient } from '@tugpt/database';
+import { createFeatureServerClient } from '@/lib/supabase/server';
 
 export interface HubSignals {
   /** Existing server-side feature gate; never enables or changes it. */
@@ -92,46 +91,11 @@ export function summarizeWhatsapp(rows: unknown): HubSignals['whatsapp'] {
   return 'none';
 }
 
-async function whatsappState(db: LooseClient, organizationId: string): Promise<HubSignals['whatsapp']> {
+async function featureState(organizationId: string): Promise<boolean | null> {
   try {
-    const { data, error } = await db
-      .from('whatsapp_connections')
-      .select('status')
-      .eq('organization_id', organizationId)
-      .limit(20);
-    return error ? null : summarizeWhatsapp(data);
-  } catch {
-    return null;
-  }
-}
-
-async function calendarState(
-  db: TypedSupabaseClient,
-  organizationId: string
-): Promise<HubSignals['calendar']> {
-  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-  const serviceKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
-  if (!url || !serviceKey) return null;
-  try {
-    const admin = createAdminSupabaseClient(url, serviceKey);
-    const status = await getGoogleIntegrationStatus(db, admin, organizationId);
-    if (status.connected) return status.credentialExpired ? 'expired' : 'connected';
-    return status.platformConfigured ? 'available' : 'unconfigured';
-  } catch {
-    return null;
-  }
-}
-
-async function featureState(organizationId: string, flag: 'ai_draft_generation' | 'media_generation'): Promise<boolean | null> {
-  try {
-    const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
-    if (!url || !key) return null;
-    const admin = createAdminSupabaseClient(url, key);
-    // Same flag and RPC as the existing draft/knowledge API, read-only.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const { data, error } = await (admin as any).rpc('is_feature_enabled', {
-      p_organization_id: organizationId, p_flag_key: flag,
+    const feature = await createFeatureServerClient(organizationId);
+    const { data, error } = await feature.rpc('is_feature_enabled', {
+      p_organization_id: organizationId, p_flag_key: 'ai_draft_generation',
     });
     return error || typeof data !== 'boolean' ? null : data;
   } catch { return null; }
@@ -144,18 +108,15 @@ export async function loadHubSignals(
   const loose = db as unknown as LooseClient;
   const count = (table: string) => loose.from(table).select('id', { count: 'exact', head: true });
 
-  const [needsHuman, openConversations, draftsAwaitingReview, knowledgeEntries, activeMediaJobs, whatsapp, calendar, draftFeatureEnabled, mediaFeatureEnabled] =
+  const [needsHuman, openConversations, draftsAwaitingReview, knowledgeEntries, draftFeatureEnabled] =
     await Promise.all([
       countOf(count('conversations').eq('organization_id', organizationId).eq('status', 'needs_human')),
       countOf(count('conversations').eq('organization_id', organizationId).in('status', ['open', 'needs_human'])),
       countOf(count('ai_drafts').eq('organization_id', organizationId).eq('status', 'draft')),
       countOf(count('knowledge_entries').eq('organization_id', organizationId)),
-      countOf(count('media_generation_jobs').eq('organization_id', organizationId).in('status', ['queued', 'processing'])),
-      whatsappState(loose, organizationId),
-      calendarState(db, organizationId),
-      featureState(organizationId, 'ai_draft_generation'),
-      featureState(organizationId, 'media_generation'),
+      featureState(organizationId),
     ]);
 
-  return { needsHuman, openConversations, draftsAwaitingReview, knowledgeEntries, activeMediaJobs, whatsapp, calendar, draftFeatureEnabled, mediaFeatureEnabled };
+  return { needsHuman, openConversations, draftsAwaitingReview, knowledgeEntries, draftFeatureEnabled,
+    activeMediaJobs: null, whatsapp: null, calendar: null, mediaFeatureEnabled: null };
 }

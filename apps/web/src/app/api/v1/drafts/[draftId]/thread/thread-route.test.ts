@@ -65,14 +65,15 @@ const mockFrom = vi.fn((table: string) => {
   return chain;
 });
 
-const mockAdminRpc = vi.fn();
+const mockFeatureRpc = vi.fn();
 
 vi.mock('@/lib/supabase/server', () => ({
+  createFeatureServerClient: vi.fn(async () => ({ rpc: mockFeatureRpc })),
   createAuthenticatedServerClient: vi.fn(() => Promise.resolve({ from: mockFrom, rpc: vi.fn() })),
 }));
 
 vi.mock('@tugpt/database', () => ({
-  createAdminSupabaseClient: vi.fn(() => ({ rpc: mockAdminRpc })),
+  createAdminSupabaseClient: vi.fn(() => { throw new Error('Privileged transport forbidden'); }),
 }));
 
 const mockGetCurrentUser = vi.fn();
@@ -129,7 +130,7 @@ function setup(
     organizationName: 'Panadería La Espiga',
     role: 'owner',
   });
-  mockAdminRpc.mockResolvedValue({ data: true, error: null });
+  mockFeatureRpc.mockResolvedValue({ data: true, error: null });
 
   tables['ai_drafts'] = {
     single: opts.draftMissing
@@ -407,7 +408,7 @@ describe('who may read it', () => {
     // The same gate every other draft route passes through. A route that reads
     // customer conversations must not be the one that forgot it.
     setup();
-    mockAdminRpc.mockResolvedValue({ data: false, error: null });
+    mockFeatureRpc.mockResolvedValue({ data: false, error: null });
     const { res, body } = await call();
 
     expect(res.status).toBe(503);

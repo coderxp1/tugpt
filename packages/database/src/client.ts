@@ -28,6 +28,10 @@ export function createAdminSupabaseClient(
   supabaseUrl: string,
   serviceRoleKey: string
 ): TypedSupabaseClient {
+  // Isolated SSO candidate: inherited privileged transports are not yet approved for the new identity boundary.
+  if (process.env.TUGPT_DASHBOARD_POSTGREST_URL) {
+    throw new Error('Privileged SSO adapter requires review; legacy admin transport disabled.');
+  }
   if (typeof window !== 'undefined') {
     throw new Error('Security Violation: Cannot create an admin Supabase client in the browser environment.');
   }

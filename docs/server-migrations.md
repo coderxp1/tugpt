@@ -1,3 +1,25 @@
+## Consolidated P2 closure source pass - current status
+
+The owner approved the closure proposal, H09/H12/H17 SQL-text exception and A15-A23 diagnostic-privacy addition: 24 existing editable rows, unchanged 155 candidate / 21 review-path allowlist. This section supersedes earlier unfinished-source descriptions; the previous text below remains historical context, not current execution evidence.
+
+Source is authored for review, not accepted as P2 complete. All derivative execution remains NOT RUN. M2 is ON HOLD; CF-01-CF-07 are OPEN; P3 is unauthorized. D6, hosted/data-owner/identity validation and production release are separate. This pass performed no dependency installation/resolution, build, lint, typecheck, tests, SQL, migration, runtime, service, container, infrastructure, gateway, DNS, credential, deployment or publication operation.
+
+### Migration compatibility and uncertainty contract
+
+The 73 historical migrations and D01-D03 bytes remain unchanged. H09 probes PG17+, available pgcrypto/uuid-ossp/vector/btree_gist/pgmq/pgtap, owner/roles and an empty baseline. It checks the exact Auth skeleton before unchanged fixture DDL, helper presence afterward, and observes default ACLs; unchanged D06 effective-privilege TAP remains required. Pinned-image compatibility is UNVERIFIED, not inferred from its name.
+
+Eight source scenarios: baseline-only, fresh, baseline-upgrade, drift, replay, lock-timeout, partial-failure and ledger-interruption. Upgrade means a recorded 73-unit baseline checkpoint followed by D01-D03 in the same owned disposable resource, not an existing hosted database. Drift invokes the same hash/version/ledger guards as application against controlled bad observations, without forged ledger rows. Lock timeout requires an observed blocker and SQLSTATE 55P03. Partial failure is injected between units. The SQL-success/ledger-pending case invokes the uncertain-state guard.
+
+SQL and ledger insertion are NOT asserted atomic. Checkpoints precede SQL and the ledger insert; any in-flight/partial state refuses automatic retry. Existing evidence is not overwritten. Never blindly rerun SQL, backfill ledger entries, strip historical SQL, use historical rollback scripts, edit applied migrations or delete revocation tombstones. A forward correction needing new SQL requires a separate exact approval. Successful disposable evidence would not establish hosted/data-owner compatibility.
+
+## Historical checkpoint and prior operational guidance
+
+## Source-only RDB reconciliation boundary
+
+No migration described here has been applied by P2. The exact 73 historical baseline migrations are immutable. The three additions remain `20261106000001_sso_reconciliation_core.sql`, `20261106000002_sso_reconciliation_support.sql` and `20261106000003_sso_reconciliation_business_compatibility.sql`, in that order, after the complete baseline chain.
+
+P2-DB-01 adds only two new public delivery-read wrappers and their ACLs to the third file. It does not replace or grant access to the original service-only delivery functions. The owner prerequisite remains explicitly reviewed disposable postgres ownership; SQL execution is not authorized. PostgreSQL 17+ prerequisites and pinned image compatibility must be established before any separately approved run. Do not edit historical migrations, prefill the ledger, use a schema dump or apply broad default-ACL repairs to make a run succeed. Stop on prerequisite/owner/role/schema drift. Failed/upgrade/replay migration evidence and rollback/recovery approval are not established by source authorship.
+
 # Applying database migrations from the server
 
 **Status:** active procedure
@@ -237,8 +259,10 @@ reference date, and a source naming both.
 
 <!-- schema-gate-sample:start -->
 
+The following is expected output for this candidate checkout after an approved deployment, not a statement of current production state. The four authorization-review migrations remain unapproved for production.
+
 ```
-  [ok]   all 70 migration(s) in this checkout are applied (database has 70, latest 20261112000001)
+  [ok]   all 77 migration(s) in this checkout are applied (database has 77, latest 20261112000001)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout
@@ -246,7 +270,7 @@ reference date, and a source naming both.
 
 <!-- schema-gate-sample:end -->
 
-The count and the latest version above are real values, and
+The count and latest version above describe this candidate checkout, not the live database, and
 `apps/worker/tests/server-migrations-doc.test.ts` asserts they match
 `supabase/migrations` in this checkout — which is the only reason this block
 is still true. It has now gone stale twice and been caught by that test both

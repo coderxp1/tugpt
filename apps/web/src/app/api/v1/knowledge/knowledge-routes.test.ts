@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { GET as listGET, POST as createPOST } from './route';
 import { PATCH as patchPATCH, DELETE as deleteDELETE } from './[entryId]/route';
 import { POST as previewPOST } from './preview/route';
@@ -13,10 +13,11 @@ import { POST as previewPOST } from './preview/route';
 // preview tests assert — is the production function, while the
 // admin client (feature gate) is stubbed.
 
-const mockAdminRpc = vi.fn();
+const mockFeatureRpc = vi.fn();
 const mockFrom = vi.fn();
 
 vi.mock('@/lib/supabase/server', () => ({
+  createFeatureServerClient: vi.fn(async () => ({ rpc: mockFeatureRpc })),
   createAuthenticatedServerClient: vi.fn(() =>
     Promise.resolve({ from: mockFrom })
   ),
@@ -26,7 +27,7 @@ vi.mock('@tugpt/database', async (importOriginal) => {
   const original = (await importOriginal()) as Record<string, unknown>;
   return {
     ...original,
-    createAdminSupabaseClient: vi.fn(() => ({ rpc: mockAdminRpc })),
+    createAdminSupabaseClient: vi.fn(() => { throw new Error('Privileged transport forbidden'); }),
   };
 });
 
@@ -65,8 +66,8 @@ const ENTRY_ID = '11111111-2222-3333-4444-555555555555';
 
 function makeRequest(url: string, options?: RequestInit) {
   return new Request(`http://localhost${url}`, {
-    headers: { 'x-tenant-id': ORG, ...options?.headers },
     ...options,
+    headers: { 'x-tenant-id': ORG, origin: 'https://dashboard.example', 'x-tugpt-csrf': '1', 'content-type': 'application/json', ...options?.headers },
   });
 }
 
@@ -82,7 +83,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   mockGetCurrentUser.mockResolvedValue({ id: 'user-1' });
   mockResolveTenantContext.mockResolvedValue({ organizationId: ORG });
-  mockAdminRpc.mockResolvedValue({ data: true, error: null });
+  mockFeatureRpc.mockResolvedValue({ data: true, error: null });
 });
 
 const ENTRY = {
@@ -116,7 +117,7 @@ describe('knowledge routes', () => {
   });
 
   it('GET with the feature gate closed is 503', async () => {
-    mockAdminRpc.mockResolvedValue({ data: false, error: null });
+    mockFeatureRpc.mockResolvedValue({ data: false, error: null });
     const res = await listGET(makeRequest('/api/v1/knowledge'));
     expect(res.status).toBe(503);
   });
@@ -257,3 +258,7 @@ describe('knowledge routes', () => {
     expect(body.selected).toEqual([]);
   });
 });
+
+// Synthetic unit fixture only; no host or network configuration is changed.
+beforeEach(() => vi.stubEnv('TUGPT_APP_ORIGIN', 'https://dashboard.example'));
+afterEach(() => vi.unstubAllEnvs());

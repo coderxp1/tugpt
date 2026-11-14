@@ -7,13 +7,7 @@ const { mockGetClaims } = vi.hoisted(() => ({
   mockGetClaims: vi.fn(),
 }));
 
-vi.mock('@supabase/ssr', () => ({
-  createServerClient: vi.fn(() => ({
-    auth: {
-      getClaims: mockGetClaims,
-    },
-  })),
-}));
+vi.mock('@/lib/sso/core', () => ({ safeHeaders: { 'Cache-Control': 'no-store' }, loadSession: async () => { const result = await mockGetClaims(); return result?.error ? null : result?.data; } }));
 
 // Mock @tugpt/database to provide the Database type
 vi.mock('@tugpt/database', () => ({
@@ -119,7 +113,7 @@ describe('Next.js 16 Proxy Execution', () => {
     });
 
     const req = new NextRequest('http://localhost/dashboard', {
-      headers: { cookie: 'sb-access-token=valid-token' },
+      headers: { cookie: '__Host-tugpt_session=' + 's'.repeat(43) },
     });
     const res = await proxy(req);
 
@@ -146,11 +140,11 @@ describe('Next.js 16 Proxy Execution', () => {
    * Meta calls this unauthenticated. If the proxy ever gated it, every inbound
    * webhook would be answered with a redirect and no message would arrive.
    */
-  it('leaves the WhatsApp webhook path to its own HMAC check', async () => {
+  it('keeps the privileged WhatsApp webhook on hold before any authentication', async () => {
     const req = new NextRequest('http://localhost/api/v1/webhooks/whatsapp', { method: 'POST' });
     const res = await proxy(req);
 
-    expect(res.status).toBe(200);
+    expect(res.status).toBe(503);
     expect(mockGetClaims).not.toHaveBeenCalled();
   });
 
@@ -221,6 +215,15 @@ describe('Next.js 16 Proxy Execution', () => {
     expect(api.status).toBe(401);
     await expect(api.json()).resolves.toEqual({ error: 'Unauthenticated' });
 
-    expect(mockGetClaims).not.toHaveBeenCalled();
+    expect(mockGetClaims).toHaveBeenCalledTimes(2);
   });
+});
+
+it('refuses a session-store outage without pretending the visitor is logged out', async () => {
+  mockGetClaims.mockRejectedValue(new Error('private outage detail'));
+  for (const path of ['/dashboard', '/api/v1/anything-new']) {
+    const response = await proxy(new NextRequest('https://dashboard.example' + path));
+    expect(response.status).toBe(503); expect(response.headers.get('location')).toBeNull();
+    expect(await response.json()).toEqual({ error: 'temporarily_unavailable' });
+  }
 });

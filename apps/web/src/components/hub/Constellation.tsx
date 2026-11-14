@@ -39,6 +39,7 @@ const DOT: Record<ProductState, string> = {
   setup: s.dotSetup,
   planned: s.dotPlanned,
   unknown: s.dotUnknown,
+  held: s.dotPlanned,
 };
 
 function nodeClass(p: ProductView, selected: boolean): string {

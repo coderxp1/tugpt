@@ -51,7 +51,7 @@ export function DraftActions({
     try {
       const res = await fetch(`/api/v1/drafts/${draftId}/approve`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-tugpt-csrf': '1' },
         body: JSON.stringify({ expectedLockVersion: version }),
       });
 
@@ -87,7 +87,7 @@ export function DraftActions({
     try {
       const res = await fetch(`/api/v1/drafts/${draftId}/reject`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-tugpt-csrf': '1' },
         body: JSON.stringify({ expectedLockVersion: version }),
       });
 
@@ -128,7 +128,7 @@ export function DraftActions({
     try {
       const res = await fetch(`/api/v1/drafts/${draftId}/edit`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 'Content-Type': 'application/json', 'x-tugpt-csrf': '1' },
         body: JSON.stringify({ expectedLockVersion: version, body: editBody }),
       });
 

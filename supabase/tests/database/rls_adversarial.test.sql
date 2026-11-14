@@ -3,7 +3,7 @@
 -- Real RLS is simulated by switching roles and injecting JWT claims.
 
 BEGIN;
-SELECT plan(35);
+SELECT plan(37);
 
 -- =============================================================================
 -- SETUP: Seed test database records (bypassing RLS as postgres user)
@@ -170,7 +170,7 @@ SELECT throws_ok(
   $$INSERT INTO public.organization_members (organization_id, user_id, role) VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '77777777-7777-7777-7777-777777777777', 'agent')$$,
   '42501',
   NULL,
-  'Test 9: Manager cannot insert members (RLS WITH CHECK throws 42501)'
+  'Test 9: Manager cannot insert members (table privilege check throws 42501)'
 );
 
 -- =============================================================================
@@ -179,7 +179,7 @@ SELECT throws_ok(
 SELECT set_config('request.jwt.claims', '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-INSERT INTO public.organization_members (organization_id, user_id, role) VALUES ('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '77777777-7777-7777-7777-777777777777', 'agent');
+SELECT public.manage_organization_member('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','77777777-7777-7777-7777-777777777777','add','agent');
 
 SET LOCAL ROLE postgres;
 SELECT is(
@@ -194,15 +194,13 @@ SELECT is(
 SELECT set_config('request.jwt.claims', '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-DELETE FROM public.organization_members
-  WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-    AND user_id = '11111111-1111-1111-1111-111111111111';
+SELECT throws_ok($$SELECT public.manage_organization_member('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','11111111-1111-1111-1111-111111111111','remove')$$,'P3S02',NULL,'Admin removal of owner is denied by RPC');
 
 SET LOCAL ROLE postgres;
 SELECT is(
   (SELECT COUNT(*)::int FROM public.organization_members WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' AND user_id = '11111111-1111-1111-1111-111111111111'),
   1,
-  'Test 11: Admin cannot delete Owner membership (delete silently filters target row)'
+  'Test 11: Admin cannot delete Owner membership (checked RPC refuses owner removal)'
 );
 
 -- =============================================================================
@@ -211,9 +209,7 @@ SELECT is(
 SELECT set_config('request.jwt.claims', '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-DELETE FROM public.organization_members
-  WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'
-    AND user_id = '44444444-4444-4444-4444-444444444444';
+SELECT public.manage_organization_member('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','44444444-4444-4444-4444-444444444444','remove');
 
 SET LOCAL ROLE postgres;
 SELECT is(
@@ -228,7 +224,7 @@ SELECT is(
 SELECT set_config('request.jwt.claims', '{"sub":"55555555-5555-5555-5555-555555555555","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-UPDATE public.organization_members SET role = 'owner' WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' AND user_id = '55555555-5555-5555-5555-555555555555';
+SELECT throws_ok($$UPDATE public.organization_members SET role = 'owner' WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' AND user_id = '55555555-5555-5555-5555-555555555555'$$,'42501',NULL,'Direct role mutation is denied');
 
 SET LOCAL ROLE postgres;
 SELECT is(
@@ -244,9 +240,9 @@ SELECT set_config('request.jwt.claims', '{"sub":"11111111-1111-1111-1111-1111111
 SET LOCAL ROLE authenticated;
 
 SELECT throws_ok(
-  $$UPDATE public.organization_members SET role = 'admin' WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' AND user_id = '11111111-1111-1111-1111-111111111111'$$,
-  'P0001', -- PL/pgSQL custom exception state
-  'Action blocked: An organization must have at least one active owner',
+  $$SELECT public.manage_organization_member('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','11111111-1111-1111-1111-111111111111','set_role','admin')$$,
+  'P3S05', -- Explicit last-owner SQLSTATE
+  'An organization must retain an owner',
   'Test 14: Last owner demotion protection trigger throws custom exception'
 );
 
@@ -254,9 +250,9 @@ SELECT throws_ok(
 -- TEST 15: Last-owner deletion protection: cannot delete the only owner
 -- =============================================================================
 SELECT throws_ok(
-  $$DELETE FROM public.organization_members WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' AND user_id = '11111111-1111-1111-1111-111111111111'$$,
-  'P0001',
-  'Action blocked: An organization must have at least one active owner',
+  $$SELECT public.manage_organization_member('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','11111111-1111-1111-1111-111111111111','remove')$$,
+  'P3S05',
+  'An organization must retain an owner',
   'Test 15: Last owner deletion protection trigger throws custom exception'
 );
 
@@ -272,7 +268,7 @@ SET LOCAL ROLE postgres;
 SELECT is(
   (SELECT COUNT(*)::int FROM public.organizations WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
   1,
-  'Test 16: Admin cannot delete the organization (delete silently filters target row)'
+  'Test 16: Admin cannot delete the organization (checked RPC refuses owner removal)'
 );
 
 -- =============================================================================
@@ -354,7 +350,7 @@ SET LOCAL ROLE authenticated;
 
 SELECT is(
   (SELECT COUNT(*)::int FROM public.audit_logs WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'),
-  2, -- 1 from Test 21 create_invitation + 1 manually inserted
+  4, -- 2 membership RPC audit events + create_invitation + manual fixture
   'Test 22: Manager can view organization audit logs'
 );
 

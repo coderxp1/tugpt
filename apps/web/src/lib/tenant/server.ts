@@ -14,6 +14,7 @@ import { cookies, headers } from 'next/headers';
 import { AuthService, type TenantContext } from '@tugpt/auth';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { resolveSessionTenant } from './resolve';
+import { getRequestedTenantId } from './request';
 
 /** Cookie the organization switcher writes; the proxy mirrors it into `x-tenant-id`. */
 export const ACTIVE_TENANT_COOKIE = 'tugpt_tenant_id';
@@ -32,21 +33,20 @@ export interface SessionContext {
   readonly requestedTenantRejected: boolean;
 }
 
-/** The organization this request asked for, as forwarded by the proxy. */
+/**
+ * The organization this request asked for. One precedence rule shared with the
+ * proxy and the API routes (`lib/tenant/request.ts`); a hint, never authority.
+ */
 async function requestedTenantId(): Promise<string | null> {
-  const forwarded = (await headers()).get('x-tenant-id');
-  if (forwarded) return forwarded;
-  return (await cookies()).get(ACTIVE_TENANT_COOKIE)?.value ?? null;
+  return getRequestedTenantId(await headers());
 }
 
 /**
  * Is there any chance this request is authenticated?
  *
- * `@supabase/ssr` stores the session in cookies named `sb-<ref>-auth-token`,
- * chunked with a `.0` / `.1` suffix when it is large. No such cookie means no
- * session, and asking Supabase to confirm that costs a network round trip on
- * every anonymous page load — including the login page, which is the one page
- * a signed-out visitor is guaranteed to hit.
+ * Only the opaque, host-only Dashboard session cookie counts. Legacy
+ * `sb-*-auth-token` cookies are not session authority. Presence is a hint:
+ * the session loader validates the cookie before anything is trusted.
  *
  * A wrong guess here degrades: the caller sees "not signed in" and renders the
  * default. It is not an authentication check and nothing downstream trusts it
@@ -56,7 +56,7 @@ async function hasSessionCookie(): Promise<boolean> {
   const store = await cookies();
   return store
     .getAll()
-    .some((c) => c.name.startsWith('sb-') && c.name.includes('auth-token'));
+    .some((c) => c.name === '__Host-tugpt_session');
 }
 
 /**

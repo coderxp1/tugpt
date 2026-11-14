@@ -49,6 +49,7 @@ const ERROR_MAP: Record<string, MappedError> = {
   P3D07: { status: 409, code: 'ALREADY_A_MEMBER', message: 'That person is already in this organization' },
   P3D08: { status: 403, code: 'ROLE_ABOVE_YOUR_OWN', message: 'You cannot invite someone at a role above your own' },
   P3D09: { status: 422, code: 'INVALID_EMAIL', message: 'That is not a valid email address' },
+  P3D10: { status: 403, code: 'VERIFIED_EMAIL_REQUIRED', message: 'Verify your account email before accepting an invitation.' },
 
   // Analytics v1 — the usage & cost summary read path (migration
   // 20260911000001). Its own range for the reason the P3C block gives: a

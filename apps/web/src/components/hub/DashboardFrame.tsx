@@ -3,16 +3,18 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
+import { OrganizationSwitcher } from '@/components/shell/OrganizationSwitcher';
+import { useT } from '@/i18n/provider';
 import { Glyph, TuGPTMark } from './glyphs';
 import type { ProductGlyph } from '@/lib/hub/products';
 import s from './reference.module.css';
 
-const modules: readonly { href: string; title: string; icon: ProductGlyph }[] = [
+const modules: readonly { href: string; title: string; icon: ProductGlyph; held?: boolean }[] = [
   { href: '/dashboard/inbox', title: 'Conversations', icon: 'chat' },
   { href: '/dashboard/drafts', title: 'AI Drafts', icon: 'draft' },
   { href: '/dashboard/knowledge', title: 'Knowledge', icon: 'book' },
-  { href: '/dashboard/media', title: 'Media Studio', icon: 'film' },
-  { href: '/settings/integrations', title: 'Integrations', icon: 'calendar' },
+  { href: '/dashboard/media', title: 'Media Studio', icon: 'film', held: true },
+  { href: '/settings/integrations', title: 'Integrations', icon: 'calendar', held: true },
   { href: '/dashboard/analytics', title: 'Usage & Costs', icon: 'chart' },
 ];
 export interface DashboardFrameProps {
@@ -20,6 +22,7 @@ export interface DashboardFrameProps {
   children: React.ReactNode; overview?: boolean;
 }
 export function DashboardFrame({ organizationName, email, role, children, overview = false }: DashboardFrameProps) {
+  const t = useT();
   const pathname = usePathname() ?? '/dashboard';
   const current = modules.find(m => pathname === m.href || pathname.startsWith(m.href + '/'));
   const [open, setOpen] = useState(false);
@@ -34,7 +37,7 @@ export function DashboardFrame({ organizationName, email, role, children, overvi
     function key(e: KeyboardEvent) {
       if (e.key === 'Escape') { e.preventDefault(); setOpen(false); menu.current?.focus(); }
       if (e.key !== 'Tab') return;
-      const nodes = sidebar.current?.querySelectorAll<HTMLElement>('a[href],button:not([disabled])');
+      const nodes = sidebar.current?.querySelectorAll<HTMLElement>('a[href],button:not([disabled]),select:not([disabled])');
       if (!nodes?.length) return;
       const start = nodes[0], end = nodes[nodes.length - 1];
       if (e.shiftKey && document.activeElement === start) { e.preventDefault(); end.focus(); }
@@ -67,12 +70,13 @@ export function DashboardFrame({ organizationName, email, role, children, overvi
       <div className={s.sideLabel}>{overview ? 'Explore' : 'Your tools'}</div>
       <nav className={s.sideNav} aria-label="Application modules">
         {modules.filter(m => !overview || m.href.startsWith('/settings') || m.href.endsWith('/analytics')).map(m =>
-          <div key={m.href}>{navLink(m.href, m.title, m.icon, current?.href === m.href)}</div>)}
+          <div key={m.href}>{m.held ? <span className={`${s.sideBtn} ${s.unavailable}`}><Glyph name={m.icon} /><span>{m.title}<small>{t('hub.state.held')}</small></span></span> : navLink(m.href, m.title, m.icon, current?.href === m.href)}</div>)}
       </nav>
       <div className={s.sideBottom}>One place for work that moves.
         <div className={s.profile}><span className={s.avatar} aria-hidden="true">{organizationName?.charAt(0).toUpperCase() || 'T'}</span>
           <div className={s.identity}><strong>{organizationName ?? 'Organization unavailable'}</strong><small>{role ? role.charAt(0).toUpperCase() + role.slice(1) : 'Organization account'}</small></div>
         </div>
+        <OrganizationSwitcher label={t('session.switchOrganization')} />
         {email && <span className={s.email}>{email}</span>}
         <Link href="/auth/logout" prefetch={false} className={s.signOut}>Sign out ↗</Link>
       </div>

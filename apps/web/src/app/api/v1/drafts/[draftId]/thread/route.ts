@@ -1,3 +1,4 @@
+import { getRequestedTenantId } from '@/lib/tenant/request';
 /**
  * GET /api/v1/drafts/:draftId/thread
  *
@@ -25,7 +26,7 @@
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
+import { createFeatureServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { DraftApiService, DEFAULT_THREAD_LIMIT } from '@/lib/draft-api/service';
 import { checkDraftFeatureGate } from '@/lib/draft-api/feature-gate';
@@ -35,7 +36,7 @@ const UUID_REGEX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 /**
@@ -57,8 +58,9 @@ export async function GET(
   request: Request,
   { params }: { params: Promise<{ draftId: string }> }
 ) {
-  const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  // Diagnostic correlation is server-generated; never copy arbitrary header text.
+  const requestId = `req-${Date.now()}`;
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const { draftId } = await params;
@@ -80,11 +82,8 @@ export async function GET(
       return errorResponse(403, 'FORBIDDEN', 'No active organization found');
     }
 
-    const adminClient = createAdminSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    const gate = await checkDraftFeatureGate(adminClient, activeTenant.organizationId);
+    const featureClient = await createFeatureServerClient(activeTenant.organizationId);
+    const gate = await checkDraftFeatureGate(featureClient, activeTenant.organizationId);
     if (!gate.allowed) {
       return errorResponse(gate.statusCode, 'FEATURE_UNAVAILABLE', gate.message);
     }
@@ -105,18 +104,18 @@ export async function GET(
     // Counts and flags only. No bodies, no contact, no message ids — this is
     // the one log line in the product that sits next to a pile of customer
     // text, and `docs/production_environment.md` is unambiguous about it.
-    defaultLogger.info('Conversation thread retrieved', {
-      requestId,
-      organizationId: activeTenant.organizationId,
-      draftId,
-      messageCount: thread.messages.length,
-      hasMore: thread.has_more,
-      sourceInWindow: thread.source_in_window,
-    });
+    defaultLogger.info('Conversation thread retrieved', { requestId, outcome: 'success' });
 
-    return NextResponse.json({ thread });
-  } catch (err) {
-    defaultLogger.error('Conversation thread failed', err as Error, { requestId });
+    return privateJson({ thread });
+  } catch {
+    defaultLogger.error('Conversation thread failed', undefined, { requestId, failureKind: 'unexpected', httpStatus: 500 });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

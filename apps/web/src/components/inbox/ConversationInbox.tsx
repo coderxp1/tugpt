@@ -140,7 +140,7 @@ export function ConversationInbox({ viewerId }: { viewerId: string | null }) {
       try {
         const res = await fetch(`/api/v1/conversations/${conversationId}/assign`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'x-tugpt-csrf': '1' },
           body: JSON.stringify({ assignee, expectedAssignee }),
         });
         if (!res.ok) {

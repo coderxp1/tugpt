@@ -12,7 +12,7 @@
  * and nothing about that failure is visible from reading the happy path.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, describe, expect, it, vi, beforeEach } from 'vitest';
 import { POST as createPOST, GET as listGET } from './route';
 import { POST as revokePOST } from './[invitationId]/revoke/route';
 import { POST as acceptPOST } from './accept/route';
@@ -71,7 +71,7 @@ function setup(opts: { rpcError?: unknown; rpcData?: unknown; role?: string } = 
 function req(body: unknown, url = 'http://localhost/api/v1/invitations') {
   return new Request(url, {
     method: 'POST',
-    headers: { 'x-tenant-id': ORG, 'content-type': 'application/json' },
+    headers: { 'x-tenant-id': ORG, 'content-type': 'application/json', origin: 'https://dashboard.example', 'x-tugpt-csrf': '1' },
     body: typeof body === 'string' ? body : JSON.stringify(body),
   });
 }
@@ -98,13 +98,19 @@ describe('create — what reaches the database', () => {
     // The organization comes from the resolved session. Taking it from the
     // body would let any owner invite into any organization whose id they can
     // guess, and the RPC would have no way to tell the difference.
-    await create({ email: 'nuevo@acme.test', role: 'agent', organizationId: 'somebody-elses-org' });
+    await create({ email: 'nuevo@acme.test', role: 'agent' });
 
     expect(mockRpc).toHaveBeenCalledWith('create_invitation', {
       p_organization_id: ORG,
       p_email: 'nuevo@acme.test',
       p_role: 'agent',
     });
+  });
+
+  it('rejects body-supplied organization before any invitation RPC', async () => {
+    const { res } = await create({ email: 'nuevo@acme.test', role: 'agent', organizationId: 'somebody-elses-org' });
+    expect(res.status).toBe(400);
+    expect(mockRpc).not.toHaveBeenCalled();
   });
 
   it('T2: does not check the caller\'s role itself', async () => {
@@ -362,3 +368,18 @@ describe('list', () => {
     expect(mockFrom).not.toHaveBeenCalled();
   });
 });
+
+// Verified identity is a new explicit contract, not an internal server error.
+it('maps unverified invitation identity to a stable 403', async () => {
+  setup({ rpcError: { code: 'P3D10' } });
+  const { POST } = await import('./accept/route');
+  const response = await POST(new Request('http://localhost/api/v1/invitations/accept', {
+    method: 'POST', headers: { 'content-type': 'application/json', origin: 'https://dashboard.example', 'x-tugpt-csrf': '1' }, body: JSON.stringify({ token: TOKEN }),
+  }));
+  expect(response.status).toBe(403);
+  expect(await response.json()).toMatchObject({ error: { code: 'VERIFIED_EMAIL_REQUIRED' } });
+});
+
+// Synthetic unit fixture only; no host or network configuration is changed.
+beforeEach(() => vi.stubEnv('TUGPT_APP_ORIGIN', 'https://dashboard.example'));
+afterEach(() => vi.unstubAllEnvs());

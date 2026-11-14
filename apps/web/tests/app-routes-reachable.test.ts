@@ -37,6 +37,7 @@ import { NAV_ITEMS, isActive } from '../src/components/shell/nav-items';
 
 /** Pages that are arrived at some way other than the primary navigation. */
 const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
+  { path: '/auth/website/error', by: 'Historical error page retained for old bookmarks; start/callback are explicitly retired410 with no new OAuth redirects.' },
   {
     path: '/',
     by: 'Whatever a person types or bookmarks for the bare domain. It redirects to /dashboard and renders nothing.',

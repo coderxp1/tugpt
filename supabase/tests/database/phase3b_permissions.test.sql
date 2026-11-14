@@ -205,15 +205,14 @@ SELECT is(
   'P8: authenticated has EXECUTE on all 3 review RPCs'
 );
 
--- P9: Human review RPCs are executable by anon (PostgREST schema discovery)
--- Security is enforced inside the RPCs via auth.uid() checks, not by revoking EXECUTE.
+-- P9: Anonymous execution is unnecessary; authenticated clients retain discovery/access.
 SELECT is(
   (SELECT count(*)::int FROM information_schema.routine_privileges
    WHERE routine_schema = 'public'
    AND routine_name IN ('approve_draft', 'edit_draft', 'reject_draft')
    AND grantee = 'anon' AND privilege_type = 'EXECUTE'),
-  3,
-  'P9: anon has EXECUTE on review RPCs (PostgREST discovery, security enforced inside RPCs)'
+  0,
+  'P9: anon has no EXECUTE on human review RPCs'
 );
 
 -- P10: is_feature_enabled returns false when global flag is disabled

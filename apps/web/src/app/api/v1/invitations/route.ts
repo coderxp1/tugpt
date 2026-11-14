@@ -1,3 +1,5 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
+import { getRequestedTenantId } from '@/lib/tenant/request';
 /**
  * POST /api/v1/invitations — invite someone into an organization.
  * GET  /api/v1/invitations — list this organization's invitations.
@@ -42,14 +44,15 @@ const INVITABLE_ROLES = ['owner', 'admin', 'manager', 'agent', 'viewer'] as cons
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 type Rpc = { rpc: (fn: string, args: Record<string, unknown>) => Promise<{ data: unknown; error: unknown }> };
 
 export async function POST(request: Request) {
+  if (!isSameOriginMutation(request)) return errorResponse(403, 'FORBIDDEN', 'Same-origin JSON request required');
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const supabase = await createAuthenticatedServerClient();
@@ -62,12 +65,12 @@ export async function POST(request: Request) {
 
     let body: { email?: unknown; role?: unknown };
     try {
-      body = await request.json();
+      body = await readJsonRecord(request, ["email", "role"]);
     } catch {
       return errorResponse(400, 'INVALID_BODY', 'Invalid JSON request body');
     }
 
-    if (typeof body.email !== 'string' || body.email.trim() === '') {
+    if (typeof body.email !== 'string' || body.email.trim() === '' || body.email.length > 320) {
       return errorResponse(400, 'INVALID_BODY', 'email is required');
     }
     if (typeof body.role !== 'string' || !INVITABLE_ROLES.includes(body.role as (typeof INVITABLE_ROLES)[number])) {
@@ -102,7 +105,7 @@ export async function POST(request: Request) {
       role: result.role,
     });
 
-    return NextResponse.json({ invitation: result }, { status: 201 });
+    return privateJson({ invitation: result }, { status: 201 });
   } catch (err) {
     defaultLogger.error('Invitation create failed', err as Error, { requestId });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
@@ -111,7 +114,7 @@ export async function POST(request: Request) {
 
 export async function GET(request: Request) {
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const supabase = await createAuthenticatedServerClient();
@@ -137,9 +140,16 @@ export async function GET(request: Request) {
       return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
     }
 
-    return NextResponse.json({ invitations: data ?? [] });
+    return privateJson({ invitations: data ?? [] });
   } catch (err) {
     defaultLogger.error('Invitation list failed', err as Error, { requestId });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

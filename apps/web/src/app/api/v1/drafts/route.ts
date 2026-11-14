@@ -1,3 +1,4 @@
+import { getRequestedTenantId } from '@/lib/tenant/request';
 // Stage 5A: GET /api/v1/drafts — List drafts for the active organization
 // Amendment 2: Filters by resolved active tenant's organization_id (not just RLS).
 // Amendment 4: Sanitized error responses with stable envelope.
@@ -6,7 +7,7 @@
 import { NextResponse } from 'next/server';
 import { defaultLogger } from '@tugpt/observability';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
+import { createFeatureServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { DraftApiService } from '@/lib/draft-api/service';
 import { checkDraftFeatureGate } from '@/lib/draft-api/feature-gate';
@@ -20,12 +21,13 @@ import type { ApiError } from '@/lib/draft-api/types';
 const VALID_STATUSES = ['all', 'draft', 'approved', 'rejected'] as const;
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return privateJson(body, { status });
 }
 
 export async function GET(request: Request) {
-  const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
-  const rawTenantId = request.headers.get('x-tenant-id');
+  // Diagnostic correlation is server-generated; never copy arbitrary header text.
+  const requestId = `req-${Date.now()}`;
+  const rawTenantId = getRequestedTenantId(request.headers);
 
   try {
     const supabase = await createAuthenticatedServerClient();
@@ -42,12 +44,9 @@ export async function GET(request: Request) {
       return errorResponse(403, 'FORBIDDEN', 'No active organization found');
     }
 
-    // Feature gate check (service-role client)
-    const adminClient = createAdminSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    );
-    const gate = await checkDraftFeatureGate(adminClient, activeTenant.organizationId);
+    // Feature gate check (narrow session-bound adapter)
+    const featureClient = await createFeatureServerClient(activeTenant.organizationId);
+    const gate = await checkDraftFeatureGate(featureClient, activeTenant.organizationId);
     if (!gate.allowed) {
       return errorResponse(gate.statusCode, 'FEATURE_UNAVAILABLE', gate.message);
     }
@@ -81,16 +80,14 @@ export async function GET(request: Request) {
       limit
     );
 
-    // Attach outbound delivery state (migration 20261022000003). One
-    // batch read via the admin client for the page's draft ids; the
-    // RPC joins through ai_drafts, so a delivery is only returned
-    // with its own draft. Drafts without a delivery keep no badge.
+    // P2-DB-01: authenticated, session/tenant/feature-bound bulk read.
+    // The existing service caps pages at 50; the DB wrapper caps inputs at 100.
+    // No privileged fallback. Drafts without a delivery keep no badge.
     let enrichedDrafts = drafts;
     if (drafts.length > 0) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { data: deliveryRows, error: deliveryError } = await (adminClient as any).rpc(
-        'list_outbound_deliveries_for_drafts',
-        { p_draft_ids: drafts.map((d) => d.id) }
+      const { data: deliveryRows, error: deliveryError } = await supabase.rpc(
+        'sso_list_outbound_deliveries_for_drafts',
+        { p_organization_id: activeTenant.organizationId, p_draft_ids: drafts.map((d) => d.id) }
       );
       if (!deliveryError && Array.isArray(deliveryRows)) {
         const byDraft = new Map<string, DeliveryView>();
@@ -106,15 +103,17 @@ export async function GET(request: Request) {
       // failed draft list — the review queue must stay usable.
     }
 
-    defaultLogger.info('Draft list retrieved', {
-      requestId,
-      organizationId: activeTenant.organizationId,
-      count: drafts.length,
-    });
+    defaultLogger.info('Draft list retrieved', { requestId, outcome: 'success' });
 
-    return NextResponse.json({ drafts: enrichedDrafts, total, page, limit });
-  } catch (err) {
-    defaultLogger.error('Draft list failed', err as Error, { requestId });
+    return privateJson({ drafts: enrichedDrafts, total, page, limit });
+  } catch {
+    defaultLogger.error('Draft list failed', undefined, { requestId, failureKind: 'unexpected', httpStatus: 500 });
     return errorResponse(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

@@ -111,7 +111,7 @@ export function ConversationThread({ draftId }: { draftId: string }) {
       try {
         const res = await fetch(`/api/v1/conversations/${conversationId}/handoff`, {
           method: 'POST',
-          headers: { 'content-type': 'application/json' },
+          headers: { 'content-type': 'application/json', 'x-tugpt-csrf': '1' },
           body: JSON.stringify({ needsHuman, expectedStatus }),
         });
         if (!res.ok) {

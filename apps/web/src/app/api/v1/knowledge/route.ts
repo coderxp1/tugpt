@@ -1,3 +1,4 @@
+import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 // Knowledge entries — list and create.
 //
 // GET  /api/v1/knowledge — the active organization's entries
@@ -43,7 +44,7 @@ export async function GET(request: Request) {
       return knowledgeError(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
     }
 
-    return NextResponse.json({ entries: (data ?? []) as KnowledgeEntryRow[] });
+    return privateJson({ entries: (data ?? []) as KnowledgeEntryRow[] });
   } catch (err) {
     defaultLogger.error('Knowledge list failed', err as Error, { requestId });
     return knowledgeError(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
@@ -51,14 +52,13 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
+  if (!isSameOriginMutation(request)) return knowledgeError(403, 'FORBIDDEN', 'Same-origin JSON request required');
   const resolved = await resolveKnowledgeContext(request);
   if ('response' in resolved) return resolved.response;
   const { supabase, userId, organizationId, requestId } = resolved.context;
 
   try {
-    const body = (await request.json().catch(() => null)) as
-      | { question?: unknown; answer?: unknown }
-      | null;
+    const body = await readJsonRecord(request, ["question", "answer"]).catch(() => null);
     if (!body) {
       return knowledgeError(400, 'VALIDATION_ERROR', 'A JSON body is required');
     }
@@ -88,7 +88,7 @@ export async function POST(request: Request) {
       return knowledgeWriteError(error);
     }
 
-    return NextResponse.json(
+    return privateJson(
       { entry: data as KnowledgeEntryRow },
       { status: 201 }
     );
@@ -96,4 +96,11 @@ export async function POST(request: Request) {
     defaultLogger.error('Knowledge create failed', err as Error, { requestId });
     return knowledgeError(500, 'INTERNAL_ERROR', 'An unexpected error occurred');
   }
+}
+
+/** Personalized/error responses must never enter a shared response cache. */
+function privateJson(body: unknown, init?: ResponseInit) {
+  const headers = new Headers(init?.headers);
+  headers.set('Cache-Control', 'private, no-store');
+  return NextResponse.json(body, { ...init, headers });
 }

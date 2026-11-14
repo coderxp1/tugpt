@@ -1,8 +1,7 @@
+import { getRequestedTenantId } from './lib/tenant/request';
 import { NextResponse } from 'next/server';
 import type { NextRequest } from 'next/server';
-import { createServerClient as createSSRClient } from '@supabase/ssr';
-import { sessionCookieOptions } from '@/lib/supabase/cookie-options';
-import type { Database } from '@tugpt/database';
+import {loadSession,safeHeaders} from '@/lib/sso/core';
 
 export type RouteType = 'auth' | 'protected' | 'public';
 
@@ -40,11 +39,8 @@ const PUBLIC_EXACT: ReadonlySet<string> = new Set([
   // Liveness probe. Returns no tenant data and is polled without credentials —
   // by the container healthcheck in docker-compose.yml, among others.
   '/api/v1/health',
-  // Public branding assets only; no broad application-route exemption.
-  '/dashboard-assets/ManyChatGravity-Normal.woff2',
-  '/dashboard-assets/Rooftop-Regular.woff2',
-  '/dashboard-assets/Rooftop-Bold.woff2',
-  '/dashboard-assets/reference-social.jpg',
+  // Bounded dependency probe. No session, tenant rows or credentials returned.
+  '/api/v1/ready',
 ]);
 
 const PUBLIC_PREFIXES: readonly string[] = [
@@ -54,6 +50,7 @@ const PUBLIC_PREFIXES: readonly string[] = [
   // Handlers authenticate and resolve tenant context; RLS scopes the rows.
   '/api/v1/drafts',
   '/api/v1/organizations',
+  '/api/v1/workspace', // Handler authenticates; RPCs/RLS enforce current membership and ownership.
   '/api/v1/conversations',
   // Same shape as the drafts API: each handler authenticates for itself
   // (401 UNAUTHENTICATED envelope), resolves the tenant from the
@@ -107,7 +104,7 @@ const PUBLIC_PREFIXES: readonly string[] = [
  * first time somebody loads the page.
  */
 export function classifyRoute(pathname: string): RouteType {
-  if (underPrefix(pathname, '/auth') || underPrefix(pathname, '/api/v1/auth')) {
+  if (underPrefix(pathname, '/auth') || underPrefix(pathname, '/api/v1/auth') || ['/api/auth/handoff','/api/auth/revoke','/api/auth/logout','/api/auth/session'].includes(pathname)) {
     return 'auth';
   }
   if (PUBLIC_EXACT.has(pathname)) {
@@ -150,6 +147,10 @@ function denyUnauthenticated(request: NextRequest, pathname: string): NextRespon
 
 export async function proxy(request: NextRequest) {
   const { pathname } = request.nextUrl;
+  if(['/api/v1/media','/api/v1/integrations','/api/v1/workspace','/api/v1/webhooks'].some(p=>pathname===p||pathname.startsWith(p+'/'))){
+    return NextResponse.json({error:'privileged_bridge_pending_review'},{status:503,headers:safeHeaders});
+  }
+
 
   // Inject Request ID for distributed tracing
   const requestId =
@@ -160,84 +161,12 @@ export async function proxy(request: NextRequest) {
 
   // Propagate tenant context from cookie or x-tenant-id header if available
   const activeTenantId =
-    request.cookies.get('tugpt_tenant_id')?.value ||
-    request.headers.get('x-tenant-id') ||
-    undefined;
+    getRequestedTenantId(request.headers) ?? undefined;
 
-  // Handle protected routes authentication check using Supabase SSR
-  if (routeType === 'protected') {
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-
-    if (!supabaseUrl || !supabaseKey) {
-      // No Supabase env configured. This means the image was built without
-      // NEXT_PUBLIC_* build args (see docker-compose.yml) and the app is
-      // entirely dead — refuse rather than pretend.
-      return denyUnauthenticated(request, pathname);
-    }
-
-    // Create a response that we can write refreshed cookies into
-    const response = NextResponse.next({
-      request: {
-        headers: request.headers,
-      },
-    });
-
-    const supabase = createSSRClient<Database>(supabaseUrl, supabaseKey, {
-      cookieOptions: sessionCookieOptions(),
-      cookies: {
-        getAll() {
-          return request.cookies.getAll();
-        },
-        setAll(cookiesToSet) {
-          // Write refreshed cookies to both the request (so downstream
-          // route handlers see them) and the response (so the browser
-          // receives them).
-          cookiesToSet.forEach(({ name, value, options }) => {
-            request.cookies.set(name, value);
-            response.cookies.set(name, value, options);
-          });
-        },
-      },
-    });
-
-    // Use getClaims() for server-side auth verification.
-    // getSession() does not revalidate the token and is not recommended
-    // for server-side authorization checks per Supabase SSR guidance.
-    const { data: claimsData, error: claimsError } = await supabase.auth.getClaims();
-
-    if (claimsError || !claimsData) {
-      return denyUnauthenticated(request, pathname);
-    }
-
-    // Propagate headers to downstream route handlers and server components
-    const requestHeaders = new Headers(request.headers);
-    requestHeaders.set('x-request-id', requestId);
-    if (activeTenantId) {
-      requestHeaders.set('x-tenant-id', activeTenantId);
-    }
-
-    // Update the response with our request headers
-    const finalResponse = NextResponse.next({
-      request: {
-        headers: requestHeaders,
-      },
-    });
-
-    // Copy any cookies that were set on the original response (from setAll)
-    for (const cookie of response.cookies.getAll()) {
-      finalResponse.cookies.set(cookie.name, cookie.value, cookie);
-    }
-
-    // Set response headers for client tracing
-    finalResponse.headers.set('x-request-id', requestId);
-    if (activeTenantId) {
-      finalResponse.headers.set('x-tenant-id', activeTenantId);
-    }
-
-    return finalResponse;
+  if(routeType==='protected') {
+    try { if(!await loadSession(request.headers.get('cookie')))return denyUnauthenticated(request,pathname); }
+    catch { return NextResponse.json({error:'temporarily_unavailable'},{status:503,headers:safeHeaders}); }
   }
-
   // Propagate headers to downstream route handlers and server components
   const requestHeaders = new Headers(request.headers);
   requestHeaders.set('x-request-id', requestId);
@@ -252,6 +181,7 @@ export async function proxy(request: NextRequest) {
   });
 
   // Set response headers for client tracing
+  for(const [key,value] of Object.entries(safeHeaders))response.headers.set(key,value);
   response.headers.set('x-request-id', requestId);
   if (activeTenantId) {
     response.headers.set('x-tenant-id', activeTenantId);

@@ -558,3 +558,15 @@ describe('assignment', () => {
 });
 
 import { render } from '../../../tests/support/render-spanish';
+
+// Every mutation emitted by the retained behavioral cases must satisfy the browser contract.
+afterEach(() => {
+  for (const [, init] of mockFetch.mock.calls) {
+    const options = init as RequestInit | undefined;
+    if (!options?.method || ['GET', 'HEAD'].includes(options.method)) continue;
+    const headers = new Headers(options.headers);
+    expect(headers.get('x-tugpt-csrf')).toBe('1');
+    expect(headers.get('content-type')).toBe('application/json');
+    expect(() => JSON.parse(options.body as string)).not.toThrow();
+  }
+});

@@ -111,7 +111,7 @@ export function KnowledgeManager() {
     const ok = await runAction(() =>
       fetch('/api/v1/knowledge', {
         method: 'POST',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-tugpt-csrf': '1' },
         body: JSON.stringify({ question: newQuestion, answer: newAnswer }),
       })
     );
@@ -126,7 +126,7 @@ export function KnowledgeManager() {
     const ok = await runAction(() =>
       fetch(`/api/v1/knowledge/${id}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-tugpt-csrf': '1' },
         body: JSON.stringify({ question: editQuestion, answer: editAnswer }),
       })
     );
@@ -140,7 +140,7 @@ export function KnowledgeManager() {
     const ok = await runAction(() =>
       fetch(`/api/v1/knowledge/${entry.id}`, {
         method: 'PATCH',
-        headers: { 'content-type': 'application/json' },
+        headers: { 'content-type': 'application/json', 'x-tugpt-csrf': '1' },
         body: JSON.stringify({ enabled: !entry.enabled }),
       })
     );
@@ -150,7 +150,7 @@ export function KnowledgeManager() {
   const deleteEntry = async (entry: KnowledgeEntry) => {
     if (!window.confirm(t('knowledge.deleteConfirm'))) return;
     const ok = await runAction(() =>
-      fetch(`/api/v1/knowledge/${entry.id}`, { method: 'DELETE' })
+      fetch(`/api/v1/knowledge/${entry.id}`, { method: 'DELETE', headers: { 'content-type': 'application/json', 'x-tugpt-csrf': '1' }, body: '{}' })
     );
     if (ok) await load();
   };
@@ -160,7 +160,7 @@ export function KnowledgeManager() {
     setPreviewResult(null);
     const res = await fetch('/api/v1/knowledge/preview', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', 'x-tugpt-csrf': '1' },
       body: JSON.stringify({ question: previewQuestion }),
     });
     const body = await res.json().catch(() => null);
