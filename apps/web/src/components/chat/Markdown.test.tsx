@@ -1,7 +1,9 @@
 // @vitest-environment jsdom
-import { describe, expect, it } from 'vitest';
-import { render } from '@testing-library/react';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { Markdown, parseBlocks, safeHref } from './Markdown';
+
+afterEach(cleanup);
 
 describe('Markdown (model output)', () => {
   it('renders the bullet/bold answer the preview showed as raw text', () => {
@@ -37,5 +39,22 @@ describe('Markdown (model output)', () => {
   it('tolerates a half-streamed answer', () => {
     expect(() => render(<Markdown text={'* **Ship'} />)).not.toThrow();
     expect(parseBlocks('```js\nlet x')).toEqual([{ t: 'code', lang: 'js', text: 'let x' }]);
+  });
+  it('labels code blocks with their language and copies the exact code text', async () => {
+    const writeText = vi.fn(() => Promise.resolve());
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText }, configurable: true });
+    const { container } = render(<Markdown text={'Run:\n\n```ts\nconst a = "<b>1</b>";\n```'} />);
+    expect(container.querySelector('pre code')?.textContent).toBe('const a = "<b>1</b>";');
+    expect(container.textContent).toContain('ts');
+    fireEvent.click(screen.getByRole('button', { name: 'Copy ts code' }));
+    await waitFor(() => expect(writeText).toHaveBeenCalledWith('const a = "<b>1</b>";'));
+    await screen.findByText('Copied');
+    expect(container.querySelector('b')).toBeNull();
+  });
+  it('labels an untagged fence as code and reports a failed copy', async () => {
+    Object.defineProperty(navigator, 'clipboard', { value: { writeText: () => Promise.reject(new Error('denied')) }, configurable: true });
+    render(<Markdown text={'```\nls -la\n```'} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Copy code' }));
+    await screen.findByText('Copy failed');
   });
 });

@@ -243,7 +243,10 @@ export function ImageStudio() {
                 {selected.width} × {selected.height} · seed {selected.seed} · {statusText(selected)}
               </p>
               {selected.status === 'completed' && selected.fileUrl && (
+                <div className={s.resultActions}>
                 <a className={s.secondary} href={`${selected.fileUrl}?download=1`} download>Download PNG</a>
+                <a className={s.secondary} href={selected.fileUrl} target="_blank" rel="noopener noreferrer">Open full size<span className={s.sr}> (opens in a new tab)</span></a>
+                </div>
               )}
             </figcaption>
           </figure>

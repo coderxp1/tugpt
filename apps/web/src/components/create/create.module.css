@@ -61,3 +61,5 @@
 .thumbTime{font-size:11px;color:#686963}
 @media (max-width:860px){.studio{grid-template-columns:minmax(0,1fr)}.composer{position:static}.stage{min-height:300px}}
 @media (prefers-reduced-motion:reduce){.spinner{animation-duration:2.4s}.progress span{transition:none}}
+.resultActions{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}

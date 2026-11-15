@@ -85,7 +85,7 @@ export function DashboardFrame({ fullName = null, email, children, overview = fa
       <nav className={s.sideNav} aria-label="Application modules">
         {modules.filter(m => !overview || m.href.startsWith('/settings') || m.href.endsWith('/analytics')).map(m =>
           <div key={m.href}>{m.held || m.planned
-            ? <span className={`${s.sideBtn} ${s.unavailable}`} aria-disabled="true"><Glyph name={m.icon} /><span className={s.sideText}>{m.title}<small className={s.sideState}>{m.held ? t('hub.state.held') : 'Not available yet'}</small></span></span>
+            ? <span className={`${s.sideBtn} ${s.unavailable}`} aria-disabled="true"><Glyph name={m.icon} /><span className={s.sideText}>{m.title}<span className={s.sr}>, </span><small className={s.sideState}>{m.held ? t('hub.state.held') : 'Not available yet'}</small></span></span>
             : navLink(m.href, m.title, m.icon, current?.href === m.href)}</div>)}
       </nav>
       <div className={s.sideBottom}>

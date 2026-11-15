@@ -41,6 +41,9 @@ describe('ImageStudio', () => {
     const image = await screen.findByAltText('A red bicycle', {}, { timeout: 5000 });
     expect(image.getAttribute('src')).toBe(`/api/v1/create/images/${ID}/file`);
     expect(screen.getByRole('link', { name: 'Download PNG' }).getAttribute('href')).toBe(`/api/v1/create/images/${ID}/file?download=1`);
+    const full = screen.getByRole('link', { name: 'Open full size (opens in a new tab)' });
+    expect(full.getAttribute('href')).toBe(`/api/v1/create/images/${ID}/file`);
+    expect(full.getAttribute('rel')).toContain('noopener');
   });
 
   it('shows the server message when generation is refused', async () => {

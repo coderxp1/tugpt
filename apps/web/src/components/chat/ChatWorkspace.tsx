@@ -9,7 +9,7 @@ import s from './chat.module.css';
 export const MUTATION_HEADERS = { 'content-type': 'application/json', 'x-tugpt-csrf': '1' } as const;
 
 export interface PublicModel { key: string; label: string; description: string; private: boolean; toolCalling: boolean }
-interface Thread { id: string; title: string; modelKey: string; updatedAt: string }
+export interface Thread { id: string; title: string; modelKey: string; updatedAt: string }
 interface Message { id: string; role: 'user' | 'assistant' | 'tool'; content: string; status: 'complete' | 'error' | 'stopped'; mentions: { capability: string; provider: string }[]; capabilityKey: string | null }
 interface Capability { capabilityKey: string; providerKey: string; providerName: string; description: string; permissionClass: string; state: 'connected' | 'requires_connection' | 'disabled_by_policy' | 'not_available' }
 type Live = { text: string; tools: { tool: string; ok?: boolean; code?: string }[] } | null;
@@ -27,8 +27,16 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function ChatWorkspace({ models }: { models: PublicModel[] }) {
-  const [threads, setThreads] = useState<Thread[] | null>(null);
+export interface ChatWorkspaceProps {
+  models: PublicModel[];
+  /** Server-rendered first page of the person's chats; null means "load on the client". */
+  initialThreads?: Thread[] | null;
+}
+
+export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspaceProps) {
+  const [threads, setThreads] = useState<Thread[] | null>(initialThreads);
+  const [threadsFailed, setThreadsFailed] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [capabilities, setCapabilities] = useState<Capability[] | null>(null);
@@ -45,18 +53,25 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
   const model = models.find((m) => m.key === modelKey) ?? null;
   const busy = live !== null;
 
+  // State is only set when the request settles, never synchronously in the effect.
+  const fetchThreads = useCallback(() => fetch('/api/v1/chat/threads', { cache: 'no-store' })
+    .then((r) => json<{ threads: Thread[] }>(r))
+    .then((d) => { setThreads(d.threads); setThreadsFailed(false); })
+    .catch(() => { setThreads([]); setThreadsFailed(true); }), []);
+  function retryThreads() { setThreadsFailed(false); setThreads(null); void fetchThreads(); }
+
+  const needThreads = initialThreads === null;
   useEffect(() => {
-    fetch('/api/v1/chat/threads', { cache: 'no-store' }).then((r) => json<{ threads: Thread[] }>(r))
-      .then((d) => setThreads(d.threads)).catch(() => { setThreads([]); setError('Your chats could not be loaded.'); });
+    if (needThreads) void fetchThreads();
     fetch('/api/v1/chat/capabilities', { cache: 'no-store' }).then((r) => json<{ capabilities: Capability[] }>(r))
       .then((d) => setCapabilities(d.capabilities)).catch(() => setCapabilities([]));
-  }, []);
+  }, [needThreads, fetchThreads]);
 
   useEffect(() => { log.current?.scrollTo({ top: log.current.scrollHeight }); }, [messages, live]);
 
   const open = useCallback(async (id: string) => {
     if (busy) return;
-    setActiveId(id); setError(null); setMessages([]);
+    setActiveId(id); setError(null); setMessages([]); setHistoryOpen(false);
     try {
       const d = await json<{ thread: Thread; messages: Message[] }>(await fetch(`/api/v1/chat/threads/${id}`, { cache: 'no-store' }));
       setMessages(d.messages);
@@ -156,14 +171,22 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
 
   return (
     <div className={s.chat}>
-      <aside className={s.threads} aria-label="Your chats">
-        <button type="button" className={s.newChat} onClick={newChat} disabled={busy}>New chat</button>
-        <p className={s.private}>Only you can see your chats.</p>
-        {threads === null ? <p className={s.muted} role="status">Loading chats…</p> :
-          threads.length === 0 ? <p className={s.muted}>No chats yet.</p> :
-          <ul className={s.threadList}>{threads.map((t) => (
-            <li key={t.id}><button type="button" onClick={() => void open(t.id)} aria-current={t.id === activeId ? 'true' : undefined} className={t.id === activeId ? s.threadActive : s.thread}>{t.title}</button></li>
-          ))}</ul>}
+      <aside className={`${s.threads} ${historyOpen ? s.threadsOpen : ''}`} aria-label="Your chats">
+        <div className={s.threadsHead}>
+          <button type="button" className={s.newChat} onClick={() => { setHistoryOpen(false); newChat(); }} disabled={busy}>New chat</button>
+          <button type="button" className={s.historyToggle} aria-expanded={historyOpen} aria-controls="chat-history" onClick={() => setHistoryOpen((o) => !o)}>
+            {historyOpen ? 'Hide chats' : `Your chats${threads && threads.length ? ` (${threads.length})` : ''}`}
+          </button>
+        </div>
+        <div id="chat-history" className={s.history}>
+          <p className={s.private}>Only you can see your chats.</p>
+          {threads === null ? <ul className={s.threadList} aria-busy="true" aria-label="Loading your chats">{[0, 1, 2].map((i) => <li key={i} className={s.skeleton} />)}<li className={s.sr} role="status">Loading your chats…</li></ul> :
+            threadsFailed ? <div className={s.loadError} role="alert"><p>Your chats could not be loaded.</p><button type="button" onClick={retryThreads}>Try again</button></div> :
+            threads.length === 0 ? <p className={s.muted}>No chats yet. Your conversations will appear here.</p> :
+            <ul className={s.threadList}>{threads.map((t) => (
+              <li key={t.id}><button type="button" onClick={() => void open(t.id)} aria-current={t.id === activeId ? 'true' : undefined} className={t.id === activeId ? s.threadActive : s.thread} title={t.title}>{t.title}</button></li>
+            ))}</ul>}
+        </div>
       </aside>
 
       <section className={s.main} aria-label="Conversation">

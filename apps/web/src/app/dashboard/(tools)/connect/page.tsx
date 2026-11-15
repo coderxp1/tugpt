@@ -21,7 +21,7 @@ const PROVIDER_COPY: Record<string, { blurb: string; next: Record<CapabilityStat
     blurb: 'Calendar, Gmail and Drive for your Google Workspace account.',
     next: {
       connected: 'Type @ in Chat to use it.',
-      requires_connection: 'Sign in with Google to connect your account. TuGPT asks only for the permissions listed here.',
+      requires_connection: 'Your Google account is not connected. Connecting from this page is not open yet; until it is, TuGPT has no access to your Google data.',
       disabled_by_policy: 'An administrator of your organization has turned this provider off.',
       not_available: 'Connecting Google accounts is not switched on for TuGPT yet. Nothing is connected, and TuGPT has no access to your Google data.',
     },
@@ -30,7 +30,7 @@ const PROVIDER_COPY: Record<string, { blurb: string; next: Record<CapabilityStat
     blurb: 'Outlook calendar, mail and OneDrive for your Microsoft 365 account.',
     next: {
       connected: 'Type @ in Chat to use it.',
-      requires_connection: 'Sign in with Microsoft to connect your account.',
+      requires_connection: 'Your Microsoft 365 account is not connected. Connecting from this page is not open yet; until it is, TuGPT has no access to your Microsoft data.',
       disabled_by_policy: 'An administrator of your organization has turned this provider off.',
       not_available: 'Connecting Microsoft 365 accounts is not switched on for TuGPT yet. Nothing is connected, and TuGPT has no access to your Microsoft data.',
     },
