@@ -22,7 +22,7 @@ const ctx: ToolExecutionContext = {
   requestId: 'req1',
 };
 
-function build(claim: () => Promise<boolean> | undefined) {
+function build(claim?: () => Promise<boolean> | undefined) {
   const opts = {
     tools: [writeTool],
     connections: {

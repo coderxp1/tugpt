@@ -28,7 +28,7 @@ export interface ExternalMcpFetchResponse {
   text(): Promise<string>;
 }
 export interface ExternalMcpFetch {
-  (url: string, init: { method: string; headers: Record<string, string>; body: string }): Promise<ExternalMcpFetchResponse>;
+  (url: string, init: { method: string; headers: Record<string, string>; body: string; redirect: 'manual' | 'error' | 'follow' }): Promise<ExternalMcpFetchResponse>;
 }
 export type HostnameResolver = (hostname: string) => Promise<string[]>;
 
@@ -187,9 +187,11 @@ export async function assertPublicEndpoint(
 }
 
 function defaultFetch(): ExternalMcpFetch {
-  return async (url, init) => {
-    const res = await fetch(url, { method: init.method, headers: init.headers, body: init.body });
-    return { status: res.status, text: () => res.text() };
+  // Fail closed: customer MCP must never reach the network directly. The caller
+  // must inject a proxy-aware fetch that routes through CONNECT_EGRESS_PROXY
+  // (redirect: 'manual' so a 3xx cannot bypass address validation).
+  return async () => {
+    throw new Error('egress proxy required for customer MCP (B-8)');
   };
 }
 
@@ -214,7 +216,7 @@ export async function listExternalMcpTools(
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
     if (endpoint.authHeader) headers.authorization = endpoint.authHeader;
     if (sessionId) headers['mcp-session-id'] = sessionId;
-    const res = await fn(endpoint.url, { method: 'POST', headers, body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
+    const res = await fn(endpoint.url, { method: 'POST', headers, redirect: 'manual', body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
     if (res.status !== 200) throw new Error(`MCP endpoint returned HTTP ${res.status}`);
     const text = await res.text();
     const dataLine = text
@@ -254,9 +256,8 @@ export function createExternalMcpTool(
 ): ConnectTool<Record<string, unknown>> {
   const fetchFn: ExternalMcpFetch =
     endpoint.fetchFn ??
-    (async (url, init) => {
-      const res = await fetch(url, { method: init.method, headers: init.headers, body: init.body });
-      return { status: res.status, text: () => res.text() };
+    (async () => {
+      throw new Error('egress proxy required for customer MCP (B-8)');
     });
 
   async function rpc(id: number, method: string, params: unknown, sessionId?: string): Promise<unknown> {
@@ -266,6 +267,7 @@ export function createExternalMcpTool(
     const res = await fetchFn(endpoint.url, {
       method: 'POST',
       headers,
+      redirect: 'manual',
       body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
     });
     if (res.status !== 200) throw new Error(`MCP endpoint returned HTTP ${res.status}`);

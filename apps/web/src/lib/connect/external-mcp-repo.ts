@@ -1,12 +1,10 @@
 /**
- * Typed access to the customer-MCP tables.
+ * Typed access to the customer-MCP tables + approval RPC.
  *
  * `external_tool_endpoints`/`snapshots`/`tools` are not yet in the generated
- * Supabase types (the Connect migration hasn't been applied to the
- * types-generating DB). Rather than scatter `as any` across the routes, this
- * module is the single place that casts the admin client, and it exposes
- * typed methods with explicit organization scoping. When the generated types
- * catch up, only this file changes.
+ * Supabase types. Rather than scatter `as any` across the routes, this module
+ * is the single place that casts the admin client, and it exposes typed
+ * methods with explicit organization scoping.
  */
 
 import type { TypedSupabaseClient } from '@tugpt/database';
@@ -18,6 +16,7 @@ export interface ExternalToolEndpoint {
   readonly url: string;
   readonly displayName: string;
   readonly status: 'pending' | 'active' | 'disabled';
+  readonly snapshot: { readonly id: string; readonly toolCount: number; readonly approved: boolean } | null;
 }
 
 export interface ExternalToolSnapshot {
@@ -52,13 +51,16 @@ export interface ExternalMcpRepository {
   activateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deactivateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deleteEndpoint(orgId: string, endpointId: string): Promise<void>;
+  recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number): Promise<void>;
 }
 
-// The one cast for these not-yet-generated tables.
+// The one cast for these not-yet-generated tables / RPCs.
+/* eslint-disable @typescript-eslint/no-explicit-any -- single cast for not-yet-generated tables/RPCs */
 type Untyped = {
-  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- single cast for not-yet-generated tables
   from(table: string): any;
+  rpc(fn: string, args: object): any;
 };
+/* eslint-enable @typescript-eslint/no-explicit-any */
 
 export function createExternalMcpRepository(db: TypedSupabaseClient): ExternalMcpRepository {
   const u = db as unknown as Untyped;
@@ -71,7 +73,7 @@ export function createExternalMcpRepository(db: TypedSupabaseClient): ExternalMc
         .select('id, url, display_name, status')
         .single();
       if (error || !data) throw new Error('failed to create the MCP endpoint');
-      return { id: data.id, url: data.url, displayName: data.display_name, status: data.status };
+      return { id: data.id, url: data.url, displayName: data.display_name, status: data.status, snapshot: null };
     },
 
     async getEndpoint(orgId, endpointId) {
@@ -86,14 +88,39 @@ export function createExternalMcpRepository(db: TypedSupabaseClient): ExternalMc
     },
 
     async listEndpoints(orgId) {
-      const { data, error } = await u
+      const { data: endpoints, error } = await u
         .from('external_tool_endpoints')
         .select('id, url, display_name, status')
         .eq('organization_id', orgId)
         .order('created_at', { ascending: false });
       if (error) throw new Error('failed to list MCP endpoints');
-      const rows = Array.isArray(data) ? data : [];
-      return rows.map((d) => ({ id: d.id, url: d.url, displayName: d.display_name, status: d.status }));
+      const eps = Array.isArray(endpoints) ? endpoints : [];
+
+      const { data: snapshots, error: serr } = await u
+        .from('external_tool_snapshots')
+        .select('id, endpoint_id, approved_at, version')
+        .eq('organization_id', orgId)
+        .order('version', { ascending: false });
+      if (serr) throw new Error('failed to list snapshots');
+      const snaps = Array.isArray(snapshots) ? snapshots : [];
+
+      const { data: tools, error: terr } = await u
+        .from('external_tools')
+        .select('snapshot_id')
+        .eq('organization_id', orgId);
+      if (terr) throw new Error('failed to list tools');
+      const counts = new Map<string, number>();
+      for (const t of Array.isArray(tools) ? tools : []) {
+        counts.set(t.snapshot_id, (counts.get(t.snapshot_id) ?? 0) + 1);
+      }
+
+      return eps.map((e) => {
+        const latest = snaps.find((s) => s.endpoint_id === e.id);
+        const snapshot = latest
+          ? { id: latest.id, toolCount: counts.get(latest.id) ?? 0, approved: latest.approved_at !== null }
+          : null;
+        return { id: e.id, url: e.url, displayName: e.display_name, status: e.status, snapshot };
+      });
     },
 
     async createSnapshot(orgId, endpointId, version, contentSha256) {
@@ -204,6 +231,17 @@ export function createExternalMcpRepository(db: TypedSupabaseClient): ExternalMc
         .eq('id', endpointId)
         .eq('organization_id', orgId);
       if (error) throw new Error('failed to delete the MCP endpoint');
+    },
+
+    async recordApproval(orgId, connectionId, capability, argumentsSha256, ttlSeconds) {
+      const { error } = await u.rpc('record_tool_approval', {
+        p_organization_id: orgId,
+        p_connection_id: connectionId,
+        p_capability: capability,
+        p_arguments_sha256: argumentsSha256,
+        p_ttl_seconds: ttlSeconds,
+      });
+      if (error) throw new Error('failed to record the approval');
     },
   };
 }

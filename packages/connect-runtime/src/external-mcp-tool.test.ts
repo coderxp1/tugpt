@@ -82,7 +82,7 @@ describe('createExternalMcpTool', () => {
 
   it('validates arguments are a JSON object', () => {
     const tool = createExternalMcpTool({ url: 'https://customer.example.com/mcp', resolveHostname: PUBLIC }, TOOL_DEF);
-    expect(tool.validate('nope', 0).ok).toBe(false);
+    expect(tool.validate('nope' as unknown as Readonly<Record<string, unknown>>, 0).ok).toBe(false);
     expect(tool.validate({ id: 'x' }, 0).ok).toBe(true);
   });
 });
@@ -120,5 +120,15 @@ describe('assertPublicEndpoint (SSRF)', () => {
   });
   it('rejects a link-local IPv6', async () => {
     await expect(assertPublicEndpoint('https://[fe80::1]/', PUBLIC)).rejects.toThrow();
+  });
+});
+
+describe('B-8 no direct fetch (egress proxy required)', () => {
+  it('fails closed when no proxy-aware fetch is injected', async () => {
+    const tool = createExternalMcpTool({ url: 'https://customer.example.com/mcp', resolveHostname: async () => ['93.184.216.34'] }, TOOL_DEF);
+    const result = await tool.execute({}, { accessToken: 'x', now: () => 0 });
+    expect(result.ok).toBe(false);
+    if (result.ok) return;
+    expect(result.code).toBe('PROVIDER_UNAVAILABLE');
   });
 });
