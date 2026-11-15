@@ -1,0 +1,23 @@
+{
+  "name": "@tugpt/connect-server",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Server-side Connect composition (ADR-021): v2 OAuth flow shared by web and worker.",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.112.3",
+    "@tugpt/appointments": "workspace:*",
+    "@tugpt/credential-broker": "workspace:*",
+    "@tugpt/security": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5"
+  }
+}

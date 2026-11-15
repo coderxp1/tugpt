@@ -53,6 +53,17 @@ export interface GrantChecker {
   }): Promise<boolean>;
 }
 
+/** Per-call approval for write/irreversible/financial tools (B-7). */
+export interface ApprovalChecker {
+  claimApproval(input: {
+    organizationId: string;
+    connectionId: string;
+    capability: string;
+    actorUserId: string;
+    argumentsSha256: string;
+  }): Promise<boolean>;
+}
+
 /** Satisfied by `BrokerClient` (caller = worker). */
 export interface AccessTokenSource {
   getAccessToken(scope: { organizationId: string; connectionId: string }): Promise<BrokerResult<AccessTokenGrant>>;

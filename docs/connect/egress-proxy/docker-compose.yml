@@ -1,0 +1,39 @@
+# Staging topology for customer-MCP egress (prepared, not deployed).
+# The proxy is the ONLY component with a route out; app containers are internal.
+version: "3.9"
+
+networks:
+  mcp-int:
+    internal: true       # app containers: no default route
+  mcp-egress: {}         # routed: proxy's only upstream path
+
+services:
+  egress-proxy:
+    image: stripe/smokescreen:latest
+    read_only: true
+    cap_drop: [ALL]
+    security_opt:
+      - no-new-privileges:true
+    user: "65534:65534"
+    # No published ports: reachable only from the internal network.
+    networks:
+      - mcp-int
+      - mcp-egress
+    environment:
+      # Deny all non-public ranges + documentation + multicast (see README rule 3).
+      DENY_RANGES: |
+        0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,
+        172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.168.0.0/16,
+        198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,
+        240.0.0.0/4,::/128,::1/128,64:ff9b::/96,100::/64,2001:db8::/32,
+        fc00::/7,fe80::/10,ff00::/8
+    command: ["--listen-ip", "0.0.0.0", "--listen-port", "3128"]
+
+  # Test-only probe (same internal network) â€” used by tests/egress-probe.cjs.
+  probe:
+    image: node:22-alpine
+    profiles: ["test"]
+    networks:
+      - mcp-int
+    depends_on:
+      - egress-proxy

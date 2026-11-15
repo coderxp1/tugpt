@@ -25,6 +25,7 @@ import { createHash } from 'node:crypto';
 import type { ProposedToolCall, ToolDefinition, ToolLoopMessage } from '@tugpt/ai-providers';
 import type {
   AccessTokenSource,
+  ApprovalChecker,
   ConnectionDirectory,
   ConnectTool,
   GrantChecker,
@@ -64,6 +65,7 @@ export interface ConnectToolRuntimeOptions {
   readonly grants: GrantChecker;
   readonly tokens: AccessTokenSource;
   readonly audit: ToolAuditSink;
+  readonly approvals?: ApprovalChecker;
   readonly now?: () => number;
   readonly maxOutputBytes?: number;
   readonly maxCallsPerTurn?: number;
@@ -129,7 +131,8 @@ export class ConnectToolRuntime {
     const tool = this.byModelName.get(call.name);
     if (!tool) return this.refuse(ctx, call, null, 'UNKNOWN_TOOL', started);
     try {
-      const refusal = await this.authorize(ctx, tool);
+      const argumentsSha256 = createHash('sha256').update(canonicalJson(call.arguments)).digest('hex');
+      const refusal = await this.authorize(ctx, tool, argumentsSha256);
       if (refusal) return this.refuse(ctx, call, tool.capability, refusal, started);
 
       const validated = tool.validate(call.arguments, this.now());
@@ -160,7 +163,7 @@ export class ConnectToolRuntime {
     }
   }
 
-  private async authorize(ctx: ToolExecutionContext, tool: ConnectTool<unknown>): Promise<ToolErrorCode | null> {
+  private async authorize(ctx: ToolExecutionContext, tool: ConnectTool<unknown>, argumentsSha256: string): Promise<ToolErrorCode | null> {
     const conn = await this.opts.connections.getConnection(ctx.organizationId, ctx.connectionId);
     // Defence in depth: even if a directory implementation ignored the org
     // filter, a foreign-org row is treated as not found.
@@ -178,9 +181,18 @@ export class ConnectToolRuntime {
     if (!granted) return 'NOT_GRANTED';
     if (conn.status === 'requires_authorization' || conn.status === 'expired') return 'REAUTHORIZATION_REQUIRED';
     if (conn.status !== 'connected') return 'CONNECTION_NOT_ACTIVE';
-    if (!tool.acceptedScopes.some((s) => conn.grantedScopes.includes(s))) return 'SCOPE_MISSING';
+    if (tool.acceptedScopes.length > 0 && !tool.acceptedScopes.some((s) => conn.grantedScopes.includes(s))) return 'SCOPE_MISSING';
     // Write tools require the approval flow (not part of this slice).
-    if (tool.risk !== 'read') return 'APPROVAL_REQUIRED';
+    if (tool.risk !== 'read') {
+      const approved = await (this.opts.approvals?.claimApproval({
+        organizationId: ctx.organizationId,
+        connectionId: ctx.connectionId,
+        capability: tool.capability,
+        actorUserId: ctx.actorUserId,
+        argumentsSha256,
+      }) ?? false);
+      if (!approved) return 'APPROVAL_REQUIRED';
+    }
     return null;
   }
 

@@ -143,3 +143,4 @@ export {
   type GoogleOAuthErrorCode,
   type GoogleOAuthDeps,
 } from './google-oauth.js';
+export * from './outlook-freebusy-provider.js';
