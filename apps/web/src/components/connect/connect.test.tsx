@@ -96,7 +96,8 @@ describe('McpPanel', () => {
     expect(screen.queryByRole('button', { name: 'Add server' })).toBeNull();
   });
   it('registers from the real response, shows discovered count and an activation denial', async () => {
-    const fetchMock = vi.fn(async (url: string) => {
+    const fetchMock = vi.fn(async (...args: [url: string, init?: RequestInit]) => {
+      const [url] = args;
       if (url.endsWith('/endpoints')) return new Response(JSON.stringify({ endpoint: { id: 'e1', url: 'https://mcp.example.com', displayName: 'Docs', status: 'pending' } }), { status: 201 });
       if (url.endsWith('/snapshot')) return new Response(JSON.stringify({ snapshotId: 's1', toolCount: 4 }), { status: 201 });
       return new Response(JSON.stringify({ error: { code: 'ACTIVATION_DENIED', message: 'no approved snapshot' } }), { status: 409 });
