@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { configuredModels, endpointFor, findModel, parseEndpointUrl, publicModels } from './models';
+import { verifiedToolModels, configuredModels, endpointFor, findModel, parseEndpointUrl, publicModels } from './models';
 import { parseToolCallList } from './openai-compatible';
 
 describe('parseEndpointUrl', () => {
@@ -20,7 +20,14 @@ describe('configuredModels', () => {
   it('offers the private model only with a valid endpoint', () => {
     expect(configuredModels({ TUGPT_PRIVATE_LLM_URL: 'http://192.168.1.2/v1' })).toEqual([]);
     const [m] = configuredModels({ TUGPT_PRIVATE_LLM_URL: 'http://127.0.0.1:12435/v1' });
-    expect(m).toMatchObject({ key: 'tugpt-scout', private: true, toolCalling: true, upstreamModel: 'tugpt-scout:latest' });
+    expect(m).toMatchObject({ key: 'tugpt-scout', private: true, toolCalling: false, upstreamModel: 'tugpt-scout:latest' });
+  });
+  it('enables tool calling only for models an operator marked verified', () => {
+    const base = { TUGPT_PRIVATE_LLM_URL: 'http://127.0.0.1:12435/v1', LANGDOCK_API_KEY: 'k' };
+    expect(configuredModels(base).every((m) => !m.toolCalling)).toBe(true);
+    const all = configuredModels({ ...base, TUGPT_CHAT_VERIFIED_TOOL_MODELS: ' TUGPT-SCOUT , not-a-model ' });
+    expect(all.filter((m) => m.toolCalling).map((m) => m.key)).toEqual(['tugpt-scout']);
+    expect(verifiedToolModels({})).toEqual(new Set());
   });
   it('never exposes endpoints or keys to the browser', () => {
     const env = { TUGPT_PRIVATE_LLM_URL: 'http://127.0.0.1:12435/v1', TUGPT_PRIVATE_LLM_KEY: 'k-private', LANGDOCK_API_KEY: 'k-langdock' };

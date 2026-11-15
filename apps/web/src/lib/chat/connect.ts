@@ -29,16 +29,36 @@ export interface ChatToolContext {
   readonly threadId: string;
 }
 
+/**
+ * The single registry of tools chat can expose. The picker (via
+ * hasRegisteredTool) and the turn (via buildChatToolset) both read it, so a
+ * capability is never offered in the UI without a tool behind it.
+ * Outlook calendar and customer MCP tools are not registered: their runtime
+ * modules are not on this branch yet (backend dependency B-3).
+ */
 export function registeredTools(): ConnectTool<never>[] {
   return [createCalendarFindAvailabilityTool() as unknown as ConnectTool<never>];
 }
 
+export function hasRegisteredTool(capabilityKey: string, providerKey: string, tools: readonly ConnectTool<never>[] = registeredTools()): boolean {
+  return tools.some((t) => t.capability === capabilityKey && t.provider === providerKey);
+}
+
 type Env = Readonly<Record<string, string | undefined>>;
 
+const HEX_KEY = /^(?:[0-9a-f]{2}){32,}$/i;
+
+/**
+ * Broker contract (packages/connect-server): TUGPT_BROKER_URL and
+ * TUGPT_BROKER_CALLER_KEY, the key hex-encoded and at least 32 bytes.
+ * Anything missing or malformed yields no token (fail closed).
+ */
 export function brokerTokenSource(env: Env = process.env): AccessTokenSource {
-  const baseUrl = env.TUGPT_CREDENTIAL_BROKER_URL; const key = env.TUGPT_CREDENTIAL_BROKER_WEB_KEY;
-  if (!baseUrl || !key) return { async getAccessToken() { return { ok: false, code: 'UNAVAILABLE' }; } };
-  const client = new BrokerClient({ baseUrl, caller: 'web', key: Buffer.from(key, 'base64') });
+  const unavailable: AccessTokenSource = { async getAccessToken() { return { ok: false, code: 'UNAVAILABLE' }; } };
+  const baseUrl = env.TUGPT_BROKER_URL; const key = env.TUGPT_BROKER_CALLER_KEY?.trim();
+  if (!baseUrl || !key || !HEX_KEY.test(key)) return unavailable;
+  let client: BrokerClient;
+  try { client = new BrokerClient({ baseUrl, caller: 'web', key: Buffer.from(key, 'hex') }); } catch { return unavailable; }
   return { getAccessToken: (scope) => client.getAccessToken(scope) };
 }
 

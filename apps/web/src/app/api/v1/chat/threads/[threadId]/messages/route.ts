@@ -12,7 +12,7 @@ import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } fro
 import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
 import { completeWithTools, ModelCallError, streamCompletion, type WireMessage } from '@/lib/chat/openai-compatible';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
-import { buildChatToolset } from '@/lib/chat/connect';
+import { buildChatToolset, hasRegisteredTool } from '@/lib/chat/connect';
 import {
   appendMessage, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
@@ -50,6 +50,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     attached = requested.map((m) => caps.find((c) => c.capabilityKey === m.capability && c.providerKey === m.provider))
       .filter((c): c is CapabilityRow => c !== undefined);
     if (attached.some((c) => c.state !== 'connected')) return jsonError(409, 'An attached integration is not connected');
+    if (attached.some((c) => !hasRegisteredTool(c.capabilityKey, c.providerKey))) return jsonError(409, 'This integration is not available in chat yet');
     if (attached.length && !model.toolCalling) return jsonError(409, 'This model cannot use integrations');
     history = await listMessages(ctx.db, orgId, threadId);
     isFirst = history.length === 0;

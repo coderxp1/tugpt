@@ -47,7 +47,8 @@ browser ──same-origin POST──▶ /api/v1/chat/threads/:id/messages
 |---|---|
 | `TUGPT_PRIVATE_LLM_URL`, `TUGPT_PRIVATE_LLM_MODEL` | TuGPT Scout on the private GPU (OpenAI-compatible). Plain `http` is accepted only for loopback. |
 | `LANGDOCK_API_KEY` | Optional. Langdock-hosted models appear only when it is set. |
-| `TUGPT_CREDENTIAL_BROKER_URL`, `TUGPT_CREDENTIAL_BROKER_WEB_KEY` | Credential broker for connector tokens. Without them every tool returns `UNAVAILABLE`; chat still works. |
+| `TUGPT_BROKER_URL`, `TUGPT_BROKER_CALLER_KEY` | Credential broker for connector tokens (same names as `packages/connect-server`). The key is **hex**, at least 32 bytes; caller is `web`. Missing or malformed values mean every tool returns `UNAVAILABLE`; chat still works. The old `TUGPT_CREDENTIAL_BROKER_*` names are no longer read. |
+| `TUGPT_CHAT_VERIFIED_TOOL_MODELS` | Comma-separated chat model keys (e.g. `tugpt-scout`, `langdock:<model>`) that passed the staging tool-calling probe (`docs/connect/model-tool-calling.md`, `recommendedVerifiedModels`). **Empty by default: no model gets tools**, the @ picker explains why, and the messages route returns 409 `This model cannot use integrations`. |
 
 Endpoints and keys never reach the browser (`publicModels()` strips them).
 
