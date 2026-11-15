@@ -29,8 +29,8 @@ export function Overview({ products, hasOrganization }: { products: readonly Pro
       <div className={s.headingNote}>One platform. More possibilities. ✳</div>
     </div>
     <section className={s.hero} aria-labelledby="hero-title">
-      <div className={s.heroCopy}><span className={s.tag}>Your connected platform</span><h2 id="hero-title">Big ideas start<br />right here.</h2><p>Bring your conversations, knowledge and tools together. Start with the capabilities available to your organization.</p>
-        <div className={s.heroActions}><a className={s.primary} href="#platform">Explore your platform <span aria-hidden="true">↘</span></a><span>Workspace is a separate, upcoming phase.</span></div>
+      <div className={s.heroCopy}><span className={s.tag}>Your connected platform</span><h2 id="hero-title">Big ideas start<br />right here.</h2><p>Ask TuGPT anything in Chat, on private models running on TuGPT’s own EU GPU. Your chats are saved and only you can see them.</p>
+        <div className={s.heroActions}><Link className={s.primary} href="/dashboard/chat" prefetch={false}>Start a chat <span aria-hidden="true">→</span></Link><a className={s.heroLink} href="#platform">Explore your platform ↘</a></div>
       </div>
       <div className={s.heroArt} aria-hidden="true"><div className={s.orbit} />
         <div className={`${s.floatCard} ${s.one}`}><span className={s.floatIcon}><Glyph name="spark" /></span><div>Ideas in motion<small>Powered by your context</small></div></div>
@@ -55,7 +55,7 @@ export function Overview({ products, hasOrganization }: { products: readonly Pro
           <div className={s.items}>{entries.map(c => {
             const p = c.productView;
             const href = hasOrganization ? p?.href : null;
-            const status = p?.state === 'held' ? t('hub.state.held') : !href ? c.id === 'workspace' ? 'Separate phase' : c.product && !hasOrganization ? 'Membership required' : 'Not yet available' : p?.featureAccess === 'disabled' ? 'Not enabled for this organization' : p?.featureAccess === 'unknown' ? 'Availability unknown' : p?.state === 'unknown' ? 'Activity unavailable' : p?.state === 'attention' ? 'Needs attention' : c.id === 'calendar' ? p?.state === 'connected' ? 'Connected' : 'Setup required' : 'Available';
+            const status = p?.state === 'held' ? t('hub.state.held') : !href ? c.product && !hasOrganization ? 'Membership required' : 'Not yet available' : p?.featureAccess === 'disabled' ? 'Not enabled for this organization' : p?.featureAccess === 'unknown' ? 'Availability unknown' : p?.state === 'unknown' ? 'Activity unavailable' : p?.state === 'attention' ? 'Needs attention' : c.id === 'calendar' ? p?.state === 'connected' ? 'Connected' : 'Setup required' : 'Available';
             const body = <><span className={s.box}><Glyph name={c.glyph} /></span><span className={s.itemText}><span className={s.itemName}>{c.title}</span><span className={s.itemDesc}>{c.description}</span><span className={`${s.itemStatus} ${href ? s.available : ''}`}>{status}{p?.metric !== null && p?.metric !== undefined && p.metricKey ? ` · ${p.metric} ${t(p.metricKey)}` : ''}</span></span>{href && <span className={s.itemArrow} aria-hidden="true">↗</span>}</>;
             return <div key={c.id} role="listitem" data-capability={c.id} data-blueprint-area={c.area}>
               {href ? <Link prefetch={false} href={href} className={s.item}>{body}</Link> : <div className={`${s.item} ${s.planned}`}>{body}</div>}

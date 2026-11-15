@@ -28,6 +28,7 @@ export const en: Dictionary = {
   'shell.signOut': 'Sign out',
 
   'nav.drafts': 'Drafts',
+  'nav.chat': 'Chat',
   'nav.inbox': 'Conversations',
   'nav.media': 'Media',
   'nav.integrations': 'Integrations',
@@ -427,8 +428,8 @@ export const en: Dictionary = {
   'hub.product.whatsapp.desc': 'Your WhatsApp Business channel connection.',
   'hub.product.analytics': 'Usage & cost',
   'hub.product.analytics.desc': 'What TuGPT is doing for your business, and what it costs.',
-  'hub.product.workspace': 'Workspace',
-  'hub.product.workspace.desc': 'Your AI workspace: conversations with agents and your connected tools.',
+  'hub.product.workspace': 'Chat',
+  'hub.product.workspace.desc': 'Private AI chat with your apps and knowledge.',
   'hub.state.live': 'Live',
   'hub.state.attention': 'Needs attention',
   'hub.state.connected': 'Connected',

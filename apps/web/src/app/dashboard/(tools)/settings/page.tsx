@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { getSessionContext } from '@/lib/tenant/server';
+import { OrganizationSwitcher } from '@/components/shell/OrganizationSwitcher';
 import s from '@/components/connect/connect.module.css';
 
 export const dynamic = 'force-dynamic';
@@ -25,7 +26,7 @@ export default async function SettingsPage() {
           <h2 id="org-h">Organization</h2>
           <p className={s.next}>The workspace you are working in now. Data, chats and connections are kept separate per organization.</p>
           <dl className={s.facts}><dt>Name</dt><dd>{t?.organizationName ?? 'Not available'}</dd><dt>Your role</dt><dd>{t ? ROLE[t.role] ?? t.role : 'Not available'}</dd></dl>
-          <Link className={s.secondary} href="/dashboard/connect">Manage connections</Link>
+          <div className={s.actions}><Link className={s.secondary} href="/dashboard/connect">Manage connections</Link><OrganizationSwitcher label="Switch organization" /></div>
         </section>
       </div>
     </div>

@@ -2,6 +2,7 @@
 
 import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Markdown } from './Markdown';
 import s from './chat.module.css';
 
 /** Same-origin JSON + non-simple header: what isSameOriginMutation() requires. */
@@ -26,7 +27,7 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function ChatWorkspace({ models, organizationName }: { models: PublicModel[]; organizationName: string }) {
+export function ChatWorkspace({ models }: { models: PublicModel[] }) {
   const [threads, setThreads] = useState<Thread[] | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
@@ -157,7 +158,7 @@ export function ChatWorkspace({ models, organizationName }: { models: PublicMode
     <div className={s.chat}>
       <aside className={s.threads} aria-label="Your chats">
         <button type="button" className={s.newChat} onClick={newChat} disabled={busy}>New chat</button>
-        <p className={s.private}>Private to you in {organizationName}</p>
+        <p className={s.private}>Only you can see your chats.</p>
         {threads === null ? <p className={s.muted} role="status">Loading chats…</p> :
           threads.length === 0 ? <p className={s.muted}>No chats yet.</p> :
           <ul className={s.threadList}>{threads.map((t) => (
@@ -187,13 +188,13 @@ export function ChatWorkspace({ models, organizationName }: { models: PublicMode
             ? <p key={m.id} className={m.status === 'error' ? s.toolFail : s.toolOk}>{m.content}</p>
             : <article key={m.id} className={m.role === 'user' ? s.user : s.assistant} aria-label={m.role === 'user' ? 'You' : 'TuGPT'}>
                 {m.mentions.length > 0 && <div className={s.mentions}>{m.mentions.map((x) => <span key={x.capability + x.provider} className={s.chip}>@{x.provider} {x.capability}</span>)}</div>}
-                <div className={s.text}>{m.content || (m.status === 'stopped' ? 'Stopped.' : '')}</div>
+                {m.role === 'assistant' && m.content ? <Markdown text={m.content} /> : <div className={s.text}>{m.content || (m.status === 'stopped' ? 'Stopped.' : '')}</div>}
                 {m.status !== 'complete' && <small className={s.status}>{m.status === 'stopped' ? 'Stopped' : 'Not completed'}</small>}
               </article>)}
           {live && (
             <article className={s.assistant} aria-label="TuGPT is answering">
               {live.tools.map((t, i) => <p key={i} className={t.ok === false ? s.toolFail : s.toolOk}>{TOOL_LABEL[t.tool] ?? t.tool}{t.ok === undefined ? '…' : t.ok ? ' · done' : ` · failed (${t.code ?? 'error'})`}</p>)}
-              <div className={s.text}>{live.text || <span className={s.typing}>Thinking…</span>}</div>
+              {live.text ? <Markdown text={live.text} /> : <div className={s.text}><span className={s.typing}>Thinking…</span></div>}
             </article>
           )}
         </div>

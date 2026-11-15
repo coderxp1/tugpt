@@ -19,15 +19,16 @@ describe('reference-based working Dashboard', () => {
  it('renders the organization, account and English greeting', () => { renderHub(); expect(screen.getAllByText('TuGPT').length).toBeGreaterThan(0); expect(screen.getByText('owner@example.com')).toBeTruthy(); expect(screen.getByRole('heading', {name:'Good to have you here.'})).toBeTruthy(); });
  it('preserves every implemented destination instead of opening dialogs', () => {
   renderHub(); const list=screen.getByRole('list',{name:'TuGPT products'});
-  expect(within(list).getAllByRole('link').map(a=>a.getAttribute('href')).sort()).toEqual(['/dashboard/inbox','/dashboard/drafts','/dashboard/knowledge','/dashboard/analytics'].sort());
+  expect(within(list).getAllByRole('link').map(a=>a.getAttribute('href')).sort()).toEqual(['/dashboard/chat','/dashboard/inbox','/dashboard/drafts','/dashboard/knowledge','/dashboard/analytics'].sort());
   expect(screen.queryByRole('dialog')).toBeNull();
  });
  it('represents exactly all fourteen official Blueprint areas', () => {
   const {container}=renderHub(); const areas=new Set(Array.from(container.querySelectorAll('[data-blueprint-area]')).map(n=>n.getAttribute('data-blueprint-area')));
   expect([...areas].sort()).toEqual([...BLUEPRINT_AREAS].sort()); expect(areas.size).toBe(14);
  });
- it('does not link Workspace or fabricate actions for planned capabilities', () => {
-  const {container}=renderHub(); for(const id of ['media','calendar','whatsapp','workspace','voice','crm','research','agents','privacy','developer','mcp']) expect(container.querySelector(`[data-capability="${id}"] a`)).toBeNull();
+ it('links Chat, and does not fabricate actions for planned capabilities', () => {
+  const {container}=renderHub(); expect(container.querySelector('[data-capability="workspace"] a')?.getAttribute('href')).toBe('/dashboard/chat');
+  for(const id of ['media','calendar','whatsapp','voice','crm','research','agents','privacy','developer','mcp']) expect(container.querySelector(`[data-capability="${id}"] a`)).toBeNull();
   expect(container.querySelectorAll('a[href*="workspace.tugpt.pro"]').length).toBe(0);
  });
  it('preserves attention and real metrics', () => { renderHub(); expect(screen.getByRole('link',{name:/Conversations · 2 need a person/}).getAttribute('href')).toBe('/dashboard/inbox'); expect(screen.getByText(/Available · 14/)).toBeTruthy(); });
@@ -54,7 +55,7 @@ describe('reference-based working Dashboard', () => {
 
 it('offers explicit organization selection while held flags never activate controls', () => {
   const { container } = renderHub({ ...signals, mediaFeatureEnabled: true });
-  expect(screen.getByRole('button', { name: 'Switch organization' })).toBeTruthy();
+  expect(screen.queryByRole('button', { name: 'Switch organization' })).toBeNull();
   expect(container.querySelector('a[href="/dashboard/media"]')).toBeNull();
   expect(container.querySelector('a[href="/settings/integrations"]')).toBeNull();
   expect(screen.getAllByText('On hold pending review').length).toBeGreaterThan(0);

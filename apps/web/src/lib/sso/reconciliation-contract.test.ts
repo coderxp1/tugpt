@@ -20,7 +20,7 @@ describe('ordinary and held separation', () => {
   });
   it('leaves ordinary destinations available but never derives held routes from flags', () => {
     const products = resolveProducts({ ...UNAVAILABLE_SIGNALS, draftFeatureEnabled: false, mediaFeatureEnabled: true });
-    for (const id of ['conversations', 'drafts', 'knowledge', 'analytics']) expect(products.find(p => p.id === id)?.href).toBeTruthy();
-    for (const id of ['media', 'calendar', 'whatsapp', 'workspace']) expect(products.find(p => p.id === id)?.href).toBeNull();
+    for (const id of ['conversations', 'drafts', 'knowledge', 'analytics', 'workspace']) expect(products.find(p => p.id === id)?.href).toBeTruthy();
+    for (const id of ['media', 'calendar', 'whatsapp']) expect(products.find(p => p.id === id)?.href).toBeNull();
   });
 });

@@ -42,10 +42,11 @@ vi.mock('next/link', () => ({
 
 const t = createTranslator('en');
 
-function renderShell(overrides: { organizationName?: string | null; email?: string | null } = {}) {
+function renderShell(overrides: { organizationName?: string | null; email?: string | null; fullName?: string | null } = {}) {
   return render(
     <AppShell
       organizationName={overrides.organizationName === undefined ? 'Panadería La Espiga' : overrides.organizationName}
+      fullName={overrides.fullName === undefined ? null : overrides.fullName}
       email={overrides.email === undefined ? 'revisor@example.com' : overrides.email}
       t={t}
     >
@@ -60,20 +61,20 @@ afterEach(() => {
 });
 
 describe('what the header tells a reviewer', () => {
-  it('names the organization whose replies are being approved', () => {
-    // Multi-tenant product, and every draft on screen goes out as a business.
-    // A reviewer who cannot see whose inbox this is can approve a bakery's
-    // prices into a hardware store's conversation.
-    renderShell();
-    expect(screen.getByText('Panadería La Espiga')).toBeTruthy();
+  it('shows the signed-in person, not the customer company, in the frame', () => {
+    // 2026-11-15 product decision: the frame is the person's. Organization
+    // membership stays in the session and RLS, and is shown where it is the
+    // subject (Settings → Organization, with the explicit switcher).
+    renderShell({ fullName: 'Anna Berger' });
+    expect(screen.getByText('Anna Berger')).toBeTruthy();
+    expect(screen.getByText('revisor@example.com')).toBeTruthy();
+    expect(screen.queryByText('Panadería La Espiga')).toBeNull();
   });
 
-  it('says so plainly when the organization cannot be resolved', () => {
-    // Supabase unreachable, or a user in no organization. The header renders
-    // either way — a blank where the name goes reads as "no organization",
-    // which is a different and much more alarming claim.
-    renderShell({ organizationName: null });
-    expect(screen.getByText(t('shell.organizationUnknown'))).toBeTruthy();
+  it('does not invent an organization line when none resolves', () => {
+    const { container } = renderShell({ organizationName: null });
+    expect(container.textContent).not.toContain(t('shell.organizationUnknown'));
+    expect(screen.getByText('revisor@example.com')).toBeTruthy();
   });
 
   it('shows who is signed in', () => {
@@ -207,7 +208,9 @@ describe('where the server/client boundary sits', () => {
 
 it('keeps organization selection explicit and held modules non-operational', () => {
   const { container } = renderShell();
-  expect(screen.getByRole('button', { name: 'Switch organization' })).toBeTruthy();
+  // The switcher lives in Settings → Organization, not in the frame.
+  expect(screen.queryByRole('button', { name: 'Switch organization' })).toBeNull();
   expect(container.querySelector('a[href="/dashboard/media"]')).toBeNull();
+  expect(container.querySelector('a[href="/dashboard/agents"]')).toBeNull();
   expect(container.querySelector('a[href="/settings/integrations"]')).toBeNull();
 });

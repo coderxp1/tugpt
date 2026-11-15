@@ -25,3 +25,6 @@
 
 .orgName{display:block;color:#fff;font-size:14px;padding:0 1px;overflow-wrap:anywhere}.orgRole{display:block;color:#a4a59d;font-size:11px;margin:2px 1px 8px}
 a.profile:hover strong{text-decoration:underline}
+
+.sideText{display:flex;flex-direction:column;min-width:0}.sideState{display:block;font-size:11px;line-height:1.3;color:#9c9d95;margin-top:1px}.personName{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.profile .personEmail{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:150px;color:#c7c8c1}.profile .identity{display:flex;flex-direction:column;min-width:0;flex:1}
+.heroLink{color:#f2f2ea!important;font-weight:600;font-size:14px;padding:12px 4px;text-decoration:underline;text-underline-offset:4px}.heroLink:hover{color:#fff!important}.heroLink:focus-visible,.primary:focus-visible{outline:2px solid var(--yellow);outline-offset:3px;border-radius:6px}

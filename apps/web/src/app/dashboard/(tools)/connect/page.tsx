@@ -23,7 +23,7 @@ const PROVIDER_COPY: Record<string, { blurb: string; next: Record<CapabilityStat
       connected: 'Type @ in Chat to use it.',
       requires_connection: 'Sign in with Google to connect your account. TuGPT asks only for the permissions listed here.',
       disabled_by_policy: 'An administrator of your organization has turned this provider off.',
-      not_available: 'Google sign-in is being activated for TuGPT. You will be able to connect here as soon as it is live.',
+      not_available: 'Connecting Google accounts is not switched on for TuGPT yet. Nothing is connected, and TuGPT has no access to your Google data.',
     },
   },
   microsoft: {
@@ -32,7 +32,7 @@ const PROVIDER_COPY: Record<string, { blurb: string; next: Record<CapabilityStat
       connected: 'Type @ in Chat to use it.',
       requires_connection: 'Sign in with Microsoft to connect your account.',
       disabled_by_policy: 'An administrator of your organization has turned this provider off.',
-      not_available: 'Microsoft 365 is in development and will appear here when it is ready.',
+      not_available: 'Connecting Microsoft 365 accounts is not switched on for TuGPT yet. Nothing is connected, and TuGPT has no access to your Microsoft data.',
     },
   },
 };
@@ -87,7 +87,7 @@ export default async function ConnectPage() {
           );
         })}
       </ul>
-      <p className={s.foot}>TuGPT never sees your password. Sign-in happens with the provider, tokens are stored encrypted, and every use is recorded in your organization&rsquo;s audit log.</p>
+      <p className={s.foot}>When connecting is available, you sign in on the provider&rsquo;s own page, so TuGPT never sees your password. Access is limited to the permissions listed on each card, and every use in Chat is recorded in your organization&rsquo;s audit log.</p>
     </div>
   );
 }

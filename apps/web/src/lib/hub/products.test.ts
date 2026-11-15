@@ -36,10 +36,10 @@ describe('the product registry', () => {
     }
   });
 
-  it('does not link the Workspace, which is the next phase and not built', () => {
+  it('links the Workspace entry to Chat, which is built', () => {
     const ws = PRODUCTS.find((p) => p.id === 'workspace');
-    expect(ws?.href).toBeNull();
-    expect(byId(healthy).workspace.state).toBe('planned');
+    expect(ws?.href).toBe('/dashboard/chat');
+    expect(byId(healthy).workspace.state).toBe('live');
   });
 
   it('does not link WhatsApp, which has no self-service page yet', () => {

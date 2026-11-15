@@ -40,6 +40,7 @@ export const es = {
   'shell.signOut': 'Cerrar sesión',
 
   'nav.drafts': 'Borradores',
+  'nav.chat': 'Chat',
   'nav.inbox': 'Conversaciones',
   'nav.media': 'Multimedia',
   'nav.integrations': 'Integraciones',
@@ -445,8 +446,8 @@ export const es = {
   'hub.product.whatsapp.desc': 'La conexión del canal de WhatsApp Business.',
   'hub.product.analytics': 'Uso y costos',
   'hub.product.analytics.desc': 'Lo que TuGPT hace por el negocio y lo que cuesta.',
-  'hub.product.workspace': 'Workspace',
-  'hub.product.workspace.desc': 'El espacio de trabajo con IA: conversaciones con agentes y herramientas conectadas.',
+  'hub.product.workspace': 'Chat',
+  'hub.product.workspace.desc': 'Chat privado con IA, con tus aplicaciones y conocimiento.',
   'hub.state.live': 'Activo',
   'hub.state.attention': 'Requiere atención',
   'hub.state.connected': 'Conectado',

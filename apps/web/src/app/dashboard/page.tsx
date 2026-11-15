@@ -45,6 +45,7 @@ export default async function DashboardHubPage() {
   return (
     <ProductHub
       organizationName={session?.tenant?.organizationName ?? null}
+      fullName={session?.fullName ?? null}
       email={session?.email || null}
       role={role ? t.maybe(`hub.role.${role}`, role) : null}
       products={resolveProducts(signals)}

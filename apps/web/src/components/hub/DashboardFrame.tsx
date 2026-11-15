@@ -3,16 +3,16 @@
 import Link from 'next/link';
 import { usePathname } from 'next/navigation';
 import { useEffect, useRef, useState } from 'react';
-import { OrganizationSwitcher } from '@/components/shell/OrganizationSwitcher';
 import { useT } from '@/i18n/provider';
 import { Glyph, TuGPTMark } from './glyphs';
 import type { ProductGlyph } from '@/lib/hub/products';
 import s from './reference.module.css';
 
-const modules: readonly { href: string; title: string; icon: ProductGlyph; held?: boolean }[] = [
+const modules: readonly { href: string; title: string; icon: ProductGlyph; held?: boolean; planned?: boolean }[] = [
   { href: '/dashboard/inbox', title: 'Conversations', icon: 'chat' },
   { href: '/dashboard/drafts', title: 'AI Drafts', icon: 'draft' },
   { href: '/dashboard/knowledge', title: 'Knowledge', icon: 'book' },
+  { href: '/dashboard/agents', title: 'Agents & workflows', icon: 'spark', planned: true },
   { href: '/dashboard/media', title: 'Media Studio', icon: 'film', held: true },
   { href: '/dashboard/analytics', title: 'Usage & Costs', icon: 'chart' },
 ];
@@ -23,17 +23,22 @@ const destinations: readonly { href: string; title: string }[] = [
   { href: '/dashboard/settings', title: 'Settings' },
   ...modules,
 ];
-const ROLE_LABEL: Record<string, string> = { owner: 'Owner', admin: 'Administrator', manager: 'Manager', agent: 'Member', viewer: 'Viewer' };
+/**
+ * The customer-facing frame shows the signed-in person, never the tenant's
+ * company name: organization membership stays in the session and in RLS, and is
+ * shown only where it is the subject (Settings → Organization).
+ */
 export interface DashboardFrameProps {
-  organizationName: string | null; email: string | null; role?: string | null;
+  fullName?: string | null; email: string | null;
   children: React.ReactNode; overview?: boolean;
 }
-export function DashboardFrame({ organizationName, email, role, children, overview = false }: DashboardFrameProps) {
+export function DashboardFrame({ fullName = null, email, children, overview = false }: DashboardFrameProps) {
   const t = useT();
   const pathname = usePathname() ?? '/dashboard';
   const current = destinations.find(m => pathname === m.href || pathname.startsWith(m.href + '/'));
   const is = (href: string) => current?.href === href;
-  const initial = (email || organizationName || 'T').charAt(0).toUpperCase();
+  const displayName = fullName || email || 'Your account';
+  const initial = displayName.charAt(0).toUpperCase();
   const [open, setOpen] = useState(false);
   const sidebar = useRef<HTMLElement>(null);
   const menu = useRef<HTMLButtonElement>(null);
@@ -79,15 +84,14 @@ export function DashboardFrame({ organizationName, email, role, children, overvi
       <div className={s.sideLabel}>{overview ? 'Explore' : 'Your tools'}</div>
       <nav className={s.sideNav} aria-label="Application modules">
         {modules.filter(m => !overview || m.href.startsWith('/settings') || m.href.endsWith('/analytics')).map(m =>
-          <div key={m.href}>{m.held ? <span className={`${s.sideBtn} ${s.unavailable}`}><Glyph name={m.icon} /><span>{m.title}<small>{t('hub.state.held')}</small></span></span> : navLink(m.href, m.title, m.icon, current?.href === m.href)}</div>)}
+          <div key={m.href}>{m.held || m.planned
+            ? <span className={`${s.sideBtn} ${s.unavailable}`} aria-disabled="true"><Glyph name={m.icon} /><span className={s.sideText}>{m.title}<small className={s.sideState}>{m.held ? t('hub.state.held') : 'Not available yet'}</small></span></span>
+            : navLink(m.href, m.title, m.icon, current?.href === m.href)}</div>)}
       </nav>
       <div className={s.sideBottom}>
-        <div className={s.sideLabel}>Organization</div>
-        <div className={s.identity}><strong className={s.orgName}>{organizationName ?? 'Organization unavailable'}</strong>{role && <small className={s.orgRole}>Your role: {ROLE_LABEL[role] ?? role}</small>}</div>
-        <OrganizationSwitcher label={t('session.switchOrganization')} />
         <Link href="/dashboard/settings" prefetch={false} onClick={follow} className={s.profile} aria-current={is('/dashboard/settings') ? 'page' : undefined}>
           <span className={s.avatar} aria-hidden="true">{initial}</span>
-          <span className={s.identity}><strong>{email || 'Your account'}</strong><small>Profile &amp; settings</small></span>
+          <span className={s.identity}><strong className={s.personName}>{displayName}</strong>{fullName && email && <small className={s.personEmail} title={email}>{email}</small>}<small>Profile &amp; settings</small></span>
         </Link>
         <Link href="/auth/logout" prefetch={false} className={s.signOut}>Sign out ↗</Link>
       </div>
@@ -97,7 +101,7 @@ export function DashboardFrame({ organizationName, email, role, children, overvi
       <header className={s.topbar}>
         <button ref={menu} className={s.mobileMenu} type="button" aria-label="Open navigation" aria-controls="dashboard-sidebar" aria-expanded={open} onClick={() => setOpen(!open)}><span aria-hidden="true">☰</span></button>
         <div className={s.crumb}>TuGPT <span aria-hidden="true"> / </span><strong>{overview ? 'Overview' : current?.title ?? 'Dashboard'}</strong></div>
-        <div className={s.topActions}><Link href="/dashboard/settings" prefetch={false} className={s.accountMark} aria-label={`Your account${email ? `: ${email}` : ''}`}>{initial}</Link></div>
+        <div className={s.topActions}><Link href="/dashboard/settings" prefetch={false} className={s.accountMark} aria-label={`Your account: ${displayName}`}>{initial}</Link></div>
       </header>
       <main id="contenido" className={overview ? s.content : s.toolContent}>{children}</main>
     </div>
