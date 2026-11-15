@@ -277,6 +277,30 @@ const ROUTES: RouteExpectation[] = [
     why: 'Proxy requires a session first (401 JSON). Then: Handler authenticates and resolves the tenant; invoker-rights RPC returns catalogue states for the caller only, without connection ids.',
   },
   {
+    path: '/api/v1/create/images',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Handler resolves the tenant strictly; organization comes from the session only (body fields are allow-listed); same-origin + CSRF header on POST; history is RLS-scoped to the owner while a member (pgTAP create_images 4-16).',
+  },
+  {
+    path: '/api/v1/create/images/[imageId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Handler reads the row through RLS before any GPU call, so a colleague or another tenant gets 404 and the GPU is never asked (route.test.ts).',
+  },
+  {
+    path: '/api/v1/create/images/[imageId]/cancel',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Same-origin + CSRF POST; ownership checked through RLS before the GPU cancel call.',
+  },
+  {
+    path: '/api/v1/create/images/[imageId]/file',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Owner-only via RLS; only magic-checked PNG bytes are returned, with nosniff, a sandbox CSP and private no-store.',
+  },
+  {
     path: '/api/v1/analytics/usage',
     kind: 'api',
     type: 'public',
