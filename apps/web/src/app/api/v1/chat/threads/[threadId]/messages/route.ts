@@ -1,6 +1,6 @@
 /**
  * POST a user message and stream the assistant turn as NDJSON events:
- *   {type:'user',message} {type:'tool_start'|'tool_result',...} {type:'delta',text}
+ *   {type:'user',message} {type:'tool_start'|'tool_result',...,provider} {type:'delta',text}
  *   {type:'done',message} | {type:'error',code}
  *
  * @-mentions are re-validated against list_chat_capabilities() for this
@@ -12,7 +12,7 @@ import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } fro
 import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
 import { completeWithTools, ModelCallError, streamCompletion, type WireMessage } from '@/lib/chat/openai-compatible';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
-import { buildChatToolset, hasRegisteredTool } from '@/lib/chat/connect';
+import { buildChatToolset, conflictingAttachments, hasRegisteredTool } from '@/lib/chat/connect';
 import {
   appendMessage, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
@@ -52,6 +52,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     if (attached.some((c) => c.state !== 'connected')) return jsonError(409, 'An attached integration is not connected');
     if (attached.some((c) => !hasRegisteredTool(c.capabilityKey, c.providerKey))) return jsonError(409, 'This integration is not available in chat yet');
     if (attached.length && !model.toolCalling) return jsonError(409, 'This model cannot use integrations');
+    if (conflictingAttachments(attached)) return jsonError(409, 'Attach one calendar per message');
     history = await listMessages(ctx.db, orgId, threadId);
     isFirst = history.length === 0;
   } catch (e) { return storeErrorResponse(e); }
@@ -100,7 +101,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
               status: ev.ok ? 'complete' : 'error',
             }).catch(() => undefined);
           }
-          send(ev);
+          // Provider name for the UI label; comes from the server-side capability row, never from the model.
+          send(ev.type === 'tool_start' || ev.type === 'tool_result' ? { ...ev, provider: toolset.describe(ev.tool)?.providerName ?? null } : ev);
         }
       } catch (e) {
         if (signal.aborted) status = 'stopped';

@@ -1,5 +1,6 @@
-import { describe, expect, it } from 'vitest';
-import { brokerTokenSource, hasRegisteredTool, registeredTools } from './connect';
+import { describe, expect, it, vi } from 'vitest';
+import { brokerTokenSource, conflictingAttachments, dbApprovals, hasRegisteredTool, registeredTools } from './connect';
+import type { CapabilityRow, ChatDb } from './store';
 
 const HEX32 = 'ab'.repeat(32);
 
@@ -25,12 +26,53 @@ describe('brokerTokenSource (backend contract: TUGPT_BROKER_URL + hex TUGPT_BROK
 });
 
 describe('tool registry', () => {
-  it('registers Google calendar availability and nothing that is not on this branch', () => {
+  it('registers Google and Outlook calendar availability, read-only, and no customer MCP tools (B-9)', () => {
     const tools = registeredTools();
-    expect(tools).toHaveLength(1);
-    const [t] = tools;
-    expect(t.provider).toBe('google');
-    expect(hasRegisteredTool(t.capability, t.provider)).toBe(true);
-    expect(hasRegisteredTool(t.capability, 'microsoft')).toBe(false);
+    expect(tools.map((t) => t.provider).sort()).toEqual(['google', 'microsoft']);
+    expect(tools.every((t) => t.risk === 'read')).toBe(true);
+    const cap = tools[0].capability;
+    expect(hasRegisteredTool(cap, 'google')).toBe(true);
+    expect(hasRegisteredTool(cap, 'microsoft')).toBe(true);
+    expect(hasRegisteredTool('external.search', 'mcp')).toBe(false);
+  });
+});
+
+const row = (over: Partial<CapabilityRow>): CapabilityRow => ({
+  capabilityKey: 'calendar.find_availability', providerKey: 'google', providerName: 'Google', description: 'Find free time',
+  permissionClass: 'read', state: 'connected', connectionId: '11111111-1111-4111-8111-111111111111', ...over,
+} as CapabilityRow);
+
+describe('conflictingAttachments', () => {
+  it('flags Google + Outlook calendar in one message (same model tool name)', () => {
+    const cap = registeredTools()[0].capability;
+    expect(conflictingAttachments([row({ capabilityKey: cap }), row({ capabilityKey: cap, providerKey: 'microsoft', providerName: 'Microsoft 365' })]))
+      .toEqual(['Google', 'Microsoft 365']);
+  });
+  it('allows a single calendar, duplicates of the same one, and ignores unconnected rows', () => {
+    const cap = registeredTools()[0].capability;
+    expect(conflictingAttachments([row({ capabilityKey: cap }), row({ capabilityKey: cap })])).toBeNull();
+    expect(conflictingAttachments([row({ capabilityKey: cap }), row({ capabilityKey: cap, providerKey: 'microsoft', state: 'requires_connection', connectionId: null })])).toBeNull();
+  });
+});
+
+describe('dbApprovals (claim_tool_approval)', () => {
+  const ctx = { organizationId: 'org-1', userId: 'u-1' };
+  const input = { organizationId: 'org-1', actorUserId: 'u-1', connectionId: '11111111-1111-4111-8111-111111111111', capability: 'x.write', argumentsSha256: 'ab' };
+  const db = (rpc: ChatDb['rpc']) => ({ from: vi.fn(), rpc: vi.fn(rpc) }) as unknown as ChatDb & { rpc: ReturnType<typeof vi.fn> };
+
+  it('claims through the RPC with the exact arguments and accepts only true', async () => {
+    const d = db(async () => ({ data: true, error: null }));
+    expect(await dbApprovals(d, ctx).claimApproval(input)).toBe(true);
+    expect(d.rpc).toHaveBeenCalledWith('claim_tool_approval', { p_organization_id: 'org-1', p_connection_id: input.connectionId, p_capability: 'x.write', p_arguments_sha256: 'ab' });
+  });
+  it('fails closed on false, errors, throws, other tenant, other user or a bad id', async () => {
+    expect(await dbApprovals(db(async () => ({ data: false, error: null })), ctx).claimApproval(input)).toBe(false);
+    expect(await dbApprovals(db(async () => ({ data: true, error: { message: 'x' } } as never)), ctx).claimApproval(input)).toBe(false);
+    expect(await dbApprovals(db(async () => { throw new Error('down'); }), ctx).claimApproval(input)).toBe(false);
+    const never = db(async () => ({ data: true, error: null }));
+    expect(await dbApprovals(never, ctx).claimApproval({ ...input, organizationId: 'org-2' })).toBe(false);
+    expect(await dbApprovals(never, ctx).claimApproval({ ...input, actorUserId: 'u-2' })).toBe(false);
+    expect(await dbApprovals(never, ctx).claimApproval({ ...input, connectionId: 'not-a-uuid' })).toBe(false);
+    expect(never.rpc).not.toHaveBeenCalled();
   });
 });

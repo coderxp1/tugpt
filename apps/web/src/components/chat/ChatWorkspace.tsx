@@ -4,7 +4,8 @@ import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Markdown } from './Markdown';
 import { MentionPicker, type Capability } from './MentionPicker';
-import { pickerBlock, requestProblem, toolProblem, type ChatProblem } from '@/lib/connect-ui/chat-errors';
+import { pickerBlock, requestProblem, toolLabel, toolProblem, turnProblem, type ChatProblem } from '@/lib/connect-ui/chat-errors';
+import { readTurnStream } from '@/lib/chat/stream';
 import s from './chat.module.css';
 
 /** Same-origin JSON + non-simple header: what isSameOriginMutation() requires. */
@@ -13,9 +14,8 @@ export const MUTATION_HEADERS = { 'content-type': 'application/json', 'x-tugpt-c
 export interface PublicModel { key: string; label: string; description: string; private: boolean; toolCalling: boolean }
 export interface Thread { id: string; title: string; modelKey: string; updatedAt: string }
 interface Message { id: string; role: 'user' | 'assistant' | 'tool'; content: string; status: 'complete' | 'error' | 'stopped'; mentions: { capability: string; provider: string }[]; capabilityKey: string | null }
-type Live = { text: string; tools: { tool: string; ok?: boolean; code?: string }[] } | null;
+type Live = { text: string; tools: { tool: string; provider?: string | null; ok?: boolean; code?: string }[] } | null;
 
-const TOOL_LABEL: Record<string, string> = { calendar_find_availability: 'Checking calendar availability' };
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) throw new Error(String(res.status));
@@ -138,23 +138,17 @@ export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspacePr
         const body = await res.json().catch(() => ({})) as { error?: string };
         setError(requestProblem(body.error)); setDraft(content); return;
       }
-      const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
-      for (;;) {
-        const { done, value } = await reader.read(); if (done) break;
-        buf += dec.decode(value, { stream: true });
-        let nl: number;
-        while ((nl = buf.indexOf('\n')) >= 0) {
-          const line = buf.slice(0, nl); buf = buf.slice(nl + 1);
-          if (!line.trim()) continue;
-          const ev = JSON.parse(line) as { type: string; text?: string; tool?: string; ok?: boolean; code?: string; message?: Message };
-          if (ev.type === 'user' && ev.message) setMessages((m) => [...m, ev.message!]);
-          else if (ev.type === 'delta') setLive((l) => l && { ...l, text: l.text + (ev.text ?? '') });
-          else if (ev.type === 'tool_start') setLive((l) => l && { ...l, tools: [...l.tools, { tool: ev.tool ?? '' }] });
-          else if (ev.type === 'tool_result') setLive((l) => l && { ...l, tools: l.tools.map((t) => (t.tool === ev.tool && t.ok === undefined ? { ...t, ok: ev.ok, code: ev.code } : t)) });
-          else if ((ev.type === 'done' || ev.type === 'error') && ev.message) setMessages((m) => [...m, ev.message!]);
-          if (ev.type === 'error') fail(ev.code === 'MODEL_UNAVAILABLE' ? 'The model is not reachable right now.' : 'The answer could not be completed.');
-        }
-      }
+      const summary = await readTurnStream(res.body, (ev) => {
+        const message = ev.message as Message | undefined;
+        if (ev.type === 'user' && message) setMessages((m) => [...m, message]);
+        else if (ev.type === 'delta') setLive((l) => l && { ...l, text: l.text + (ev.text ?? '') });
+        else if (ev.type === 'tool_start') setLive((l) => l && { ...l, tools: [...l.tools, { tool: ev.tool ?? '', provider: ev.provider }] });
+        else if (ev.type === 'tool_result') setLive((l) => l && { ...l, tools: l.tools.map((t) => (t.tool === ev.tool && t.ok === undefined ? { ...t, ok: ev.ok === true, code: ev.code } : t)) });
+        else if ((ev.type === 'done' || ev.type === 'error') && message) setMessages((m) => [...m, message]);
+        if (ev.type === 'error') fail(turnProblem(ev.code));
+      });
+      // A stream that ends without done/error was cut off; never present it as a finished answer.
+      if (summary.terminal === null && !controller.signal.aborted) fail(turnProblem('INTERRUPTED'));
       setAttached([]);
       setThreads((t) => (t ?? []).map((x) => (x.id === id ? { ...x, title: x.title === 'New chat' ? content.slice(0, 60) : x.title, updatedAt: new Date().toISOString() } : x)));
     } catch (e) {
@@ -212,7 +206,7 @@ export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspacePr
               </article>)}
           {live && (
             <article className={s.assistant} aria-label="TuGPT is answering">
-              {live.tools.map((t, i) => <p key={i} className={t.ok === false ? s.toolFail : s.toolOk}>{TOOL_LABEL[t.tool] ?? t.tool}{t.ok === undefined ? '…' : t.ok ? ' · done' : <> · {toolProblem(t.code).text}{toolProblem(t.code).connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</>}</p>)}
+              {live.tools.map((t, i) => <p key={i} className={t.ok === false ? s.toolFail : s.toolOk}>{toolLabel(t.tool, t.provider)}{t.ok === undefined ? '…' : t.ok ? ' · done' : <> · {toolProblem(t.code).text}{toolProblem(t.code).connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</>}</p>)}
               {live.text ? <Markdown text={live.text} /> : <div className={s.text}><span className={s.typing}>Thinking…</span></div>}
             </article>
           )}

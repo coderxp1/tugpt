@@ -14,7 +14,12 @@ export type RouteState = 'available' | 'missing' | 'unknown';
 export const CONTRACT_ROUTES = {
   googleStart: '/api/v1/connect/google/start/route',
   microsoftStart: '/api/v1/connect/microsoft/start/route',
+  googleDisconnect: '/api/v1/connect/google/disconnect/route',
+  microsoftDisconnect: '/api/v1/connect/microsoft/disconnect/route',
+  /** GET lists, POST registers: one route file. */
   mcpRegister: '/api/v1/connect/mcp/endpoints/route',
+  mcpDelete: '/api/v1/connect/mcp/endpoints/[endpointId]/route',
+  mcpTools: '/api/v1/connect/mcp/snapshots/[snapshotId]/tools/route',
   mcpSnapshot: '/api/v1/connect/mcp/endpoints/[endpointId]/snapshot/route',
   mcpApprove: '/api/v1/connect/mcp/snapshots/[snapshotId]/approve/route',
   mcpActivate: '/api/v1/connect/mcp/endpoints/[endpointId]/activate/route',
@@ -26,25 +31,35 @@ export type RouteAvailability = Readonly<Record<ContractRoute, RouteState>>;
 /** An action is offered when its route exists, or when presence cannot be checked (routes fail closed). */
 export const usable = (s: RouteState) => s !== 'missing';
 
+/** Strict variant for actions that must not run on a guess (customer MCP). */
+export const present = (s: RouteState) => s === 'available';
+
 export const START_PATH: Record<ConnectProvider, string> = {
   google: '/api/v1/connect/google/start',
   microsoft: '/api/v1/connect/microsoft/start',
 };
 
+export const DISCONNECT_PATH: Record<ConnectProvider, string> = {
+  google: '/api/v1/connect/google/disconnect',
+  microsoft: '/api/v1/connect/microsoft/disconnect',
+};
+
 export interface BackendGap { readonly id: string; readonly title: string; readonly needs: string }
 
-/** Work the frontend cannot do until the backend provides it. Shown verbatim in the UI and the report. */
+/**
+ * Work the frontend cannot do until the backend provides it. Shown verbatim in
+ * the UI and the report. B-1..B-7 were delivered on integration/connect-dashboard;
+ * these are what remains after wiring against that branch.
+ */
 export const BACKEND_GAPS = {
-  B1: { id: 'B-1', title: 'List registered MCP servers', needs: 'GET /api/v1/connect/mcp/endpoints returning the organization\u2019s endpoints with status.' },
-  B2: { id: 'B-2', title: 'Read discovered MCP tools', needs: 'GET /api/v1/connect/mcp/snapshots/{snapshotId}/tools returning name, description and input schema per tool.' },
-  B3: { id: 'B-3', title: 'Outlook and MCP tools in chat', needs: 'Outlook calendar and active external MCP tools registered in the chat tool runtime.' },
-  B4: { id: 'B-4', title: 'MCP tools in the @ picker', needs: 'Active MCP tools returned by list_chat_capabilities().' },
-  B5: { id: 'B-5', title: 'Disconnect an account', needs: 'POST /api/v1/connect/{google,microsoft}/disconnect that revokes the token and marks the connected_accounts row revoked.' },
-  B6: { id: 'B-6', title: 'Friendly start errors', needs: 'Start routes redirect to /settings/integrations?{provider}=error&reason=\u2026 instead of returning JSON to the browser.' },
-  B7: { id: 'B-7', title: 'Per-call approval for MCP write tools', needs: 'A human approval step before write, irreversible or financial MCP tools run.' },
+  EGRESS: { id: 'B-8', title: 'Customer MCP is switched off', needs: 'The egress proxy must pass its DNS-pinning, private-address-blocking and bypass-prevention probe, and tool discovery must go through it (it currently calls the server directly and follows redirects).' },
+  MCP_RUNTIME: { id: 'B-9', title: 'MCP tools in chat', needs: 'A connection and credential path for MCP endpoints in the chat tool runtime. Today it looks endpoints up as connected accounts and asks the broker for a token, so every MCP call would fail.' },
+  MCP_STATE: { id: 'B-10', title: 'Saved review state', needs: 'GET /api/v1/connect/mcp/endpoints should return each endpoint\u2019s latest snapshot id and whether it is approved, so a review can be resumed after a reload.' },
+  CALL_APPROVAL: { id: 'B-11', title: 'Approve a single tool call', needs: 'An HTTP route for owners/admins to record or revoke a per-call approval (record_tool_approval / revoke_tool_approval). The runtime already refuses unapproved write calls.' },
 } as const satisfies Record<string, BackendGap>;
 
 export const PROVIDER_NAME: Record<ConnectProvider, string> = { google: 'Google', microsoft: 'Microsoft 365' };
+export const isConnectProvider = (k: string): k is ConnectProvider => k === 'google' || k === 'microsoft';
 
 export type OAuthReturn =
   | { provider: ConnectProvider; outcome: 'connected' | 'revoked' }
@@ -93,9 +108,10 @@ export function oauthBanner(r: OAuthReturn): { tone: 'ok' | 'error'; title: stri
   if (r.outcome !== 'error') {
     return r.outcome === 'connected'
       ? { tone: 'ok', title: `${name} is connected`, body: 'The status below was checked just now. Type @ in Chat to use it.' }
-      : { tone: 'ok', title: `${name} is disconnected`, body: 'TuGPT no longer has access to this account.' };
+      : { tone: 'ok', title: `${name} is disconnected`, body: 'TuGPT revoked its access to this account. The status below was checked just now.' };
   }
-  return { tone: 'error', title: `${name} could not be connected`, body: REASON_TEXT[r.reason] };
+  const title = r.reason === 'disconnect_failed' ? `${name} could not be disconnected` : `${name} could not be connected`;
+  return { tone: 'error', title, body: REASON_TEXT[r.reason] };
 }
 
 export const canManageConnections = (role: string | null | undefined) => role === 'owner' || role === 'admin';

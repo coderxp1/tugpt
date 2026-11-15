@@ -9,7 +9,7 @@ const TOOL: Record<string, ChatProblem> = {
   NOT_GRANTED: { text: 'You do not have access to this connection. Ask an admin to share it with you.', connect: false },
   POLICY_DISABLED: { text: 'Your organization has turned this app off.', connect: false },
   SCOPE_MISSING: { text: 'The connection is missing a permission this needs. Reconnect the account.', connect: true },
-  APPROVAL_REQUIRED: { text: 'This action needs your approval, which chat cannot ask for yet. Nothing was changed.', connect: false },
+  APPROVAL_REQUIRED: { text: 'This action needs an owner or admin to approve this exact call first, and chat cannot ask for that yet. Nothing was changed.', connect: false },
   PROVIDER_MISMATCH: { text: 'The attached connection belongs to a different provider.', connect: true },
   CONNECTION_NOT_FOUND: { text: 'The connection no longer exists. Connect the account again.', connect: true },
   CONNECTION_NOT_ACTIVE: { text: 'The connection is not active. Connect the account again.', connect: true },
@@ -17,6 +17,10 @@ const TOOL: Record<string, ChatProblem> = {
   PROVIDER_UNAVAILABLE: { text: 'The app could not be reached right now. Nothing was changed; try again later.', connect: false },
   UNKNOWN_TOOL: { text: 'This app is not available in chat yet.', connect: false },
   AUDIT_UNAVAILABLE: { text: 'The call could not be recorded in the audit log, so it was not run.', connect: false },
+  INVALID_ARGUMENTS: { text: 'The model asked for this in a form the app does not accept. Nothing was changed; try rephrasing.', connect: false },
+  OUTPUT_TOO_LARGE: { text: 'The app returned more data than chat can use at once. Try a narrower question.', connect: false },
+  CALL_BUDGET_EXCEEDED: { text: 'This message used the most app calls allowed for one answer. Ask again for the rest.', connect: false },
+  INTERNAL: { text: 'Something went wrong on our side. Nothing was changed.', connect: false },
 };
 
 export function toolProblem(code: string | undefined): ChatProblem {
@@ -28,6 +32,7 @@ const REQUEST: Record<string, ChatProblem> = {
   'This model cannot use integrations': { text: 'The selected model has not passed tool-calling verification, so it cannot use apps. Remove the app or pick another model.', connect: false },
   'This integration is not available in chat yet': { text: 'One of the attached apps is not available in chat yet. Remove it to send the message.', connect: false },
   'Unknown model': { text: 'This model is no longer available. Pick another one.', connect: false },
+  'Attach one calendar per message': { text: 'Google and Outlook calendars cannot be attached to the same message yet. Keep one and send the other question separately.', connect: false },
 };
 
 /** Maps a server `error` string (or nothing) to what the person should read. */
@@ -45,4 +50,23 @@ export function pickerBlock(c: PickerCapability, modelCanUseTools: boolean): str
   if (c.state === 'requires_connection') return 'Connect first';
   if (!modelCanUseTools) return 'This model can\u2019t use apps yet';
   return null;
+}
+
+const TURN: Record<string, string> = {
+  MODEL_UNAVAILABLE: 'The model is not reachable right now. Try again in a moment.',
+  MODEL_BAD_RESPONSE: 'The model sent an answer TuGPT could not read. Try again.',
+  TURN_FAILED: 'The answer could not be completed.',
+  STORE_UNAVAILABLE: 'The answer could not be saved. Reload to see what was kept.',
+  INTERRUPTED: 'The answer was cut off before it finished. Reload to see what was saved, then try again.',
+};
+
+/** Wording for a failed turn: an `error` stream event code, or INTERRUPTED when the stream ended without done/error. */
+export function turnProblem(code: string | undefined): string {
+  return (code && TURN[code]) || TURN.TURN_FAILED;
+}
+
+/** Label for a live tool step, naming the account it uses (provider comes from the server, not the model). */
+export function toolLabel(tool: string, provider?: string | null): string {
+  const base = tool === 'calendar_find_availability' ? 'Checking calendar availability' : `Using ${tool}`;
+  return provider ? `${base} in ${provider}` : base;
 }

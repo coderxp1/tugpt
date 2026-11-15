@@ -28,7 +28,7 @@ export function MentionPicker({ id, matches, activeIndex, modelCanUseTools, onCh
       {matches.map((c, i) => {
         const block = pickerBlock(c, modelCanUseTools);
         return (
-          <li key={c.providerKey + c.capabilityKey} id={`${id}-${i}`} role="option" aria-selected={i === activeIndex} aria-disabled={block !== null}
+          <li key={`${c.providerKey}:${c.capabilityKey}:${c.providerName}:${i}`} id={`${id}-${i}`} role="option" aria-selected={i === activeIndex} aria-disabled={block !== null}
             className={`${s.option} ${i === activeIndex ? s.optionActive : ''} ${block ? s.optionOff : ''}`}
             onMouseDown={(e) => { e.preventDefault(); onChoose(c); }}>
             <strong>{c.providerName}</strong><span>{c.description}</span><em>{block ?? 'Connected'}</em>

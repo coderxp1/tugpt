@@ -123,4 +123,36 @@ describe('ChatWorkspace integrations', () => {
     expect(line.textContent).not.toContain('REAUTHORIZATION_REQUIRED');
     expect(line.querySelector('a')?.getAttribute('href')).toBe('/dashboard/connect');
   });
+
+  function streamed() {
+    let push!: (s: string) => void; let end!: () => void;
+    const body = new ReadableStream<Uint8Array>({ start(c) { const e = new TextEncoder(); push = (x) => c.enqueue(e.encode(x)); end = () => c.close(); } });
+    return { body, push: (x: string) => push(x), end: () => end() };
+  }
+
+  it('names the account in tool steps and maps a turn error to words', async () => {
+    const st = streamed();
+    fetchMock = withCaps([], () => Promise.resolve(new Response(st.body, { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatWorkspace models={verified} initialThreads={[]} />);
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'When am I free?' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('button', { name: 'Stop' });
+    st.push('{"type":"tool_start","tool":"calendar_find_availability","provider":"Microsoft 365"}\n');
+    expect(await screen.findByText(/Checking calendar availability in Microsoft 365/)).toBeTruthy();
+    st.push('garbage line\n{"type":"error","code":"MODEL_BAD_RESPONSE"}\n'); st.end();
+    expect((await screen.findByRole('alert')).textContent).toMatch(/could not read/);
+  });
+
+  it('never presents a cut-off stream as a finished answer', async () => {
+    const st = streamed();
+    fetchMock = withCaps([], () => Promise.resolve(new Response(st.body, { status: 200 })));
+    vi.stubGlobal('fetch', fetchMock);
+    render(<ChatWorkspace models={verified} initialThreads={[]} />);
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Hello' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    await screen.findByRole('button', { name: 'Stop' });
+    st.push('{"type":"delta","text":"Half an ans'); st.end();
+    expect((await screen.findByRole('alert')).textContent).toMatch(/cut off/);
+  });
 });

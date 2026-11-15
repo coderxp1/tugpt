@@ -10,12 +10,14 @@
  *   - tokens: the credential broker, caller "web". Without a configured broker
  *     there is no token, so the call fails with PROVIDER_UNAVAILABLE. The web
  *     process never holds refresh tokens or the key ring (ADR-021).
+ *   - approvals: claim_tool_approval() for any non-read tool; an error or a
+ *     missing approval is "not approved" (APPROVAL_REQUIRED).
  *   - audit: record_connect_tool_call(), actor fixed to auth.uid() in SQL.
  */
 import { randomUUID } from 'node:crypto';
 import {
-  ConnectToolRuntime, createCalendarFindAvailabilityTool,
-  type AccessTokenSource, type ConnectTool, type ConnectionRecord, type ToolAuditEvent,
+  ConnectToolRuntime, createBuiltInCalendarTools,
+  type AccessTokenSource, type ApprovalChecker, type ConnectTool, type ConnectionRecord, type ToolAuditEvent,
 } from '@tugpt/connect-runtime';
 // Client only: the package root also exports the broker server and key ring.
 import { BrokerClient } from '@tugpt/credential-broker/dist/client.js';
@@ -33,11 +35,52 @@ export interface ChatToolContext {
  * The single registry of tools chat can expose. The picker (via
  * hasRegisteredTool) and the turn (via buildChatToolset) both read it, so a
  * capability is never offered in the UI without a tool behind it.
- * Outlook calendar and customer MCP tools are not registered: their runtime
- * modules are not on this branch yet (backend dependency B-3).
+ *
+ * Registered: Google and Outlook calendar availability (both read-only).
+ * Not registered: customer MCP tools. list_chat_capabilities() returns active,
+ * approved MCP endpoints, but the runtime resolves every connection through
+ * connected_accounts and the credential broker, which do not know MCP
+ * endpoints, so every call would fail (B-9). Until that exists they show in
+ * the picker as "Not available in chat yet" and are never sent to the model.
  */
 export function registeredTools(): ConnectTool<never>[] {
-  return [createCalendarFindAvailabilityTool() as unknown as ConnectTool<never>];
+  return createBuiltInCalendarTools();
+}
+
+/**
+ * Two attached capabilities that map to the same model tool name (Google and
+ * Outlook calendar both expose calendar_find_availability) cannot be offered
+ * together: the model could not say which account it means. Returns the
+ * provider names in conflict, or null.
+ */
+export function conflictingAttachments(attached: readonly CapabilityRow[], tools: readonly ConnectTool<never>[] = registeredTools()): string[] | null {
+  const byName = new Map<string, Set<string>>();
+  for (const row of attached) {
+    if (row.state !== 'connected' || !row.connectionId) continue;
+    const tool = tools.find((t) => t.capability === row.capabilityKey && t.provider === row.providerKey);
+    if (!tool) continue;
+    const set = byName.get(tool.modelName) ?? new Set<string>();
+    set.add(row.providerName);
+    byName.set(tool.modelName, set);
+  }
+  for (const names of byName.values()) if (names.size > 1) return [...names];
+  return null;
+}
+
+/** Per-call approval port. Only owners/admins can record approvals (record_tool_approval); claiming consumes one atomically. */
+export function dbApprovals(db: ChatDb, ctx: Pick<ChatToolContext, 'organizationId' | 'userId'>): ApprovalChecker {
+  return {
+    async claimApproval(input) {
+      if (input.organizationId !== ctx.organizationId || input.actorUserId !== ctx.userId || !UUID.test(input.connectionId)) return false;
+      try {
+        const r = await db.rpc('claim_tool_approval', {
+          p_organization_id: input.organizationId, p_connection_id: input.connectionId,
+          p_capability: input.capability, p_arguments_sha256: input.argumentsSha256,
+        });
+        return !r.error && r.data === true;
+      } catch { return false; }
+    },
+  };
 }
 
 export function hasRegisteredTool(capabilityKey: string, providerKey: string, tools: readonly ConnectTool<never>[] = registeredTools()): boolean {
@@ -85,7 +128,7 @@ export interface ChatToolset {
  * capability list by the caller. Only connected ones become tools.
  */
 export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: readonly CapabilityRow[], deps: {
-  tokens?: AccessTokenSource; tools?: ConnectTool<never>[]; requestId?: string;
+  tokens?: AccessTokenSource; tools?: ConnectTool<never>[]; requestId?: string; approvals?: ApprovalChecker;
 } = {}): ChatToolset {
   const connected = attached.filter((c) => c.state === 'connected' && c.connectionId);
   const all = deps.tools ?? registeredTools();
@@ -132,6 +175,7 @@ export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: rea
       },
     },
     tokens: deps.tokens ?? brokerTokenSource(),
+    approvals: deps.approvals ?? dbApprovals(db, ctx),
     audit: {
       async record(event) {
         const capability = event.capability;

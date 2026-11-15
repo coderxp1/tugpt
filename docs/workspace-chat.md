@@ -50,7 +50,16 @@ browser ──same-origin POST──▶ /api/v1/chat/threads/:id/messages
 | `TUGPT_BROKER_URL`, `TUGPT_BROKER_CALLER_KEY` | Credential broker for connector tokens (same names as `packages/connect-server`). The key is **hex**, at least 32 bytes; caller is `web`. Missing or malformed values mean every tool returns `UNAVAILABLE`; chat still works. The old `TUGPT_CREDENTIAL_BROKER_*` names are no longer read. |
 | `TUGPT_CHAT_VERIFIED_TOOL_MODELS` | Comma-separated chat model keys (e.g. `tugpt-scout`, `langdock:<model>`) that passed the staging tool-calling probe (`docs/connect/model-tool-calling.md`, `recommendedVerifiedModels`). **Empty by default: no model gets tools**, the @ picker explains why, and the messages route returns 409 `This model cannot use integrations`. |
 
+| `TUGPT_CUSTOMER_MCP_ENABLED` | Connect UI switch for customer MCP servers. **Off unless exactly `true`.** Must stay off until the egress proxy passes its probe and discovery is routed through it (B-8 in `docs/dashboard/connect-frontend.md`). Chat never calls MCP tools on this build either way (B-9). |
+
 Endpoints and keys never reach the browser (`publicModels()` strips them).
+
+### Tools in chat
+
+- Registered: Google and Outlook calendar availability (read-only), from `createBuiltInCalendarTools()`.
+- Only one calendar per message: both use the model name `calendar_find_availability`; the messages route returns 409 `Attach one calendar per message`.
+- Non-read tools go through `claim_tool_approval()`; any error or missing approval is "not approved" (`APPROVAL_REQUIRED`).
+- Stream events `tool_start`/`tool_result` carry `provider` (the capability row's provider name, never model output). The client treats a stream without `done`/`error` as interrupted.
 
 ## Not done yet
 

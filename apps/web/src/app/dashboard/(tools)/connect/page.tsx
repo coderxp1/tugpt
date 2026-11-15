@@ -3,9 +3,9 @@ import { getSessionContext } from '@/lib/tenant/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { asChatDb, listCapabilities, type CapabilityRow, type CapabilityState } from '@/lib/chat/store';
 import { hasRegisteredTool } from '@/lib/chat/connect';
-import { BACKEND_GAPS, canManageConnections, oauthBanner, parseOAuthReturn, type ConnectProvider } from '@/lib/connect-ui/contract';
+import { canManageConnections, isConnectProvider, oauthBanner, parseOAuthReturn, type ConnectProvider } from '@/lib/connect-ui/contract';
+import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
 import { routeAvailability } from '@/lib/connect-ui/routes.server';
-import { GapNote } from '@/components/connect/GapNote';
 import { McpPanel } from '@/components/connect/McpPanel';
 import { OAuthBanner } from '@/components/connect/OAuthBanner';
 import { ProviderActions } from '@/components/connect/ProviderActions';
@@ -36,18 +36,18 @@ const PROVIDER_COPY: Record<ConnectProvider, { blurb: string; next: Record<Capab
   microsoft: {
     blurb: 'Outlook calendar, mail and OneDrive for your Microsoft 365 account.',
     next: {
-      connected: 'Connected. Chat cannot use Outlook yet; see below.',
+      connected: 'Type @ in Chat to use your Outlook calendar.',
       requires_connection: 'Not connected. Until it is, TuGPT has no access to your Microsoft data.',
       disabled_by_policy: 'An administrator of your organization has turned this provider off.',
       not_available: 'Connecting Microsoft 365 accounts is not switched on for TuGPT yet. Nothing is connected, and TuGPT has no access to your Microsoft data.',
     },
   },
 };
-const isProvider = (k: string): k is ConnectProvider => k === 'google' || k === 'microsoft';
 
+/** Provider cards. Customer MCP rows (providerKey 'mcp') are managed in the MCP section, not as a provider card. */
 function group(rows: readonly CapabilityRow[]) {
   const by = new Map<string, CapabilityRow[]>();
-  for (const r of rows) by.set(r.providerKey, [...(by.get(r.providerKey) ?? []), r]);
+  for (const r of rows) if (r.providerKey !== 'mcp') by.set(r.providerKey, [...(by.get(r.providerKey) ?? []), r]);
   return [...by.entries()].map(([key, caps]) => ({
     key, name: caps[0].providerName, caps,
     state: RANK.find((st) => caps.some((c) => c.state === st)) ?? 'not_available',
@@ -81,7 +81,7 @@ export default async function ConnectPage({ searchParams }: { searchParams: Sear
         : <StatusFreshness checkedAt={checkedAt} />}
       <ul className={s.grid}>
         {providers.map((p) => {
-          const copy = isProvider(p.key) ? PROVIDER_COPY[p.key] : undefined;
+          const copy = isConnectProvider(p.key) ? PROVIDER_COPY[p.key] : undefined;
           const st = STATE[p.state];
           const notInChat = p.caps.filter((c) => !hasRegisteredTool(c.capabilityKey, c.providerKey));
           return (
@@ -96,18 +96,26 @@ export default async function ConnectPage({ searchParams }: { searchParams: Sear
                 {p.caps.map((c) => (
                   <li key={c.capabilityKey}>
                     <span>{c.description}{!hasRegisteredTool(c.capabilityKey, c.providerKey) && <em className={s.soon}> · not in Chat yet</em>}</span>
-                    <small>{c.permissionClass === 'read' ? 'Read only' : 'Can make changes · asks you first'}</small>
+                    <small>{c.permissionClass === 'read' ? 'Read only' : 'Can make changes · blocked until approved'}</small>
                   </li>
                 ))}
               </ul>
               <p className={s.next}>{copy?.next[p.state] ?? ''}</p>
-              {isProvider(p.key) && <ProviderActions provider={p.key} state={p.state} canManage={canManage} start={p.key === 'google' ? routes.googleStart : routes.microsoftStart} />}
-              {notInChat.length > 0 && <GapNote gap={BACKEND_GAPS.B3}>Chat has no tool for {notInChat.map((c) => c.description).join(', ')} on this build.</GapNote>}
+              {isConnectProvider(p.key) && (
+                <ProviderActions
+                  provider={p.key}
+                  state={p.state}
+                  canManage={canManage}
+                  start={p.key === 'google' ? routes.googleStart : routes.microsoftStart}
+                  disconnect={p.key === 'google' ? routes.googleDisconnect : routes.microsoftDisconnect}
+                />
+              )}
+              {notInChat.length > 0 && <p className={s.muted}>Chat has no tool for {notInChat.map((c) => c.description).join(', ')} on this build.</p>}
             </li>
           );
         })}
       </ul>
-      <McpPanel canManage={canManage} routes={routes} />
+      <McpPanel canManage={canManage} routes={routes} enabled={customerMcpEnabled()} />
       <p className={s.foot}>You sign in on the provider&rsquo;s own page, so TuGPT never sees your password. Access is limited to the permissions listed on each card, and every use in Chat is recorded in your organization&rsquo;s audit log.</p>
     </div>
   );
