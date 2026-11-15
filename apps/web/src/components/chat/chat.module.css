@@ -50,3 +50,21 @@
 /* Long titles truncate at the end: the grid column may not grow past the panel, and buttons do not centre-flex. */
 .threadList{grid-template-columns:minmax(0,1fr)}.threadList>li{min-width:0}
 .threadList .thread,.threadList .threadActive{display:block;justify-content:initial;font-size:13px;line-height:20px}
+/* Thread list: header, skeleton, retry, and the mobile collapsible history. */
+.threadsHead{display:flex;gap:8px}.threadsHead .newChat{flex:1}
+.historyToggle{display:none;border:1px solid #d6d6cc;background:#fff;border-radius:8px;padding:0 12px;min-height:44px;font-weight:600;color:#171715;white-space:nowrap}
+.historyToggle:focus-visible,.loadError button:focus-visible{outline:3px solid #171715;outline-offset:2px}
+.history{display:flex;flex-direction:column;min-height:0;flex:1}
+.skeleton{height:36px;border-radius:8px;background:linear-gradient(90deg,#f0f0ea,#f7f7f2,#f0f0ea);background-size:200% 100%;animation:shimmer 1.2s linear infinite}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.loadError{font-size:13px;color:#8a1f11;display:grid;gap:8px;justify-items:start}.loadError p{margin:0}
+.loadError button{border:1px solid #d6d6cc;background:#fff;border-radius:8px;padding:8px 12px;min-height:40px;font-weight:600;color:#171715}
+@media(max-width:860px){.threads{max-height:none;padding:10px}.historyToggle{display:block}.history{display:none}.threadsOpen .history{display:flex;max-height:50dvh;margin-top:4px}.threadsOpen .threadList{overflow-y:auto}.main{min-height:calc(100dvh - 190px)}}
+@media(prefers-reduced-motion:reduce){.skeleton{animation:none}}
+/* Code blocks: language label + copy. */
+.codeWrap{border-radius:8px;overflow:hidden;background:#1c1c1a}
+.codeWrap .codeBlock{border-radius:0;margin:0}
+.codeHead{display:flex;align-items:center;justify-content:space-between;gap:8px;padding:4px 6px 4px 14px;background:#2a2a27;color:#c9c9c0;font-size:12px}
+.codeLang{font-family:"JetBrains Mono",ui-monospace,monospace;text-transform:lowercase}
+.copy{border:1px solid #4a4a45;background:transparent;color:#f2f2ec;border-radius:6px;padding:4px 10px;min-height:28px;font-size:12px;font-weight:600;cursor:pointer}
+.copy:hover{background:#3a3a36}.copy:focus-visible{outline:2px solid #ffe436;outline-offset:2px}

@@ -3,23 +3,18 @@
 import Link from 'next/link';
 import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import { Markdown } from './Markdown';
+import { MentionPicker, type Capability } from './MentionPicker';
+import { pickerBlock, requestProblem, toolProblem, type ChatProblem } from '@/lib/connect-ui/chat-errors';
 import s from './chat.module.css';
 
 /** Same-origin JSON + non-simple header: what isSameOriginMutation() requires. */
 export const MUTATION_HEADERS = { 'content-type': 'application/json', 'x-tugpt-csrf': '1' } as const;
 
 export interface PublicModel { key: string; label: string; description: string; private: boolean; toolCalling: boolean }
-interface Thread { id: string; title: string; modelKey: string; updatedAt: string }
+export interface Thread { id: string; title: string; modelKey: string; updatedAt: string }
 interface Message { id: string; role: 'user' | 'assistant' | 'tool'; content: string; status: 'complete' | 'error' | 'stopped'; mentions: { capability: string; provider: string }[]; capabilityKey: string | null }
-interface Capability { capabilityKey: string; providerKey: string; providerName: string; description: string; permissionClass: string; state: 'connected' | 'requires_connection' | 'disabled_by_policy' | 'not_available' }
 type Live = { text: string; tools: { tool: string; ok?: boolean; code?: string }[] } | null;
 
-const STATE_LABEL: Record<Capability['state'], string> = {
-  connected: 'Connected',
-  requires_connection: 'Connect first',
-  disabled_by_policy: 'Turned off by your organization',
-  not_available: 'Not available yet',
-};
 const TOOL_LABEL: Record<string, string> = { calendar_find_availability: 'Checking calendar availability' };
 
 async function json<T>(res: Response): Promise<T> {
@@ -27,8 +22,16 @@ async function json<T>(res: Response): Promise<T> {
   return res.json() as Promise<T>;
 }
 
-export function ChatWorkspace({ models }: { models: PublicModel[] }) {
-  const [threads, setThreads] = useState<Thread[] | null>(null);
+export interface ChatWorkspaceProps {
+  models: PublicModel[];
+  /** Server-rendered first page of the person's chats; null means "load on the client". */
+  initialThreads?: Thread[] | null;
+}
+
+export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspaceProps) {
+  const [threads, setThreads] = useState<Thread[] | null>(initialThreads);
+  const [threadsFailed, setThreadsFailed] = useState(false);
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [messages, setMessages] = useState<Message[]>([]);
   const [capabilities, setCapabilities] = useState<Capability[] | null>(null);
@@ -37,7 +40,8 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
   const [attached, setAttached] = useState<Capability[]>([]);
   const [picker, setPicker] = useState<{ open: boolean; query: string; index: number }>({ open: false, query: '', index: 0 });
   const [live, setLive] = useState<Live>(null);
-  const [error, setError] = useState<string | null>(null);
+  const [error, setError] = useState<ChatProblem | null>(null);
+  const fail = (text: string) => setError({ text, connect: false });
   const abort = useRef<AbortController | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
   const log = useRef<HTMLDivElement>(null);
@@ -45,23 +49,30 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
   const model = models.find((m) => m.key === modelKey) ?? null;
   const busy = live !== null;
 
+  // State is only set when the request settles, never synchronously in the effect.
+  const fetchThreads = useCallback(() => fetch('/api/v1/chat/threads', { cache: 'no-store' })
+    .then((r) => json<{ threads: Thread[] }>(r))
+    .then((d) => { setThreads(d.threads); setThreadsFailed(false); })
+    .catch(() => { setThreads([]); setThreadsFailed(true); }), []);
+  function retryThreads() { setThreadsFailed(false); setThreads(null); void fetchThreads(); }
+
+  const needThreads = initialThreads === null;
   useEffect(() => {
-    fetch('/api/v1/chat/threads', { cache: 'no-store' }).then((r) => json<{ threads: Thread[] }>(r))
-      .then((d) => setThreads(d.threads)).catch(() => { setThreads([]); setError('Your chats could not be loaded.'); });
+    if (needThreads) void fetchThreads();
     fetch('/api/v1/chat/capabilities', { cache: 'no-store' }).then((r) => json<{ capabilities: Capability[] }>(r))
       .then((d) => setCapabilities(d.capabilities)).catch(() => setCapabilities([]));
-  }, []);
+  }, [needThreads, fetchThreads]);
 
   useEffect(() => { log.current?.scrollTo({ top: log.current.scrollHeight }); }, [messages, live]);
 
   const open = useCallback(async (id: string) => {
     if (busy) return;
-    setActiveId(id); setError(null); setMessages([]);
+    setActiveId(id); setError(null); setMessages([]); setHistoryOpen(false);
     try {
       const d = await json<{ thread: Thread; messages: Message[] }>(await fetch(`/api/v1/chat/threads/${id}`, { cache: 'no-store' }));
       setMessages(d.messages);
       if (models.some((m) => m.key === d.thread.modelKey)) setModelKey(d.thread.modelKey);
-    } catch { setError('This chat could not be opened.'); }
+    } catch { setError({ text: 'This chat could not be opened.', connect: false }); }
   }, [busy, models]);
 
   function newChat() {
@@ -83,7 +94,7 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
   }
 
   function choose(c: Capability) {
-    if (c.state !== 'connected') return;
+    if (pickerBlock(c, model?.toolCalling ?? false) !== null) return;
     const caret = input.current?.selectionStart ?? draft.length;
     const before = draft.slice(0, caret).replace(/(^|\s)@[\w\- ]{0,30}$/, '$1');
     setDraft(before + draft.slice(caret));
@@ -114,7 +125,7 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
         }));
         id = d.thread.id; setActiveId(id); setThreads((t) => [d.thread, ...(t ?? [])]);
       }
-    } catch { setError('A new chat could not be started.'); return; }
+    } catch { fail('A new chat could not be started.'); return; }
     const controller = new AbortController(); abort.current = controller;
     setDraft(''); setLive({ text: '', tools: [] });
     const mentions = attached.map((c) => ({ capability: c.capabilityKey, provider: c.providerKey }));
@@ -125,7 +136,7 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
       });
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({})) as { error?: string };
-        throw new Error(body.error ?? 'The message could not be sent.');
+        setError(requestProblem(body.error)); setDraft(content); return;
       }
       const reader = res.body.getReader(); const dec = new TextDecoder(); let buf = '';
       for (;;) {
@@ -141,13 +152,13 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
           else if (ev.type === 'tool_start') setLive((l) => l && { ...l, tools: [...l.tools, { tool: ev.tool ?? '' }] });
           else if (ev.type === 'tool_result') setLive((l) => l && { ...l, tools: l.tools.map((t) => (t.tool === ev.tool && t.ok === undefined ? { ...t, ok: ev.ok, code: ev.code } : t)) });
           else if ((ev.type === 'done' || ev.type === 'error') && ev.message) setMessages((m) => [...m, ev.message!]);
-          if (ev.type === 'error') setError(ev.code === 'MODEL_UNAVAILABLE' ? 'The model is not reachable right now.' : 'The answer could not be completed.');
+          if (ev.type === 'error') fail(ev.code === 'MODEL_UNAVAILABLE' ? 'The model is not reachable right now.' : 'The answer could not be completed.');
         }
       }
       setAttached([]);
       setThreads((t) => (t ?? []).map((x) => (x.id === id ? { ...x, title: x.title === 'New chat' ? content.slice(0, 60) : x.title, updatedAt: new Date().toISOString() } : x)));
     } catch (e) {
-      if (!controller.signal.aborted) { setError(e instanceof Error ? e.message : 'The message could not be sent.'); setDraft(content); }
+      if (!controller.signal.aborted) { fail(e instanceof Error && e.message ? e.message : 'The message could not be sent.'); setDraft(content); }
     } finally { setLive(null); abort.current = null; }
   }
 
@@ -156,14 +167,22 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
 
   return (
     <div className={s.chat}>
-      <aside className={s.threads} aria-label="Your chats">
-        <button type="button" className={s.newChat} onClick={newChat} disabled={busy}>New chat</button>
-        <p className={s.private}>Only you can see your chats.</p>
-        {threads === null ? <p className={s.muted} role="status">Loading chats…</p> :
-          threads.length === 0 ? <p className={s.muted}>No chats yet.</p> :
-          <ul className={s.threadList}>{threads.map((t) => (
-            <li key={t.id}><button type="button" onClick={() => void open(t.id)} aria-current={t.id === activeId ? 'true' : undefined} className={t.id === activeId ? s.threadActive : s.thread}>{t.title}</button></li>
-          ))}</ul>}
+      <aside className={`${s.threads} ${historyOpen ? s.threadsOpen : ''}`} aria-label="Your chats">
+        <div className={s.threadsHead}>
+          <button type="button" className={s.newChat} onClick={() => { setHistoryOpen(false); newChat(); }} disabled={busy}>New chat</button>
+          <button type="button" className={s.historyToggle} aria-expanded={historyOpen} aria-controls="chat-history" onClick={() => setHistoryOpen((o) => !o)}>
+            {historyOpen ? 'Hide chats' : `Your chats${threads && threads.length ? ` (${threads.length})` : ''}`}
+          </button>
+        </div>
+        <div id="chat-history" className={s.history}>
+          <p className={s.private}>Only you can see your chats.</p>
+          {threads === null ? <ul className={s.threadList} aria-busy="true" aria-label="Loading your chats">{[0, 1, 2].map((i) => <li key={i} className={s.skeleton} />)}<li className={s.sr} role="status">Loading your chats…</li></ul> :
+            threadsFailed ? <div className={s.loadError} role="alert"><p>Your chats could not be loaded.</p><button type="button" onClick={retryThreads}>Try again</button></div> :
+            threads.length === 0 ? <p className={s.muted}>No chats yet. Your conversations will appear here.</p> :
+            <ul className={s.threadList}>{threads.map((t) => (
+              <li key={t.id}><button type="button" onClick={() => void open(t.id)} aria-current={t.id === activeId ? 'true' : undefined} className={t.id === activeId ? s.threadActive : s.thread} title={t.title}>{t.title}</button></li>
+            ))}</ul>}
+        </div>
       </aside>
 
       <section className={s.main} aria-label="Conversation">
@@ -193,13 +212,13 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
               </article>)}
           {live && (
             <article className={s.assistant} aria-label="TuGPT is answering">
-              {live.tools.map((t, i) => <p key={i} className={t.ok === false ? s.toolFail : s.toolOk}>{TOOL_LABEL[t.tool] ?? t.tool}{t.ok === undefined ? '…' : t.ok ? ' · done' : ` · failed (${t.code ?? 'error'})`}</p>)}
+              {live.tools.map((t, i) => <p key={i} className={t.ok === false ? s.toolFail : s.toolOk}>{TOOL_LABEL[t.tool] ?? t.tool}{t.ok === undefined ? '…' : t.ok ? ' · done' : <> · {toolProblem(t.code).text}{toolProblem(t.code).connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</>}</p>)}
               {live.text ? <Markdown text={live.text} /> : <div className={s.text}><span className={s.typing}>Thinking…</span></div>}
             </article>
           )}
         </div>
 
-        {error && <p className={s.error} role="alert">{error}</p>}
+        {error && <p className={s.error} role="alert">{error.text}{error.connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</p>}
         {models.length === 0 && <p className={s.error} role="alert">No model is configured for this workspace yet. An administrator can add one.</p>}
 
         <form className={s.composer} onSubmit={(e) => { e.preventDefault(); void send(); }}>
@@ -216,18 +235,7 @@ export function ChatWorkspace({ models }: { models: PublicModel[] }) {
               ? <button type="button" className={s.stop} onClick={() => abort.current?.abort()}>Stop</button>
               : <button type="submit" className={s.send} disabled={!draft.trim() || !model}>Send</button>}
           </div>
-          {showPicker && (
-            <ul id={listId} role="listbox" aria-label="Apps you can use" className={s.picker}>
-              {matches.length === 0 && <li className={s.muted} role="presentation">No matching apps. <Link href="/dashboard/connect">Open Connect</Link></li>}
-              {matches.map((c, i) => (
-                <li key={c.providerKey + c.capabilityKey} id={`${listId}-${i}`} role="option" aria-selected={i === picker.index} aria-disabled={c.state !== 'connected'}
-                  className={`${s.option} ${i === picker.index ? s.optionActive : ''} ${c.state !== 'connected' ? s.optionOff : ''}`}
-                  onMouseDown={(e) => { e.preventDefault(); choose(c); }}>
-                  <strong>{c.providerName}</strong><span>{c.description}</span><em>{STATE_LABEL[c.state]}</em>
-                </li>
-              ))}
-            </ul>
-          )}
+          {showPicker && <MentionPicker id={listId} matches={matches} activeIndex={picker.index} modelCanUseTools={model?.toolCalling ?? false} onChoose={choose} />}
           <p className={s.hint}>Enter to send · Shift+Enter for a new line · Answers can be wrong; check important facts.</p>
         </form>
       </section>

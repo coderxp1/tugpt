@@ -15,7 +15,12 @@ export interface ChatModel {
   readonly description: string;
   readonly provider: ChatModelProvider;
   readonly upstreamModel: string;
-  /** True only where tool calling has live evidence (private GPU: Nov 14 probe). */
+  /**
+   * True only when an operator listed this model key in
+   * TUGPT_CHAT_VERIFIED_TOOL_MODELS after it passed the staging tool-calling
+   * probe (docs: model-tool-calling.md, `recommendedVerifiedModels`).
+   * Default: no model is verified, so no integration tools are exposed.
+   */
   readonly toolCalling: boolean;
   /** Prompts stay on TuGPT-operated infrastructure. */
   readonly private: boolean;
@@ -44,8 +49,14 @@ export function parseEndpointUrl(raw: string | undefined): string | null {
   return url.origin + url.pathname.replace(/\/+$/, '');
 }
 
+/** Comma-separated model keys that passed tool-calling verification. Empty by default. */
+export function verifiedToolModels(env: Env = process.env): ReadonlySet<string> {
+  return new Set((env.TUGPT_CHAT_VERIFIED_TOOL_MODELS ?? '').split(',').map((k) => k.trim().toLowerCase()).filter(Boolean));
+}
+
 export function configuredModels(env: Env = process.env): ChatModel[] {
   const models: ChatModel[] = [];
+  const verified = verifiedToolModels(env);
   if (parseEndpointUrl(env.TUGPT_PRIVATE_LLM_URL)) {
     models.push({
       key: PRIVATE_MODEL_KEY,
@@ -53,19 +64,20 @@ export function configuredModels(env: Env = process.env): ChatModel[] {
       description: 'Private model on TuGPT\u2019s EU GPU. Prompts stay on TuGPT infrastructure.',
       provider: 'private-gpu',
       upstreamModel: env.TUGPT_PRIVATE_LLM_MODEL || 'tugpt-scout:latest',
-      toolCalling: true,
+      toolCalling: verified.has(PRIVATE_MODEL_KEY),
       private: true,
     });
   }
   if (env.LANGDOCK_API_KEY) {
     for (const m of LANGDOCK_ALLOWED_MODELS) {
+      const key = `langdock:${m}`.toLowerCase();
       models.push({
-        key: `langdock:${m}`.toLowerCase(),
+        key,
         label: m,
         description: 'Hosted model through Langdock (EU).',
         provider: 'langdock',
         upstreamModel: m,
-        toolCalling: false,
+        toolCalling: verified.has(key),
         private: false,
       });
     }

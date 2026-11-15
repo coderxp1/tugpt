@@ -16,6 +16,24 @@ describe('ImageStudio', () => {
     expect(await screen.findByText('Temporarily unavailable')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Generate image' }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText('No images yet')).toBeTruthy();
+    // The person can still draft a prompt while the GPU is away; only Generate is off.
+    expect((screen.getByLabelText('Describe the image') as HTMLTextAreaElement).disabled).toBe(false);
+  });
+
+  it('replaces a preview that cannot load (GPU offline) with an explanation and a retry, and hides downloads', async () => {
+    const done = img({ status: 'completed', progress: 100, seconds: 1.4, fileUrl: `/api/v1/create/images/${ID}/file` });
+    vi.stubGlobal('fetch', vi.fn(() => json({ service: { configured: true, available: false, model: null }, images: [done] })));
+    const { container } = render(<ImageStudio />);
+    await screen.findByText('Temporarily unavailable');
+    const main = container.querySelector('figure img') as HTMLImageElement;
+    expect(main).toBeTruthy();
+    fireEvent.error(main);
+    // Same image in the result and in the history list: both show the explanation.
+    await waitFor(() => expect(screen.getAllByText('Preview unavailable').length).toBe(2));
+    expect(screen.queryByRole('link', { name: 'Download PNG' })).toBeNull();
+    fireEvent.click(screen.getByRole('button', { name: 'Try again' }));
+    expect(container.querySelector('figure img')).toBeTruthy();
+    expect(screen.getByRole('link', { name: 'Download PNG' })).toBeTruthy();
   });
 
   it('generates, shows progress, then the finished image', async () => {
@@ -41,6 +59,9 @@ describe('ImageStudio', () => {
     const image = await screen.findByAltText('A red bicycle', {}, { timeout: 5000 });
     expect(image.getAttribute('src')).toBe(`/api/v1/create/images/${ID}/file`);
     expect(screen.getByRole('link', { name: 'Download PNG' }).getAttribute('href')).toBe(`/api/v1/create/images/${ID}/file?download=1`);
+    const full = screen.getByRole('link', { name: 'Open full size (opens in a new tab)' });
+    expect(full.getAttribute('href')).toBe(`/api/v1/create/images/${ID}/file`);
+    expect(full.getAttribute('rel')).toContain('noopener');
   });
 
   it('shows the server message when generation is refused', async () => {

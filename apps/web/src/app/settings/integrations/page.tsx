@@ -1,8 +1,21 @@
-/** Held integration entry point: no provider/vault/status reads or OAuth actions. */
+/**
+ * Held integration entry point: no provider/vault/status reads or OAuth actions.
+ *
+ * Exception: the Connect OAuth callbacks redirect here with
+ * ?google|microsoft=connected|revoked|error&reason=…. Those returns are
+ * forwarded to /dashboard/connect, where status is read fresh. Only
+ * whitelisted values are forwarded (oauthReturnQuery).
+ */
+import { redirect } from 'next/navigation';
 import { createTranslator } from '@/i18n';
 import { getRequestLocale } from '@/i18n/server';
+import { oauthReturnQuery } from '@/lib/connect-ui/contract';
 
-export default async function IntegrationsPage() {
+type Search = Promise<Record<string, string | string[] | undefined>>;
+
+export default async function IntegrationsPage({ searchParams }: { searchParams: Search }) {
+  const forward = oauthReturnQuery(await searchParams);
+  if (forward) redirect(`/dashboard/connect${forward}`);
   const t = createTranslator(await getRequestLocale());
   return (
     <div className="mx-auto flex max-w-2xl flex-col gap-6 px-6 py-10">

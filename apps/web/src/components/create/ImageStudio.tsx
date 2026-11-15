@@ -72,6 +72,10 @@ const timeFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeSt
 export function ImageStudio() {
   const [service, setService] = useState<ServiceState | null>(null);
   const [images, setImages] = useState<StudioImage[]>([]);
+  /** Finished images whose preview failed to load (the bytes are served from the private GPU). */
+  const [broken, setBroken] = useState<ReadonlySet<string>>(() => new Set());
+  const markBroken = useCallback((id: string) => setBroken((b) => (b.has(id) ? b : new Set(b).add(id))), []);
+  const retryPreview = (id: string) => setBroken((b) => { const n = new Set(b); n.delete(id); return n; });
   const [loadState, setLoadState] = useState<'loading' | 'ready' | 'error'>('loading');
   const [loadError, setLoadError] = useState('');
   const [prompt, setPrompt] = useState('');
@@ -172,7 +176,7 @@ export function ImageStudio() {
         {loadState === 'ready' && service && !service.available && (
           <p className={s.notice} role="status">
             {service.configured
-              ? 'The private GPU is not answering right now. Your history is still here; try generating again in a minute.'
+              ? 'The private GPU is not answering right now. Your image list is still here, but previews and downloads come from the GPU and return when it answers. Try again in a minute.'
               : 'Image generation has not been switched on for this workspace.'}
           </p>
         )}
@@ -182,13 +186,13 @@ export function ImageStudio() {
             id="create-prompt" className={s.prompt} value={prompt} rows={4} maxLength={MAX}
             placeholder="A product photo of a ceramic coffee cup on a sunlit oak table, soft shadows"
             onChange={(e) => setPrompt(e.target.value)} onKeyDown={onKey}
-            aria-describedby="create-prompt-hint" disabled={loadState !== 'ready' || !service?.available}
+            aria-describedby="create-prompt-hint" disabled={loadState !== 'ready'}
           />
           <div id="create-prompt-hint" className={s.hint}>
             <span>Ctrl or ⌘ + Enter to generate</span>
             <span aria-live="polite">{count} / {MAX}</span>
           </div>
-          <fieldset className={s.sizes} disabled={loadState !== 'ready' || !service?.available}>
+          <fieldset className={s.sizes} disabled={loadState !== 'ready'}>
             <legend className={s.label}>Size</legend>
             {SIZES.map((o) => (
               <label key={o.key} className={`${s.size} ${size === o.key ? s.sizeOn : ''}`}>
@@ -222,9 +226,15 @@ export function ImageStudio() {
         {loadState === 'ready' && selected && (
           <figure className={s.result}>
             <div className={s.canvas} style={{ aspectRatio: `${selected.width} / ${selected.height}` }}>
-              {selected.status === 'completed' && selected.fileUrl ? (
+              {selected.status === 'completed' && selected.fileUrl && broken.has(selected.id) ? (
+                <div className={s.previewOff} role="status">
+                  <p className={s.emptyTitle}>Preview unavailable</p>
+                  <p>This image is kept on TuGPT&rsquo;s private GPU, which is not answering right now.</p>
+                  <button type="button" className={s.secondary} onClick={() => retryPreview(selected.id)}>Try again</button>
+                </div>
+              ) : selected.status === 'completed' && selected.fileUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- private, authenticated, no-store image; next/image would cache it
-                <img src={selected.fileUrl} alt={selected.prompt} width={selected.width} height={selected.height} />
+                <img key={selected.id} src={selected.fileUrl} alt={selected.prompt} width={selected.width} height={selected.height} onError={() => markBroken(selected.id)} />
               ) : active(selected.status) ? (
                 <div className={s.progressWrap}>
                   <div className={s.progress} role="progressbar" aria-label="Generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={selected.progress}>
@@ -242,8 +252,11 @@ export function ImageStudio() {
               <p className={s.meta}>
                 {selected.width} × {selected.height} · seed {selected.seed} · {statusText(selected)}
               </p>
-              {selected.status === 'completed' && selected.fileUrl && (
+              {selected.status === 'completed' && selected.fileUrl && !broken.has(selected.id) && (
+                <div className={s.resultActions}>
                 <a className={s.secondary} href={`${selected.fileUrl}?download=1`} download>Download PNG</a>
+                <a className={s.secondary} href={selected.fileUrl} target="_blank" rel="noopener noreferrer">Open full size<span className={s.sr}> (opens in a new tab)</span></a>
+                </div>
               )}
             </figcaption>
           </figure>
@@ -260,9 +273,11 @@ export function ImageStudio() {
                 <button type="button" className={`${s.thumb} ${img.id === selected?.id ? s.thumbOn : ''}`} onClick={() => setSelectedId(img.id)}
                   aria-pressed={img.id === selected?.id} aria-label={`${img.prompt}. ${statusText(img)}. ${timeFmt.format(new Date(img.createdAt))}`}>
                   <span className={s.thumbArt} style={{ aspectRatio: `${img.width} / ${img.height}` }}>
-                    {img.status === 'completed' && img.fileUrl
+                    {img.status === 'completed' && img.fileUrl && broken.has(img.id)
+                      ? <span className={s.thumbState}>Preview unavailable</span>
+                      : img.status === 'completed' && img.fileUrl
                       // eslint-disable-next-line @next/next/no-img-element -- see above
-                      ? <img src={img.fileUrl} alt="" loading="lazy" width={img.width} height={img.height} />
+                      ? <img src={img.fileUrl} alt="" loading="lazy" width={img.width} height={img.height} onError={() => markBroken(img.id)} />
                       : <span className={s.thumbState}>{active(img.status) ? `${img.progress}%` : statusText(img)}</span>}
                   </span>
                   <span className={s.thumbText}>{img.prompt}</span>

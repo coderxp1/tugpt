@@ -1,3 +1,5 @@
+'use client';
+
 /**
  * Safe Markdown for model output.
  *
@@ -12,7 +14,7 @@
  * data:, relative paths) is shown as plain text. Unclosed markers — normal while
  * an answer streams — degrade to literal text instead of breaking layout.
  */
-import { Fragment, type ReactNode } from 'react';
+import { Fragment, useState, type ReactNode } from 'react';
 import s from './chat.module.css';
 
 const SAFE_URL = /^(https?:\/\/|mailto:)[^\s<>"']+$/i;
@@ -111,6 +113,32 @@ function withBreaks(text: string, key: string): ReactNode[] {
   return text.split('\n').flatMap((l, i) => (i ? [<br key={`${key}-br${i}`} />, ...inline(l, `${key}-${i}`)] : inline(l, `${key}-${i}`)));
 }
 
+/**
+ * A fenced code block with its language and a copy button. The language label
+ * is shown as plain text (it is already restricted to [\w+-]{0,20} by the
+ * parser) and the copied text is exactly the block's text, never HTML.
+ */
+export function CodeBlock({ lang, text }: { lang: string; text: string }) {
+  const [copied, setCopied] = useState<'idle' | 'done' | 'failed'>('idle');
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopied('done');
+    } catch { setCopied('failed'); }
+    setTimeout(() => setCopied('idle'), 2000);
+  }
+  return <div className={s.codeWrap}>
+    <div className={s.codeHead}>
+      <span className={s.codeLang}>{lang || 'code'}</span>
+      <button type="button" className={s.copy} onClick={() => void copy()} aria-label={lang ? `Copy ${lang} code` : 'Copy code'}>
+        {copied === 'done' ? 'Copied' : copied === 'failed' ? 'Copy failed' : 'Copy'}
+      </button>
+      <span className={s.sr} role="status">{copied === 'done' ? 'Code copied to clipboard' : copied === 'failed' ? 'Could not copy the code' : ''}</span>
+    </div>
+    <pre className={s.codeBlock} data-lang={lang || undefined}><code>{text}</code></pre>
+  </div>;
+}
+
 export function Markdown({ text }: { text: string }) {
   return <div className={s.md}>{parseBlocks(text).map((b, i) => {
     const k = `b${i}`;
@@ -119,7 +147,7 @@ export function Markdown({ text }: { text: string }) {
       case 'h': { const H = (`h${b.level + 2}`) as 'h3' | 'h4' | 'h5'; return <H key={k}>{inline(b.text, k)}</H>; }
       case 'ul': return <ul key={k}>{b.items.map((it, j) => <li key={j}>{inline(it, `${k}-${j}`)}</li>)}</ul>;
       case 'ol': return <ol key={k} start={b.start}>{b.items.map((it, j) => <li key={j}>{inline(it, `${k}-${j}`)}</li>)}</ol>;
-      case 'code': return <pre key={k} className={s.codeBlock} data-lang={b.lang || undefined}><code>{b.text}</code></pre>;
+      case 'code': return <CodeBlock key={k} lang={b.lang} text={b.text} />;
       case 'quote': return <blockquote key={k}>{withBreaks(b.text, k)}</blockquote>;
       case 'hr': return <hr key={k} />;
     }

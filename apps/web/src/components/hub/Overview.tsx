@@ -37,12 +37,12 @@ export function Overview({ products, hasOrganization }: { products: readonly Pro
         <div className={`${s.floatCard} ${s.two}`}><span className={s.floatIcon}><Glyph name="chat" /></span><div>Better together<small>One connected platform</small></div></div>
       </div>
     </section>
-    <div className={s.activity} aria-label="Organization activity" aria-busy={pending}>
-      <div><strong>Your organization</strong><span>{!hasOrganization ? 'Organization unavailable. Capabilities require an active membership.' : unknown ? 'Some activity could not be read. Refresh to try again.' : waiting.length ? 'Ready for your attention.' : 'No pending attention in the connected activity sources.'}</span>
+    <div className={s.activity} aria-label="Needs your attention" aria-busy={pending}>
+      <div><strong>Needs your attention</strong><span className={s.sr}>: </span><span>{!hasOrganization ? 'Organization unavailable. Capabilities require an active membership.' : unknown ? 'Some activity could not be read. Refresh to try again.' : waiting.length ? 'These items are waiting for you.' : 'Nothing is waiting for you right now.'}</span>
         {waiting.length > 0 && <div className={s.attentionLinks}>{waiting.map(p => <Link key={p.id} href={p.href!} prefetch={false}>{t(p.titleKey)}{p.metric !== null && p.metricKey ? ` · ${p.metric} ${t(p.metricKey)}` : ' · Reconnect'} ↗</Link>)}</div>}
       </div>
       <button className={s.refresh} type="button" disabled={pending} onClick={() => startTransition(() => router.refresh())}>{pending ? 'Refreshing…' : 'Refresh activity'}</button>
-      <span className={s.sr} role="status">{pending ? 'Refreshing organization activity' : ''}</span>
+      <span className={s.sr} role="status">{pending ? 'Refreshing activity' : ''}</span>
     </div>
     <div className={s.sectionHead} id="platform"><div><p className={s.eyebrow}>Made to work together</p><h2>Explore your platform.</h2><p>From the first conversation to the work that follows.</p></div>
       <label className={s.search}><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg><span className={s.sr}>Search capabilities</span><input type="search" placeholder="Find a capability" value={search} onChange={e => setSearch(e.target.value)} autoComplete="off" /></label>
