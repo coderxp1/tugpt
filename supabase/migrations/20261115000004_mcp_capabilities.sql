@@ -41,7 +41,7 @@ LANGUAGE sql STABLE SECURITY DEFINER SET search_path = pg_catalog AS $$
     AND s.revoked_at IS NULL
     AND private.is_org_member(p_organization_id, auth.uid())
 
-  ORDER BY provider_name, capability_key
+  ORDER BY 3, 1
 $$;
 
 REVOKE ALL ON FUNCTION public.list_chat_capabilities(UUID) FROM PUBLIC, anon;
