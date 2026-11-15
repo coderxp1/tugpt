@@ -27,3 +27,59 @@
 .actions{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
 .actions :global(button),.actions :global(select){border:1px solid #d7d7cf!important;background:#fff;color:#171715;border-radius:8px!important;padding:11px 16px!important;font-weight:700;font-size:14px;min-height:44px}
 .actions :global(button:hover){background:#f6f6ef}
+.muted{font-size:13px;color:#686963;margin:0}
+.muted code,.gap code,.lead code{font-size:12px;background:#f3f1e8;border-radius:4px;padding:0 4px;overflow-wrap:anywhere}
+.soon{font-style:normal;color:#686963;font-size:12px}
+.actionsRow{display:flex;flex-wrap:wrap;gap:10px;align-items:center}
+.actionsRow .muted{flex-basis:100%}
+.primary:disabled,.secondary:disabled,.danger:disabled{opacity:.55;cursor:not-allowed}
+.primary:focus-visible,.secondary:focus-visible,.danger:focus-visible,.linkButton:focus-visible,.dismiss:focus-visible,.banner:focus-visible{outline:3px solid #171715;outline-offset:2px}
+button.primary,button.secondary{border:0;cursor:pointer;font-family:inherit}
+button.secondary{border:1px solid #d7d7cf}
+.danger{border:0;border-radius:8px;padding:11px 16px;font-weight:700;font-size:14px;min-height:44px;background:#9b1c1c;color:#fff;cursor:pointer;font-family:inherit}
+.danger:hover:not(:disabled){background:#7f1515}
+.banner{display:flex;justify-content:space-between;gap:12px;align-items:flex-start;border:1px solid;border-radius:12px;padding:14px 16px;margin:0 0 16px;max-width:880px}
+.banner p{margin:4px 0 0;font-size:14px}
+.bannerOk{background:#eaf6ef;border-color:#b9dcc7;color:#1f5137}
+.bannerError{background:#fff6f6;border-color:#f0c4c4;color:#9b1c1c}
+.dismiss{background:transparent;border:0;font-size:22px;line-height:1;min-width:44px;min-height:44px;color:inherit;cursor:pointer;border-radius:8px}
+.fresh{display:flex;flex-wrap:wrap;gap:6px 12px;align-items:center;font-size:13px;color:#686963;margin:0 0 16px}
+.linkButton{background:transparent;border:0;padding:0 4px;min-height:44px;font:inherit;font-weight:700;color:#171715;text-decoration:underline;cursor:pointer}
+.linkButton:disabled{opacity:.6;cursor:progress}
+.gap{display:grid;gap:4px;border:1px dashed #d4c25a;background:#fffbe0;border-radius:10px;padding:10px 12px;font-size:13px;color:#4e4f49}
+.gap strong{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#5c4a00}
+.gap small{color:#686963;font-size:12px;overflow-wrap:anywhere}
+.backdrop{position:fixed;inset:0;background:rgba(23,23,21,.45);display:grid;place-items:center;padding:16px;z-index:60}
+.dialog{background:#fff;border-radius:14px;max-width:520px;width:100%;padding:24px;display:grid;gap:12px;box-shadow:0 20px 60px rgba(0,0,0,.25);max-height:calc(100dvh - 32px);overflow:auto}
+.dialog h2{font:normal 24px/1.1 Gravity,Arial,sans-serif;margin:0}
+.dialog p,.dialog li{font-size:14px;color:#4e4f49}
+.dialog ul{margin:6px 0 0;padding-left:18px;display:grid;gap:4px}
+.dialogActions{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:10px}
+.section{margin-top:40px;display:grid;gap:14px;max-width:880px}
+.section>h2{font:normal clamp(24px,2.4vw,32px)/1.1 Gravity,Arial,sans-serif;margin:0}
+.lead{margin:0;color:#4e4f49;font-size:15px}
+.form fieldset{border:1px solid #e1e1d8;border-radius:12px;background:#fff;padding:18px;margin:0;display:grid;grid-template-columns:1fr 1.6fr auto;gap:10px 14px;align-items:end}
+.form label{display:grid;gap:6px;font-size:13px;font-weight:700}
+.form input,.review select{font:inherit;font-weight:400;font-size:15px;border:1px solid #d7d7cf;border-radius:8px;padding:10px 12px;min-height:44px;background:#fff;color:#171715;width:100%;box-sizing:border-box}
+.form input:focus-visible,.review select:focus-visible{outline:3px solid #ffe436;outline-offset:1px;border-color:#171715}
+.form small{grid-column:1/-1;color:#686963;font-size:12px;order:5}
+.form fieldset:disabled{background:#fafaf6}
+.form fieldset:disabled input{background:#f3f1e8;color:#686963}
+.form .error,.form .muted{margin-top:10px}
+.endpoints{list-style:none;margin:0;padding:0;display:grid;gap:12px}
+.endpointHead{display:flex;justify-content:space-between;gap:10px;align-items:center}
+.endpointHead h3{margin:0;font:normal 20px/1.1 Gravity,Arial,sans-serif}
+.url{margin:0;font-size:13px;color:#686963;overflow-wrap:anywhere}
+.review{border:1px solid #e1e1d8;border-radius:10px;padding:14px;margin:0;display:grid;gap:12px;min-width:0}
+.review legend{font-weight:700;padding:0 6px}
+.tableWrap{overflow-x:auto}
+.table{width:100%;border-collapse:collapse;font-size:14px}
+.table th,.table td{text-align:left;padding:8px;border-top:1px solid #f1f1ec;vertical-align:top}
+.table thead th{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#686963;border-top:0}
+.levels{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:0;font-size:12px}
+.levels dt{font-weight:700}.levels dd{margin:0;color:#686963}
+.check{display:flex;gap:10px;align-items:center;font-size:14px;min-height:44px}
+.check input{width:20px;height:20px;accent-color:#171715}
+.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
+@media (max-width:720px){.form fieldset{grid-template-columns:1fr}.form small{order:0}.dialogActions{flex-direction:column-reverse}.dialogActions button{width:100%;justify-content:center}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
