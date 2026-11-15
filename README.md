@@ -37,6 +37,7 @@ tugpt-nextjs-recovered/
 │   ├── appointments/           # Appointment availability & request persistence (no booking writes yet)
 │   ├── auth/                   # Supabase auth service & session management
 │   ├── connect-runtime/        # TuGPT Connect tool runtime: authorize, execute, audit integration tool calls (ADR-021)
+│   ├── connect-server/         # Connect v2 OAuth flows, MCP lifecycle, disconnect (ADR-021)
 │   ├── credential-broker/      # Internal credential broker: only holder of the key ring (ADR-021; not yet deployed)
 │   ├── database/               # Supabase client, migrations, RLS policies
 │   ├── feature-flags/          # Feature flag architecture

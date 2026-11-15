@@ -44,6 +44,19 @@ interface RouteExpectation {
 }
 
 const ROUTES: RouteExpectation[] = [
+  { path: '/api/v1/connect/google/start', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/google/disconnect', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/microsoft/start', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/microsoft/disconnect', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/oauth/callback/google', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/oauth/callback/microsoft', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/endpoints', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/endpoints/[endpointId]', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/endpoints/[endpointId]/snapshot', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/endpoints/[endpointId]/activate', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/endpoints/[endpointId]/deactivate', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/snapshots/[snapshotId]/approve', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/snapshots/[snapshotId]/tools', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/auth/handoff', kind: 'api', type: 'auth', why: 'Accepted independent SSO handler enforces its own token, origin or opaque-session boundary.' },
   { path: '/api/auth/revoke', kind: 'api', type: 'auth', why: 'Accepted independent SSO handler enforces its own token, origin or opaque-session boundary.' },
   { path: '/api/auth/logout', kind: 'api', type: 'auth', why: 'Accepted independent SSO handler enforces its own token, origin or opaque-session boundary.' },

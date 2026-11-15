@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { ConnectToolRuntime } from './runtime.js';
+import { ConnectToolRuntime, type ConnectToolRuntimeOptions } from './runtime.js';
 import type { ConnectTool, ToolExecutionContext } from './types.js';
 
 const writeTool = {
@@ -36,7 +36,7 @@ function build(claim: () => Promise<boolean> | undefined) {
     tokens: { getAccessToken: async () => ({ ok: true, value: { accessToken: 'tok', expiresAt: 'x' } }) },
     audit: { record: async () => {} },
     approvals: claim === undefined ? undefined : { claimApproval: claim },
-  } as any;
+  } as unknown as ConnectToolRuntimeOptions;
   return new ConnectToolRuntime(opts);
 }
 

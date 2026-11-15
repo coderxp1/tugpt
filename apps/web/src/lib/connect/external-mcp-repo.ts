@@ -56,6 +56,7 @@ export interface ExternalMcpRepository {
 
 // The one cast for these not-yet-generated tables.
 type Untyped = {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any -- single cast for not-yet-generated tables
   from(table: string): any;
 };
 
