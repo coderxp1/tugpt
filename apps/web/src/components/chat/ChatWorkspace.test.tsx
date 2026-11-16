@@ -230,7 +230,7 @@ describe('ChatWorkspace approval cards', () => {
       { type: 'done', message: msg('a1', 'assistant', 'ok') },
     ]);
     await screen.findByRole('heading', { name: 'Approve this action?' });
-    const base = fetchMock.getMockImplementation()!;
+    const base = fetchMock.getMockImplementation() as (u: string, i?: RequestInit) => Promise<Response>;
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       const u = String(url);
       if (u === '/api/v1/connect/mcp/approvals') return ok({ approved: true });
