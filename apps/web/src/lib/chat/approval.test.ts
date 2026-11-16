@@ -73,8 +73,8 @@ describe('displayArguments', () => {
 
 describe('API clients never treat a failure as permission', () => {
   it('requestApproval: success only for 200 + {approved:true}, with Agent 2\'s body and CSRF header', async () => {
-    const f = vi.fn(() => res(200, { approved: true }));
-    expect(await requestApproval(base, 300, f)).toEqual({ ok: true, value: { approved: true } });
+    const f = vi.fn(() => res(200, { approved: true, id: 'id-1', expiresAt: '2026-11-16T18:00:00.000Z' }));
+    expect(await requestApproval(base, 300, f)).toEqual({ ok: true, value: { approved: true, id: 'id-1', expiresAt: new Date('2026-11-16T18:00:00.000Z').getTime() } });
     const [url, init] = f.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe('/api/v1/connect/mcp/approvals');
     expect(init.method).toBe('POST');
@@ -97,7 +97,7 @@ describe('API clients never treat a failure as permission', () => {
     if (!r.ok) expect(r.reason).toBe(reason);
   });
   it('requestApproval refuses a TTL outside the offered options without calling the server', async () => {
-    const f = vi.fn(() => res(200, { approved: true }));
+    const f = vi.fn(() => res(200, { approved: true, id: 'id-1', expiresAt: '2026-11-16T18:00:00.000Z' }));
     expect((await requestApproval(base, 7200, f)).ok).toBe(false);
     expect(f).not.toHaveBeenCalled();
   });
@@ -106,13 +106,13 @@ describe('API clients never treat a failure as permission', () => {
     expect(r).toEqual({ ok: false, reason: 'unavailable', status: 500, code: 'INTERNAL' });
   });
   it('revokeApproval: {revoked:boolean} only', async () => {
-    expect(await revokeApproval(base, vi.fn(() => res(200, { revoked: true })))).toEqual({ ok: true, value: { revoked: true } });
-    expect(await revokeApproval(base, vi.fn(() => res(200, { revoked: false })))).toEqual({ ok: true, value: { revoked: false } });
-    expect((await revokeApproval(base, vi.fn(() => res(200, {})))).ok).toBe(false);
-    expect((await revokeApproval(base, vi.fn(() => res(403, {})))).ok).toBe(false);
+    expect(await revokeApproval('id-1', vi.fn(() => res(200, { revoked: true })))).toEqual({ ok: true, value: { revoked: true } });
+    expect(await revokeApproval('id-1', vi.fn(() => res(200, { revoked: false })))).toEqual({ ok: true, value: { revoked: false } });
+    expect((await revokeApproval('id-1', vi.fn(() => res(200, {})))).ok).toBe(false);
+    expect((await revokeApproval('id-1', vi.fn(() => res(403, {})))).ok).toBe(false);
   });
   it('checkApproval: GET with query, boolean only', async () => {
-    const f = vi.fn(() => res(200, { approved: true }));
+    const f = vi.fn(() => res(200, { approved: true, id: 'id-1', expiresAt: '2026-11-16T18:00:00.000Z' }));
     expect(await checkApproval(base, f)).toEqual({ ok: true, value: { approved: true } });
     expect(String((f.mock.calls[0] as unknown as [string])[0])).toBe(`/api/v1/chat/approvals/status?connectionId=${EP}&capability=external.create_ticket&argumentsSha256=${base.argumentsSha256}`);
     expect((await checkApproval(base, vi.fn(() => res(503, { error: 'x' })))).ok).toBe(false);
@@ -123,32 +123,32 @@ describe('API clients never treat a failure as permission', () => {
 describe('approvalReducer', () => {
   const run = (...actions: ApprovalAction[]): ApprovalState => actions.reduce(approvalReducer, INITIAL_APPROVAL);
   it('approve -> approved -> run -> done', () => {
-    expect(run({ type: 'approve' }, { type: 'approved', expiresAt: 10 }, { type: 'run' }, { type: 'run_done', ok: true })).toEqual({ kind: 'done', ok: true });
-    expect(run({ type: 'approve' }, { type: 'approved', expiresAt: 10 }, { type: 'run' }, { type: 'run_refused' })).toEqual({ kind: 'approved', expiresAt: 10 });
+    expect(run({ type: 'approve' }, { type: 'approved', id: 'id-1', expiresAt: 10 }, { type: 'run' }, { type: 'run_done', ok: true })).toEqual({ kind: 'done', ok: true });
+    expect(run({ type: 'approve' }, { type: 'approved', id: 'id-1', expiresAt: 10 }, { type: 'run' }, { type: 'run_refused' })).toEqual({ kind: 'approved', id: 'id-1', expiresAt: 10 });
     expect(run({ type: 'run_refused' })).toEqual({ kind: 'pending' });
   });
   it('a failed approval cannot be run; it can be retried or rejected', () => {
     const failed = run({ type: 'approve' }, { type: 'approve_failed', reason: 'unavailable' });
     expect(failed).toEqual({ kind: 'failed', reason: 'unavailable' });
     expect(approvalReducer(failed, { type: 'run' })).toBe(failed);
-    expect(approvalReducer(failed, { type: 'approved', expiresAt: 1 })).toBe(failed);
+    expect(approvalReducer(failed, { type: 'approved', id: 'id-1', expiresAt: 1 })).toBe(failed);
     expect(approvalReducer(failed, { type: 'approve' })).toEqual({ kind: 'approving' });
     expect(approvalReducer(failed, { type: 'reject' })).toEqual({ kind: 'rejected' });
   });
   it('cannot run without approving first', () => {
     expect(run({ type: 'run' })).toEqual(INITIAL_APPROVAL);
-    expect(run({ type: 'approved', expiresAt: 1 })).toEqual(INITIAL_APPROVAL);
+    expect(run({ type: 'approved', id: 'id-1', expiresAt: 1 })).toEqual(INITIAL_APPROVAL);
   });
   it('expiry and revoke close the card; a failed revoke keeps it approved', () => {
-    const approved = run({ type: 'approve' }, { type: 'approved', expiresAt: 5 });
+    const approved = run({ type: 'approve' }, { type: 'approved', id: 'id-1', expiresAt: 5 });
     expect(approvalReducer(approved, { type: 'expire' })).toEqual({ kind: 'expired' });
-    expect(run({ type: 'approve' }, { type: 'approved', expiresAt: 5 }, { type: 'revoke' }, { type: 'revoke_done' })).toEqual({ kind: 'revoked' });
-    expect(run({ type: 'approve' }, { type: 'approved', expiresAt: 5 }, { type: 'revoke', then: 'rejected' }, { type: 'revoke_done' })).toEqual({ kind: 'rejected' });
-    expect(run({ type: 'approve' }, { type: 'approved', expiresAt: 5 }, { type: 'revoke' }, { type: 'revoke_failed' })).toEqual({ kind: 'approved', expiresAt: 5 });
+    expect(run({ type: 'approve' }, { type: 'approved', id: 'id-1', expiresAt: 5 }, { type: 'revoke' }, { type: 'revoke_done' })).toEqual({ kind: 'revoked' });
+    expect(run({ type: 'approve' }, { type: 'approved', id: 'id-1', expiresAt: 5 }, { type: 'revoke', then: 'rejected' }, { type: 'revoke_done' })).toEqual({ kind: 'rejected' });
+    expect(run({ type: 'approve' }, { type: 'approved', id: 'id-1', expiresAt: 5 }, { type: 'revoke' }, { type: 'revoke_failed' })).toEqual({ kind: 'approved', id: 'id-1', expiresAt: 5 });
   });
   it('late responses do not reopen closed cards', () => {
     const rejected = run({ type: 'reject' });
-    for (const a of [{ type: 'approved', expiresAt: 1 }, { type: 'run' }, { type: 'run_done', ok: true }, { type: 'expire' }] as ApprovalAction[]) {
+    for (const a of [{ type: 'approved', id: 'id-1', expiresAt: 1 }, { type: 'run' }, { type: 'run_done', ok: true }, { type: 'expire' }] as ApprovalAction[]) {
       expect(approvalReducer(rejected, a)).toBe(rejected);
     }
   });

@@ -7,7 +7,6 @@
 
 import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
 import type { ApiError } from '@/lib/draft-api/types';
@@ -28,8 +27,7 @@ async function authAdmin(request: Request) {
   if (tenant.role !== 'owner' && tenant.role !== 'admin') {
     return { error: errorResponse(403, 'FORBIDDEN', 'Managing MCP endpoints requires the organization owner or admin role') };
   }
-  const adminClient = createAdminSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-  return { user, tenant, repo: createExternalMcpRepository(adminClient) };
+    return { user, tenant, repo: createExternalMcpRepository(supabase) };
 }
 
 export async function GET(request: Request) {

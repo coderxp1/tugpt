@@ -18,7 +18,7 @@ function fetcher(routes: { approve?: Route; status?: Route; revoke?: Route }) {
   return vi.fn((url: string, init?: RequestInit) => {
     if (url.startsWith('/api/v1/chat/approvals/status')) return (routes.status ?? (() => json(200, { approved: true })))(url, init);
     if (url === '/api/v1/connect/mcp/approvals/revoke') return (routes.revoke ?? (() => json(200, { revoked: true })))(url, init);
-    if (url === '/api/v1/connect/mcp/approvals') return (routes.approve ?? (() => json(200, { approved: true })))(url, init);
+    if (url === '/api/v1/connect/mcp/approvals') return (routes.approve ?? (() => json(200, { approved: true, id: 'id-1', expiresAt: new Date(Date.now() + 900000).toISOString() })))(url, init);
     return json(404, {});
   });
 }
@@ -123,7 +123,7 @@ describe('ApprovalCard', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Revoke approval' }));
     await waitFor(() => expect(status()).toContain('Approval revoked. Nothing was run.'));
     const revoke = f.mock.calls.find(([u]) => u === '/api/v1/connect/mcp/approvals/revoke')!;
-    expect(JSON.parse(String((revoke[1] as RequestInit).body))).toEqual({ connectionId: approval.endpointId, capability: approval.capability, argumentsSha256: approval.argumentsSha256 });
+    expect(JSON.parse(String((revoke[1] as RequestInit).body))).toEqual({ approvalId: 'id-1' });
     expect(onRun).not.toHaveBeenCalled();
   });
 
@@ -146,7 +146,7 @@ describe('ApprovalCard', () => {
   it('expires on the client when the TTL passes; Run disappears', async () => {
     let now = 1_000_000;
     vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
-    render(<ApprovalCard approval={approval} canApprove busy={false} onRun={vi.fn()} fetchFn={fetcher({})} now={() => now} />);
+    render(<ApprovalCard approval={approval} canApprove busy={false} onRun={vi.fn()} fetchFn={fetcher({ approve: () => json(200, { approved: true, id: 'id-1', expiresAt: new Date(1_300_000).toISOString() }) })} now={() => now} />);
     confirmAndApprove();
     await act(async () => { await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); await Promise.resolve(); });
     await vi.waitFor(() => expect(screen.getByRole('button', { name: 'Run now' })).toBeTruthy());

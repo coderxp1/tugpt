@@ -233,7 +233,7 @@ describe('ChatWorkspace approval cards', () => {
     const base = fetchMock.getMockImplementation() as (u: string, i?: RequestInit) => Promise<Response>;
     fetchMock.mockImplementation((url: string, init?: RequestInit) => {
       const u = String(url);
-      if (u === '/api/v1/connect/mcp/approvals') return ok({ approved: true });
+      if (u === '/api/v1/connect/mcp/approvals') return ok({ approved: true, id: 'id-1', expiresAt: new Date(Date.now() + 900000).toISOString() });
       if (u.startsWith('/api/v1/chat/approvals/status')) return ok({ approved: true });
       if (u.endsWith('/approved-call')) return Promise.resolve(new Response(JSON.stringify({ error: 'This integration is not available in chat yet' }), { status: 409, headers: { 'content-type': 'application/json' } }));
       return base(url, init);

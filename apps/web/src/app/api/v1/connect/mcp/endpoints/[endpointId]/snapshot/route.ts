@@ -9,7 +9,6 @@
 
 import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
@@ -37,22 +36,17 @@ export async function POST(request: Request, { params }: { params: Promise<{ end
       return errorResponse(403, 'FORBIDDEN', 'Snapshotting an MCP endpoint requires the organization owner or admin role');
     }
 
-    const adminClient = createAdminSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    );
-    const repo = createExternalMcpRepository(adminClient);
-    const endpoint = await repo.getEndpoint(tenant.organizationId, endpointId);
+        const repo = createExternalMcpRepository(supabase);
+    const endpoint = await repo.getEndpointUrl(tenant.organizationId, endpointId);
     if (!endpoint) return errorResponse(404, 'NOT_FOUND', 'MCP endpoint not found');
 
     // TODO(connect): resolve the endpoint's auth via the credential broker
     // (auth_connection_id) and pass it as `authHeader` â€” a Bearer token.
-    const tools = await listExternalMcpTools({ url: endpoint.url });
+    const tools = await listExternalMcpTools({ url: endpoint });
 
     const content = JSON.stringify(tools);
     const contentSha256 = createHash('sha256').update(content).digest('hex');
-    const snapshotId = await repo.createSnapshot(tenant.organizationId, endpointId, 1, contentSha256);
-    await repo.createTools(tenant.organizationId, snapshotId, tools);
+    const snapshotId = await repo.createSnapshot(tenant.organizationId, endpointId, 1, contentSha256, tools);
 
     return NextResponse.json({ snapshotId, toolCount: tools.length }, { status: 201 });
   } catch {

@@ -60,14 +60,13 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
     if (!checked || !canApprove) return;
     setNotice(null);
     dispatch({ type: 'approve' });
-    const started = now();
     const r = await requestApproval(approval, ttl, fetchFn);
     if (!r.ok) { dispatch({ type: 'approve_failed', reason: r.reason, ...(r.code ? { code: r.code } : {}) }); return; }
     // Trust the database, not the response alone: the approval must now exist.
     const v = await checkApproval(approval, fetchFn);
     if (!v.ok || !v.value.approved) { dispatch({ type: 'approve_failed', reason: 'not_recorded' }); return; }
     setClock(now());
-    dispatch({ type: 'approved', expiresAt: started + ttl * 1000 });
+    dispatch({ type: 'approved', id: r.value.id, expiresAt: r.value.expiresAt });
   }
 
   async function checkAgain() {
@@ -76,13 +75,15 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
     const v = await checkApproval(approval, fetchFn);
     if (!v.ok) { dispatch({ type: 'approve_failed', reason: v.reason }); return; }
     if (!v.value.approved) { dispatch({ type: 'approve_failed', reason: 'forbidden' }); setNotice('No approval for this exact call exists yet.'); return; }
-    dispatch({ type: 'approved', expiresAt: null });
+    dispatch({ type: 'approved', id: null, expiresAt: null });
   }
 
   async function revoke(then: 'revoked' | 'rejected') {
     setNotice(null);
     dispatch({ type: 'revoke', then });
-    const r = await revokeApproval(approval, fetchFn);
+    const id = state.kind === 'approved' || state.kind === 'running' || state.kind === 'revoking' ? state.id : null;
+    if (id === null) { dispatch({ type: 'revoke_failed' }); return; }
+    const r = await revokeApproval(id, fetchFn);
     if (!r.ok) {
       dispatch({ type: 'revoke_failed' });
       setNotice(`The approval could not be revoked (${failureText(r.reason, canApprove)}) It stays valid until it expires or is used.`);

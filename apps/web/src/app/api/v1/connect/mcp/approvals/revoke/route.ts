@@ -9,14 +9,12 @@
 
 import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { isSameOriginMutation } from '@/lib/http/mutations';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
 import type { ApiError } from '@/lib/draft-api/types';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
-const SHA = /^[0-9a-f]{64}$/i;
 
 function errorResponse(status: number, code: string, message: string) {
   const body: ApiError = { error: { code, message } };
@@ -39,22 +37,13 @@ export async function POST(request: Request) {
     }
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
-    const connectionId = body?.connectionId;
-    const capability = body?.capability;
-    const argumentsSha256 = body?.argumentsSha256;
-    if (typeof connectionId !== 'string' || !UUID.test(connectionId)) {
-      return errorResponse(400, 'INVALID_REQUEST', 'connectionId must be a valid UUID');
-    }
-    if (typeof capability !== 'string' || capability.length === 0 || capability.length > 128) {
-      return errorResponse(400, 'INVALID_REQUEST', 'capability is required');
-    }
-    if (typeof argumentsSha256 !== 'string' || !SHA.test(argumentsSha256)) {
-      return errorResponse(400, 'INVALID_REQUEST', 'argumentsSha256 must be a 64-character hex digest');
+    const approvalId = body?.approvalId;
+    if (typeof approvalId !== 'string' || !UUID.test(approvalId)) {
+      return errorResponse(400, 'INVALID_REQUEST', 'approvalId must be a valid UUID');
     }
 
-    const adminClient = createAdminSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-    const repo = createExternalMcpRepository(adminClient);
-    const revoked = await repo.revokeApproval(tenant.organizationId, connectionId, capability, argumentsSha256);
+    const repo = createExternalMcpRepository(supabase);
+    const revoked = await repo.revokeApproval(tenant.organizationId, approvalId);
 
     return NextResponse.json({ revoked });
   } catch {

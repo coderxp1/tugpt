@@ -8,7 +8,6 @@
 
 import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
 import type { ApiError } from '@/lib/draft-api/types';
@@ -34,11 +33,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ end
       return errorResponse(403, 'FORBIDDEN', 'Deactivating an MCP endpoint requires the organization owner or admin role');
     }
 
-    const adminClient = createAdminSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    );
-    const repo = createExternalMcpRepository(adminClient);
+        const repo = createExternalMcpRepository(supabase);
 
     const endpoint = await repo.getEndpoint(tenant.organizationId, endpointId);
     if (!endpoint) return errorResponse(404, 'NOT_FOUND', 'MCP endpoint not found');

@@ -11,7 +11,6 @@
 
 import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { createExternalMcpRepository, type PermissionClass } from '@/lib/connect/external-mcp-repo';
 import type { ApiError } from '@/lib/draft-api/types';
@@ -47,11 +46,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ sna
       }
     }
 
-    const adminClient = createAdminSupabaseClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    );
-    const repo = createExternalMcpRepository(adminClient);
+        const repo = createExternalMcpRepository(supabase);
 
     const snapshot = await repo.getSnapshot(tenant.organizationId, snapshotId);
     if (!snapshot) return errorResponse(404, 'NOT_FOUND', 'MCP snapshot not found');
@@ -59,11 +54,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ sna
       return errorResponse(409, 'ALREADY_APPROVED', 'This snapshot is already approved and immutable');
     }
 
-    for (const [name, permissionClass] of Object.entries(permissions)) {
-      await repo.setToolPermission(tenant.organizationId, snapshotId, name, permissionClass as PermissionClass);
-    }
-
-    await repo.approveSnapshot(tenant.organizationId, snapshotId, user.id);
+    const tools = Object.entries(permissions).map(([name, permissionClass]) => ({ name, permissionClass: permissionClass as PermissionClass }));
+    await repo.approveSnapshot(tenant.organizationId, snapshotId, tools);
 
     return NextResponse.json({ snapshotId, permissionCount: Object.keys(permissions).length });
   } catch {

@@ -177,15 +177,16 @@ async function call<T>(fetchFn: FetchFn, url: string, init: RequestInit, accept:
 const target = (p: PendingApproval) => ({ connectionId: p.endpointId, capability: p.capability, argumentsSha256: p.argumentsSha256 });
 
 /** Agent 2's POST /api/v1/connect/mcp/approvals. Success only for HTTP 200 with {approved: true}. */
-export async function requestApproval(p: PendingApproval, ttlSeconds: number, fetchFn: FetchFn = fetch): Promise<ApprovalResult<{ approved: true }>> {
+export async function requestApproval(p: PendingApproval, ttlSeconds: number, fetchFn: FetchFn = fetch): Promise<ApprovalResult<{ approved: true; id: string; expiresAt: number }>> {
   if (!TTL_OPTIONS.some((o) => o.seconds === ttlSeconds)) return { ok: false, reason: 'invalid' };
   return call(fetchFn, APPROVALS_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify({ ...target(p), ttlSeconds }) },
-    (b) => (isPlainObject(b) && b.approved === true ? { approved: true as const } : undefined));
+    (b) => (isPlainObject(b) && b.approved === true && typeof b.id === 'string' && typeof b.expiresAt === 'string'
+      ? { approved: true as const, id: b.id, expiresAt: new Date(b.expiresAt).getTime() } : undefined));
 }
 
 /** Agent 2's POST /api/v1/connect/mcp/approvals/revoke. {revoked:false} means nothing unused was left to revoke. */
-export async function revokeApproval(p: PendingApproval, fetchFn: FetchFn = fetch): Promise<ApprovalResult<{ revoked: boolean }>> {
-  return call(fetchFn, REVOKE_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify(target(p)) },
+export async function revokeApproval(approvalId: string, fetchFn: FetchFn = fetch): Promise<ApprovalResult<{ revoked: boolean }>> {
+  return call(fetchFn, REVOKE_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify({ approvalId }) },
     (b) => (isPlainObject(b) && typeof b.revoked === 'boolean' ? { revoked: b.revoked } : undefined));
 }
 
@@ -201,11 +202,11 @@ export async function checkApproval(p: PendingApproval, fetchFn: FetchFn = fetch
 export type ApprovalState =
   | { readonly kind: 'pending' }
   | { readonly kind: 'approving' }
-  | { readonly kind: 'approved'; readonly expiresAt: number | null }
-  | { readonly kind: 'running'; readonly expiresAt: number | null }
+  | { readonly kind: 'approved'; readonly id: string | null; readonly expiresAt: number | null }
+  | { readonly kind: 'running'; readonly id: string | null; readonly expiresAt: number | null }
   | { readonly kind: 'done'; readonly ok: boolean; readonly code?: string }
   | { readonly kind: 'rejected' }
-  | { readonly kind: 'revoking'; readonly expiresAt: number | null; readonly then: 'revoked' | 'rejected' }
+  | { readonly kind: 'revoking'; readonly id: string | null; readonly expiresAt: number | null; readonly then: 'revoked' | 'rejected' }
   | { readonly kind: 'revoked' }
   | { readonly kind: 'expired' }
   | { readonly kind: 'failed'; readonly reason: ApprovalFailure | 'not_recorded'; readonly code?: string };
@@ -213,7 +214,7 @@ export type ApprovalState =
 export type ApprovalAction =
   | { readonly type: 'approve' }
   /** expiresAt null: the approval exists but its expiry is not known here (recorded by someone else). */
-  | { readonly type: 'approved'; readonly expiresAt: number | null }
+  | { readonly type: 'approved'; readonly id: string | null; readonly expiresAt: number | null }
   | { readonly type: 'approve_failed'; readonly reason: ApprovalFailure | 'not_recorded'; readonly code?: string }
   | { readonly type: 'reject' }
   | { readonly type: 'revoke'; readonly then?: 'revoked' | 'rejected' }
@@ -231,17 +232,17 @@ export const INITIAL_APPROVAL: ApprovalState = { kind: 'pending' };
 export function approvalReducer(s: ApprovalState, a: ApprovalAction): ApprovalState {
   switch (a.type) {
     case 'approve': return s.kind === 'pending' || s.kind === 'failed' ? { kind: 'approving' } : s;
-    case 'approved': return s.kind === 'approving' ? { kind: 'approved', expiresAt: a.expiresAt } : s;
+    case 'approved': return s.kind === 'approving' ? { kind: 'approved', id: a.id, expiresAt: a.expiresAt } : s;
     case 'approve_failed': return s.kind === 'approving' ? { kind: 'failed', reason: a.reason, ...(a.code ? { code: a.code } : {}) } : s;
     case 'reject': return s.kind === 'pending' || s.kind === 'failed' ? { kind: 'rejected' } : s;
-    case 'revoke': return s.kind === 'approved' ? { kind: 'revoking', expiresAt: s.expiresAt, then: a.then ?? 'revoked' } : s;
+    case 'revoke': return s.kind === 'approved' ? { kind: 'revoking', id: s.id, expiresAt: s.expiresAt, then: a.then ?? 'revoked' } : s;
     case 'revoke_done': return s.kind === 'revoking' ? { kind: s.then } : s;
     // A failed revoke leaves the approval in place: say so by returning to approved.
-    case 'revoke_failed': return s.kind === 'revoking' ? { kind: 'approved', expiresAt: s.expiresAt } : s;
+    case 'revoke_failed': return s.kind === 'revoking' ? { kind: 'approved', id: s.id, expiresAt: s.expiresAt } : s;
     case 'expire': return s.kind === 'approved' ? { kind: 'expired' } : s;
-    case 'run': return s.kind === 'approved' ? { kind: 'running', expiresAt: s.expiresAt } : s;
+    case 'run': return s.kind === 'approved' ? { kind: 'running', id: s.id, expiresAt: s.expiresAt } : s;
     case 'run_done': return s.kind === 'running' ? { kind: 'done', ok: a.ok, ...(a.code ? { code: a.code } : {}) } : s;
-    case 'run_refused': return s.kind === 'running' ? { kind: 'approved', expiresAt: s.expiresAt } : s;
+    case 'run_refused': return s.kind === 'running' ? { kind: 'approved', id: s.id, expiresAt: s.expiresAt } : s;
     default: return s;
   }
 }

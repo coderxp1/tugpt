@@ -9,7 +9,6 @@
 
 import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
 import { isSameOriginMutation } from '@/lib/http/mutations';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
@@ -56,11 +55,10 @@ export async function POST(request: Request) {
       return errorResponse(400, 'INVALID_REQUEST', 'ttlSeconds must be an integer from 1 to 3600');
     }
 
-    const adminClient = createAdminSupabaseClient(process.env.NEXT_PUBLIC_SUPABASE_URL!, process.env.SUPABASE_SERVICE_ROLE_KEY!);
-    const repo = createExternalMcpRepository(adminClient);
-    await repo.recordApproval(tenant.organizationId, connectionId, capability, argumentsSha256, ttlSeconds);
+    const repo = createExternalMcpRepository(supabase);
+    const { id, expiresAt } = await repo.recordApproval(tenant.organizationId, connectionId, capability, argumentsSha256, ttlSeconds);
 
-    return NextResponse.json({ approved: true });
+    return NextResponse.json({ approved: true, id, expiresAt });
   } catch {
     return errorResponse(500, 'INTERNAL', 'Failed to record the approval');
   }
