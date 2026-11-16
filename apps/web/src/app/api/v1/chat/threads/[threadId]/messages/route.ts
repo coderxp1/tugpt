@@ -1,6 +1,8 @@
 /**
  * POST a user message and stream the assistant turn as NDJSON events:
- *   {type:'user',message} {type:'tool_start'|'tool_result',...,provider} {type:'delta',text}
+ *   {type:'user',message} {type:'tool_start'|'tool_result',callId,...,provider} {type:'delta',text}
+ *   {type:'approval_required',approval}   (an MCP call that changes something was refused
+ *                                          with APPROVAL_REQUIRED; see lib/chat/approval.ts)
  *   {type:'done',message} | {type:'error',code}
  *
  * @-mentions are re-validated against list_chat_capabilities() for this
@@ -10,7 +12,8 @@ import { NextResponse } from 'next/server';
 import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } from '@/lib/chat/request';
 import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
-import { completeWithTools, ModelCallError, streamCompletion, type WireMessage } from '@/lib/chat/openai-compatible';
+import { completeWithTools, ModelCallError, streamCompletion, type ParsedToolCall, type WireMessage } from '@/lib/chat/openai-compatible';
+import { pendingApproval } from '@/lib/chat/approval.server';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
@@ -91,11 +94,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
       let answer = '';
       let status: 'complete' | 'error' | 'stopped' = 'complete';
       let errorCode: string | null = null;
+      const calls = new Map<string, ParsedToolCall>();
       try {
         const gen = runTurn({ messages: wire, tools: toolset.specs }, {
           stream: (m) => streamCompletion(endpoint, model.upstreamModel, m, { signal }),
           completeWithTools: (m, t) => completeWithTools(endpoint, model.upstreamModel, m, t, { signal }),
-          executeTool: (call) => toolset.execute(call),
+          executeTool: (call) => { calls.set(call.id, call); return toolset.execute(call); },
         });
         for (;;) {
           const n = await gen.next();
@@ -113,6 +117,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
           }
           // Provider name for the UI label; comes from the server-side capability row, never from the model.
           send(ev.type === 'tool_start' || ev.type === 'tool_result' ? { ...ev, provider: toolset.describe(ev.tool)?.providerName ?? null } : ev);
+          // The runtime refused an MCP call that changes something: offer the approval card.
+          // Details come from server-side rows; the hash is the one the runtime will claim against.
+          if (ev.type === 'tool_result' && ev.code === 'APPROVAL_REQUIRED') {
+            const call = calls.get(ev.callId);
+            const target = toolset.approvalTarget(ev.tool);
+            if (call && target) send({ type: 'approval_required', approval: pendingApproval(target, { callId: call.id, threadId, arguments: call.arguments }) });
+          }
         }
       } catch (e) {
         if (signal.aborted) status = 'stopped';

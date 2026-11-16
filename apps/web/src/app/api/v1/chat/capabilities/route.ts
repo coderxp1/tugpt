@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server';
 import { chatContext, PRIVATE_HEADERS, storeErrorResponse } from '@/lib/chat/request';
 import { listCapabilities } from '@/lib/chat/store';
 import { toolAvailable } from '@/lib/chat/connect';
-import { loadChatToolRegistry } from '@/lib/chat/mcp';
+import { loadChatToolRegistry, mcpUnavailableReason } from '@/lib/chat/mcp';
 
 export const dynamic = 'force-dynamic';
 
@@ -15,12 +15,18 @@ export async function GET(request: Request) {
     // Built-in tools plus runnable customer MCP tools; the MCP gate (lib/chat/mcp.ts) keeps MCP off unless provably runnable.
     const registry = await loadChatToolRegistry(ctx.db, ctx.tenant.organizationId);
     // connectionId stays server-side: the browser selects capabilities, the server picks the connection.
-    const capabilities = rows.map((r) => ({
-      capabilityKey: r.capabilityKey, providerKey: r.providerKey, providerName: r.providerName,
-      description: r.description, permissionClass: r.permissionClass, state: r.state,
-      // false: listed, but chat cannot run it here (no tool on this build, or MCP not provably runnable).
-      toolAvailable: toolAvailable(r, registry),
-    }));
+    const capabilities = rows.map((r) => {
+      const available = toolAvailable(r, registry);
+      const reason = available ? null : mcpUnavailableReason(r, registry);
+      return {
+        capabilityKey: r.capabilityKey, providerKey: r.providerKey, providerName: r.providerName,
+        description: r.description, permissionClass: r.permissionClass, state: r.state,
+        // false: listed, but chat cannot run it here (no tool on this build, or MCP not provably runnable).
+        toolAvailable: available,
+        // MCP only: a stable code saying which gate keeps it off (lib/chat/mcp.ts). Never a URL or secret.
+        ...(reason ? { unavailableReason: reason } : {}),
+      };
+    });
     return NextResponse.json({ capabilities }, { headers: PRIVATE_HEADERS });
   } catch (e) { return storeErrorResponse(e); }
 }

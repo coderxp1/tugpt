@@ -9,7 +9,7 @@ const TOOL: Record<string, ChatProblem> = {
   NOT_GRANTED: { text: 'You do not have access to this connection. Ask an admin to share it with you.', connect: false },
   POLICY_DISABLED: { text: 'Your organization has turned this app off.', connect: false },
   SCOPE_MISSING: { text: 'The connection is missing a permission this needs. Reconnect the account.', connect: true },
-  APPROVAL_REQUIRED: { text: 'This action needs an owner or admin to approve this exact call first, and chat cannot ask for that yet. Nothing was changed.', connect: false },
+  APPROVAL_REQUIRED: { text: 'Waiting for approval. Nothing was changed yet; see the approval card below.', connect: false },
   PROVIDER_MISMATCH: { text: 'The attached connection belongs to a different provider.', connect: true },
   CONNECTION_NOT_FOUND: { text: 'The connection no longer exists. Connect the account again.', connect: true },
   CONNECTION_NOT_ACTIVE: { text: 'The connection is not active. Connect the account again.', connect: true },
@@ -41,13 +41,22 @@ export function requestProblem(serverError: string | undefined): ChatProblem {
   return (serverError && REQUEST[serverError]) || { text: serverError || 'The message could not be sent.', connect: false };
 }
 
-export interface PickerCapability { state: 'connected' | 'requires_connection' | 'disabled_by_policy' | 'not_available'; toolAvailable?: boolean }
+export interface PickerCapability { state: 'connected' | 'requires_connection' | 'disabled_by_policy' | 'not_available'; toolAvailable?: boolean; unavailableReason?: string }
+
+/** Why a customer MCP tool is off in chat (codes from lib/chat/mcp.ts mcpUnavailableReason). */
+const MCP_UNAVAILABLE: Record<string, string> = {
+  MCP_FEATURE_OFF: 'Custom tools are switched off',
+  MCP_CHAT_EXECUTION_OFF: 'Not available in chat yet: running custom tools from chat is switched off',
+  MCP_EGRESS_NOT_CONFIGURED: 'Not available in chat yet: no secure network proxy is set up',
+  MCP_AUDIT_UNAVAILABLE: 'Not available in chat yet: calls cannot be recorded',
+  MCP_NOT_RUNNABLE: 'Not available in chat: needs review in Connect',
+};
 
 /** null = selectable; otherwise the reason shown next to the app. */
 export function pickerBlock(c: PickerCapability, modelCanUseTools: boolean): string | null {
   if (c.state === 'disabled_by_policy') return 'Turned off by your organization';
   if (c.state === 'not_available') return 'Not available yet';
-  if (c.toolAvailable === false) return 'Not available in chat yet';
+  if (c.toolAvailable === false) return (c.unavailableReason && MCP_UNAVAILABLE[c.unavailableReason]) || 'Not available in chat yet';
   if (c.state === 'requires_connection') return 'Connect first';
   if (!modelCanUseTools) return 'This model can\u2019t use apps yet';
   return null;

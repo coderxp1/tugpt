@@ -1,7 +1,9 @@
 /**
  * GET /api/v1/chat/capabilities with the production wiring (no injected deps):
- * customer MCP rows are listed but never offered to chat, even when the feature
- * switch and the egress proxy are set, because no MCP audit sink exists yet.
+ * customer MCP rows are listed but only offered to chat when the Connect switch,
+ * the separate chat execution switch and the egress proxy are all set (the
+ * audit sink is Agent 2's record_mcp_tool_call, wired by default). Each closed
+ * gate is reported as a stable unavailableReason code for the picker.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { emptyState, fakeDb, type FakeState } from '@/lib/chat/mcp.test-harness';
@@ -35,7 +37,7 @@ describe('GET /api/v1/chat/capabilities: customer MCP stays closed in production
     const res = await GET(new Request('https://app.test/api/v1/chat/capabilities'));
     expect(res.status).toBe(200);
     expect(res.headers.get('cache-control')).toContain('no-store');
-    const body = (await res.json()) as { capabilities: { providerKey: string; toolAvailable: boolean; capabilityKey: string }[] };
+    const body = (await res.json()) as { capabilities: { providerKey: string; toolAvailable: boolean; capabilityKey: string; unavailableReason?: string }[] };
     expect(JSON.stringify(body)).not.toContain('connectionId');
     return body.capabilities.filter((c) => c.providerKey === 'mcp');
   }
@@ -44,14 +46,32 @@ describe('GET /api/v1/chat/capabilities: customer MCP stays closed in production
     vi.stubEnv('TUGPT_CUSTOMER_MCP_ENABLED', '');
     const rows = await mcpRows();
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((r) => r.toolAvailable === false)).toBe(true);
+    expect(rows.every((r) => r.toolAvailable === false && r.unavailableReason === 'MCP_FEATURE_OFF')).toBe(true);
   });
 
-  it('switch on and proxy set: still not available, because MCP calls cannot be audited', async () => {
+  it('Connect switch on and proxy set: still not available, because chat execution is a separate switch', async () => {
     vi.stubEnv('TUGPT_CUSTOMER_MCP_ENABLED', 'true');
+    vi.stubEnv('TUGPT_CHAT_MCP_EXECUTION_ENABLED', '');
     vi.stubEnv('CONNECT_EGRESS_PROXY', 'http://egress-proxy.test:3128');
     const rows = await mcpRows();
     expect(rows.length).toBeGreaterThan(0);
-    expect(rows.every((r) => r.toolAvailable === false)).toBe(true);
+    expect(rows.every((r) => r.toolAvailable === false && r.unavailableReason === 'MCP_CHAT_EXECUTION_OFF')).toBe(true);
+  });
+
+  it('both switches on but no proxy: not available (no network path)', async () => {
+    vi.stubEnv('TUGPT_CUSTOMER_MCP_ENABLED', 'true');
+    vi.stubEnv('TUGPT_CHAT_MCP_EXECUTION_ENABLED', 'true');
+    vi.stubEnv('CONNECT_EGRESS_PROXY', '');
+    const rows = await mcpRows();
+    expect(rows.every((r) => r.toolAvailable === false && r.unavailableReason === 'MCP_EGRESS_NOT_CONFIGURED')).toBe(true);
+  });
+
+  it('all gates open (switches, proxy, default audit sink): the runnable tool is offered, without a reason', async () => {
+    vi.stubEnv('TUGPT_CUSTOMER_MCP_ENABLED', 'true');
+    vi.stubEnv('TUGPT_CHAT_MCP_EXECUTION_ENABLED', 'true');
+    vi.stubEnv('CONNECT_EGRESS_PROXY', 'http://egress-proxy.test:3128');
+    const rows = await mcpRows();
+    expect(rows).toEqual([expect.objectContaining({ capabilityKey: 'external.search_docs', toolAvailable: true })]);
+    expect(rows[0].unavailableReason).toBeUndefined();
   });
 });

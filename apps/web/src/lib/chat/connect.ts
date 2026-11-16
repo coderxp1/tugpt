@@ -30,6 +30,7 @@ import {
 import { BrokerClient } from '@tugpt/credential-broker/dist/client.js';
 import type { ParsedToolCall, ToolSpec } from './openai-compatible';
 import type { ToolExecution } from './turn';
+import type { ApprovalTarget } from './approval.server';
 import { listCapabilities, type CapabilityRow, type ChatDb } from './store';
 import {
   builtinRegistry, MCP_NO_CREDENTIAL, MCP_PROVIDER, mcpDirectory, verifyMcpTool,
@@ -135,6 +136,12 @@ export interface ChatToolset {
   readonly specs: readonly ToolSpec[];
   readonly labels: readonly string[];
   describe(toolName: string): { capabilityKey: string; providerName: string; providerKey: string } | null;
+  /**
+   * For an MCP tool whose stored permission class is not 'read': what a person
+   * must approve (endpoint, host, tool, class), from server-side rows only.
+   * null for built-in and read-only tools, which never need an approval card.
+   */
+  approvalTarget(toolName: string): ApprovalTarget | null;
   execute(call: ParsedToolCall): Promise<ToolExecution>;
 }
 
@@ -159,7 +166,7 @@ export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: rea
     if (row.providerKey === MCP_PROVIDER && (!mcp || !registry.mcpGate.open || !registry.mcpAudit)) continue;
     chosen.set(tool.modelName, { tool, row, ...(mcp ? { mcp } : {}) });
   }
-  if (chosen.size === 0) return { specs: [], labels: [], describe: () => null, async execute() { return { ok: false, code: 'UNKNOWN_TOOL', content: '{"error":"UNKNOWN_TOOL"}' }; } };
+  if (chosen.size === 0) return { specs: [], labels: [], describe: () => null, approvalTarget: () => null, async execute() { return { ok: false, code: 'UNKNOWN_TOOL', content: '{"error":"UNKNOWN_TOOL"}' }; } };
 
   const entries = [...chosen.values()];
   // One endpoint can serve several attached tools: key by endpoint AND capability.
@@ -255,6 +262,16 @@ export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: rea
     describe(toolName) {
       const e = chosen.get(toolName);
       return e ? { capabilityKey: e.row.capabilityKey, providerName: e.row.providerName, providerKey: e.row.providerKey } : null;
+    },
+    approvalTarget(toolName) {
+      const e = chosen.get(toolName);
+      const m = e?.mcp;
+      if (!e || !m || m.permissionClass === 'read' || !m.capability.startsWith('external.')) return null;
+      return {
+        endpointId: m.endpointId, endpointName: e.row.providerName, endpointHost: m.endpointHost,
+        capability: m.capability, toolName: m.capability.slice('external.'.length), toolDescription: e.row.description,
+        permissionClass: m.permissionClass,
+      };
     },
     async execute(call) {
       const entry = chosen.get(call.name);

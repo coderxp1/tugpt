@@ -10,30 +10,31 @@
  *
  * An MCP tool is offered only when ALL of these hold (otherwise it is shown as
  * "Not available in chat yet" and never reaches the model):
- *   1. TUGPT_CUSTOMER_MCP_ENABLED=true             (off by default)
- *   2. CONNECT_EGRESS_PROXY is a valid CONNECT proxy (no proxy, no network)
- *   3. an audit sink that can record MCP calls is wired. The current schema
- *      cannot: connect_tool_calls.capability_key references the built-in
- *      catalogue and record_connect_tool_call only accepts connected_accounts,
- *      so in production this gate stays CLOSED until the backend adds one.
- *   4. the endpoint is active, its NEWEST snapshot is approved and not
+ *   1. TUGPT_CUSTOMER_MCP_ENABLED=true             (off by default; Connect admin screens)
+ *   2. TUGPT_CHAT_MCP_EXECUTION_ENABLED=true       (off by default; running MCP tools
+ *      from chat is a separate decision from managing endpoints in Connect)
+ *   3. CONNECT_EGRESS_PROXY is a valid CONNECT proxy (no proxy, no network)
+ *   4. an audit sink that can record MCP calls. Production wires Agent 2's
+ *      createMcpAuditSink() (record_mcp_tool_call) through the caller's RLS
+ *      client; it throws when the row cannot be written, and ./connect.ts then
+ *      withholds the result.
+ *   5. the endpoint is active, its NEWEST snapshot is approved and not
  *      revoked (a newer, unreviewed snapshot blocks the endpoint), and it needs
  *      no stored credential (auth_connection_id is null; resolving endpoint
  *      credentials through the broker does not exist yet)
- *   5. the tool is in listActiveMcpTools for this org, its stored permission
+ *   6. the tool is in listActiveMcpTools for this org, its stored permission
  *      class matches the capability row, and its schema is a JSON object.
- * Items 4 and 5 are checked again on every call, so a turn-off, revoke or new
+ * Items 5 and 6 are checked again on every call, so a turn-off, revoke or new
  * snapshot during a turn stops the next call.
  *
- * Reads go through the caller's RLS-bound client: external_tool_* is readable
- * by owners and admins only, so members get no MCP tools (fail closed).
+ * Reads go through the caller's RLS-bound client.
  */
 import type { JsonSchemaObject } from '@tugpt/ai-providers';
 import {
   createBuiltInCalendarTools, createExternalMcpTool,
   type AccessTokenSource, type ConnectionDirectory, type ConnectTool, type ExternalMcpFetch, type HostnameResolver, type ToolAuditEvent,
 } from '@tugpt/connect-runtime';
-import { listActiveMcpTools, mcpConnectionDirectory, type ActiveMcpTool } from '@tugpt/connect-server';
+import { createMcpAuditSink, listActiveMcpTools, mcpConnectionDirectory, type ActiveMcpTool } from '@tugpt/connect-server';
 import { customerMcpEnabled } from '../connect-ui/flags.server';
 
 /** The client type Agent 2's functions take (supabase-js), without a direct dependency on it. */
@@ -54,11 +55,19 @@ export interface McpAuditSink {
   record(event: ToolAuditEvent & { readonly endpointId: string }): Promise<void>;
 }
 
-export type McpGateReason = 'FEATURE_OFF' | 'EGRESS_NOT_CONFIGURED' | 'AUDIT_UNAVAILABLE';
+export type McpGateReason = 'FEATURE_OFF' | 'CHAT_EXECUTION_OFF' | 'EGRESS_NOT_CONFIGURED' | 'AUDIT_UNAVAILABLE';
 export type McpGate = { readonly open: true } | { readonly open: false; readonly reason: McpGateReason };
 
-export function mcpGate(env: Env, audit: McpAuditSink | undefined): McpGate {
+export const CHAT_MCP_EXECUTION_ENV = 'TUGPT_CHAT_MCP_EXECUTION_ENABLED';
+
+/** Running customer MCP tools from chat. Exactly "true"; anything else is off. */
+export function chatMcpExecutionEnabled(env: Env): boolean {
+  return env[CHAT_MCP_EXECUTION_ENV] === 'true';
+}
+
+export function mcpGate(env: Env, audit: McpAuditSink | null | undefined): McpGate {
   if (!customerMcpEnabled(env)) return { open: false, reason: 'FEATURE_OFF' };
+  if (!chatMcpExecutionEnabled(env)) return { open: false, reason: 'CHAT_EXECUTION_OFF' };
   if (!parseEgressProxy(env[EGRESS_PROXY_ENV])) return { open: false, reason: 'EGRESS_NOT_CONFIGURED' };
   if (!audit) return { open: false, reason: 'AUDIT_UNAVAILABLE' };
   return { open: true };
@@ -68,6 +77,8 @@ export interface McpToolEntry {
   readonly endpointId: string;
   readonly capability: string;
   readonly permissionClass: PermissionClass;
+  /** Host (and port) of the endpoint URL only; never the path or query string. */
+  readonly endpointHost: string;
   readonly tool: ConnectTool<never>;
 }
 
@@ -103,7 +114,8 @@ export function builtinRegistry(tools: readonly ConnectTool<never>[] = createBui
 
 export interface McpDeps {
   readonly env?: Env;
-  readonly audit?: McpAuditSink;
+  /** Defaults to Agent 2's createMcpAuditSink on the caller's client; null means "no sink" (gate closed). */
+  readonly audit?: McpAuditSink | null;
   /** Defaults to the proxy-only fetch built from CONNECT_EGRESS_PROXY. */
   readonly fetchFn?: ExternalMcpFetch;
   readonly resolveHostname?: HostnameResolver;
@@ -171,15 +183,16 @@ export async function verifyMcpTool(db: ChatDb, orgId: string, entry: Pick<McpTo
 export async function loadChatToolRegistry(db: ChatDb, orgId: string, deps: McpDeps = {}): Promise<ChatToolRegistry> {
   const env = deps.env ?? process.env;
   const builtins = createBuiltInCalendarTools();
-  const gate = mcpGate(env, deps.audit);
-  if (!gate.open) return makeRegistry(builtins, [], gate);
+  const audit = deps.audit === undefined ? createMcpAuditSink(asSupabase(db)) : deps.audit;
+  const gate = mcpGate(env, audit);
+  if (!gate.open || !audit) return makeRegistry(builtins, [], gate);
 
   const fetchFn = deps.fetchFn ?? createEgressMcpFetch({ proxyUrl: env[EGRESS_PROXY_ENV] });
   let tools: ActiveMcpTool[] = [];
   let runnable = new Set<string>();
   try {
     [tools, runnable] = await Promise.all([(deps.listTools ?? listActiveMcpTools)(asSupabase(db), orgId), runnableEndpoints(db, orgId)]);
-  } catch { return makeRegistry(builtins, [], gate, deps.audit); }
+  } catch { return makeRegistry(builtins, [], gate, audit); }
 
   const entries: McpToolEntry[] = [];
   for (const t of tools) {
@@ -190,9 +203,26 @@ export async function loadChatToolRegistry(db: ChatDb, orgId: string, deps: McpD
       { url: t.url, fetchFn, ...(deps.resolveHostname ? { resolveHostname: deps.resolveHostname } : {}) },
       { name: t.name, description: t.description, inputSchema: t.inputSchema, permissionClass: t.permissionClass },
     ) as unknown as ConnectTool<never>;
-    entries.push({ endpointId: t.endpointId, capability, permissionClass: t.permissionClass, tool });
+    const endpointHost = hostOf(t.url);
+    if (!endpointHost) continue;
+    entries.push({ endpointId: t.endpointId, capability, permissionClass: t.permissionClass, endpointHost, tool });
   }
-  return makeRegistry(builtins, entries, gate, deps.audit);
+  return makeRegistry(builtins, entries, gate, audit);
+}
+
+function hostOf(url: string): string | null {
+  try { return new URL(url).host || null; } catch { return null; }
+}
+
+/**
+ * Why an MCP capability row cannot be used in chat, as a stable code for the
+ * picker; null for non-MCP rows and runnable MCP tools.
+ */
+export type McpUnavailableReason = `MCP_${McpGateReason}` | 'MCP_NOT_RUNNABLE';
+export function mcpUnavailableReason(row: RowRef, registry: ChatToolRegistry): McpUnavailableReason | null {
+  if (row.providerKey !== MCP_PROVIDER) return null;
+  if (!registry.mcpGate.open) return `MCP_${registry.mcpGate.reason}`;
+  return registry.mcpEntryFor(row) ? null : 'MCP_NOT_RUNNABLE';
 }
 
 /** The runtime connection directory for MCP endpoints (Agent 2's). */

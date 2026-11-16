@@ -15,7 +15,8 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolAuditEvent } from '@tugpt/connect-runtime';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from './connect';
 import { createEgressMcpFetch } from './mcp-egress';
-import { loadChatToolRegistry, type McpAuditSink, type McpDeps } from './mcp';
+import { loadChatToolRegistry, mcpUnavailableReason, type McpAuditSink, type McpDeps } from './mcp';
+import { argumentsSha256 } from './approval.server';
 import { canonicalJson, runTurn, type TurnEvent } from './turn';
 import { listCapabilities, type CapabilityRow } from './store';
 import { toolLabel, toolProblem } from '../connect-ui/chat-errors';
@@ -82,7 +83,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     server.onTool = (name, args) => ({ text: `${name}:${JSON.stringify(args)}` });
     proxy.refuse = false;
     deps = {
-      env: { TUGPT_CUSTOMER_MCP_ENABLED: 'true', CONNECT_EGRESS_PROXY: proxy.url },
+      env: { TUGPT_CUSTOMER_MCP_ENABLED: 'true', TUGPT_CHAT_MCP_EXECUTION_ENABLED: 'true', CONNECT_EGRESS_PROXY: proxy.url },
       audit, resolveHostname,
       fetchFn: createEgressMcpFetch({ proxyUrl: proxy.url, ca: tlsMaterial.cert }),
     };
@@ -329,9 +330,9 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       });
       for (;;) { const n = await gen.next(); if (n.done) break; events.push(n.value); }
       expect(events).toEqual([
-        { type: 'tool_start', tool: 'search_docs' }, { type: 'tool_result', tool: 'search_docs', ok: true },
-        { type: 'tool_start', tool: 'create_ticket' }, { type: 'tool_result', tool: 'create_ticket', ok: false, code: 'APPROVAL_REQUIRED' },
-        { type: 'tool_start', tool: 'create_ticket' }, { type: 'tool_result', tool: 'create_ticket', ok: true },
+        { type: 'tool_start', tool: 'search_docs', callId: 't1' }, { type: 'tool_result', tool: 'search_docs', callId: 't1', ok: true },
+        { type: 'tool_start', tool: 'create_ticket', callId: 't2' }, { type: 'tool_result', tool: 'create_ticket', callId: 't2', ok: false, code: 'APPROVAL_REQUIRED' },
+        { type: 'tool_start', tool: 'create_ticket', callId: 't3' }, { type: 'tool_result', tool: 'create_ticket', callId: 't3', ok: true },
         { type: 'delta', text: 'Done.' },
       ]);
       // What the messages route adds to each tool event, and what the UI renders from it.
@@ -345,6 +346,34 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     });
   });
 
+  describe('chat approvals (B-11)', () => {
+    it('describes a write tool for the approval card from server rows: endpoint, host only, tool, stored class', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const ts = toolset([pick(EP_A, 'create_ticket'), pick(EP_A, 'search_docs')]);
+      expect(ts.approvalTarget('create_ticket')).toEqual({
+        endpointId: EP_A, endpointName: 'Acme Docs MCP', endpointHost: MCP_HOST,
+        capability: 'external.create_ticket', toolName: 'create_ticket', toolDescription: expect.any(String), permissionClass: 'write',
+      });
+      expect(ts.approvalTarget('search_docs')).toBeNull(); // read tools never need a card
+      expect(ts.approvalTarget('nope')).toBeNull();
+    });
+    it('the card hash is exactly what the runtime claims and audits; an approval for it runs once', async () => {
+      const args = { title: 'VPN broken', tags: ['it', 'urgent'], meta: { b: 2, a: 1 } };
+      const { pick, toolset } = await session(OWNER_A);
+      const ts = toolset([pick(EP_A, 'create_ticket')]);
+      expect((await ts.execute(call('create_ticket', args))).code).toBe('APPROVAL_REQUIRED');
+      const denied = audits.at(-1)!;
+      expect(denied.outcome).toBe('APPROVAL_REQUIRED');
+      expect(argumentsSha256(args)).toBe(denied.argumentsSha256);
+      expect(argumentsSha256({ meta: { a: 1, b: 2 }, tags: ['it', 'urgent'], title: 'VPN broken' })).toBe(denied.argumentsSha256);
+      approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
+      expect((await fakeDb(state, OWNER_A).rpc('is_tool_approved', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args) })).data).toBe(true);
+      expect((await ts.execute(call('create_ticket', args))).ok).toBe(true);
+      expect((await ts.execute(call('create_ticket', args))).code).toBe('APPROVAL_REQUIRED');
+      expect((await ts.execute(call('create_ticket', { ...args, title: 'changed' }))).code).toBe('APPROVAL_REQUIRED');
+    });
+  });
+
   describe('gate: MCP stays unavailable unless provably runnable', () => {
     it('customer MCP switch off', async () => {
       const { registry, pick } = await session(OWNER_A, ORG_A, { ...deps, env: { CONNECT_EGRESS_PROXY: proxy.url } });
@@ -352,20 +381,44 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(false);
     });
     it('no or invalid egress proxy', async () => {
-      for (const env of [{ TUGPT_CUSTOMER_MCP_ENABLED: 'true' }, { TUGPT_CUSTOMER_MCP_ENABLED: 'true', CONNECT_EGRESS_PROXY: 'https://proxy:443' }]) {
+      for (const env of [{ TUGPT_CUSTOMER_MCP_ENABLED: 'true', TUGPT_CHAT_MCP_EXECUTION_ENABLED: 'true' }, { TUGPT_CUSTOMER_MCP_ENABLED: 'true', TUGPT_CHAT_MCP_EXECUTION_ENABLED: 'true', CONNECT_EGRESS_PROXY: 'https://proxy:443' }]) {
         const { registry } = await session(OWNER_A, ORG_A, { ...deps, env });
         expect(registry.mcpGate).toEqual({ open: false, reason: 'EGRESS_NOT_CONFIGURED' });
         expect(registry.mcp).toEqual([]);
       }
     });
-    it('production default: no MCP audit sink, so MCP is closed even with switch and proxy set', async () => {
-      const db = fakeDb(state, OWNER_A);
-      const registry = await loadChatToolRegistry(db, ORG_A, { env: { TUGPT_CUSTOMER_MCP_ENABLED: 'true', CONNECT_EGRESS_PROXY: proxy.url } });
+    it('chat execution switch off: the Connect switch alone never runs MCP from chat', async () => {
+      const { registry, pick } = await session(OWNER_A, ORG_A, { ...deps, env: { TUGPT_CUSTOMER_MCP_ENABLED: 'true', CONNECT_EGRESS_PROXY: proxy.url } });
+      expect(registry.mcpGate).toEqual({ open: false, reason: 'CHAT_EXECUTION_OFF' });
+      expect(registry.mcp).toEqual([]);
+      expect(mcpUnavailableReason(pick(EP_A, 'search_docs'), registry)).toBe('MCP_CHAT_EXECUTION_OFF');
+      for (const v of ['1', 'TRUE', 'yes', ' true']) {
+        const r = await loadChatToolRegistry(fakeDb(state, OWNER_A), ORG_A, { ...deps, env: { TUGPT_CUSTOMER_MCP_ENABLED: 'true', TUGPT_CHAT_MCP_EXECUTION_ENABLED: v, CONNECT_EGRESS_PROXY: proxy.url } });
+        expect(r.mcpGate).toEqual({ open: false, reason: 'CHAT_EXECUTION_OFF' });
+      }
+    });
+    it('an explicit null audit sink keeps the gate closed', async () => {
+      const registry = await loadChatToolRegistry(fakeDb(state, OWNER_A), ORG_A, { ...deps, audit: null });
       expect(registry.mcpGate).toEqual({ open: false, reason: 'AUDIT_UNAVAILABLE' });
       expect(registry.mcp).toEqual([]);
-      // Why: the existing audit RPC rejects MCP capabilities (FK to the built-in catalogue).
-      const r = await db.rpc('record_connect_tool_call', { p_capability_key: 'external.search_docs' });
-      expect(r.error).not.toBeNull();
+    });
+    it('production default wires Agent 2\'s record_mcp_tool_call sink on the caller\'s client', async () => {
+      const { audit: _unused, ...withoutAudit } = deps;
+      void _unused;
+      const s = await session(OWNER_A, ORG_A, withoutAudit);
+      expect(s.registry.mcpGate).toEqual({ open: true });
+      const r = await s.toolset([s.pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'audit' }));
+      expect(r.ok).toBe(true);
+      expect(state.mcpAudit).toEqual([expect.objectContaining({
+        p_organization_id: ORG_A, p_endpoint_id: EP_A, p_capability: 'external.search_docs', p_outcome: 'ok', p_arguments_sha256: sha({ q: 'audit' }), actor: OWNER_A,
+      })]);
+    });
+    it('picker reasons: not runnable endpoints and non-MCP rows', async () => {
+      const { registry, rows } = await session(OWNER_A);
+      const pending = rows.find((r) => r.connectionId === EP_A_PENDING);
+      if (pending) expect(mcpUnavailableReason(pending, registry)).toBe('MCP_NOT_RUNNABLE');
+      expect(mcpUnavailableReason({ providerKey: 'google', capabilityKey: 'calendar.find_availability', connectionId: null, permissionClass: 'read' }, registry)).toBeNull();
+      expect(mcpUnavailableReason(rows.find((r) => r.connectionId === EP_A && r.capabilityKey === 'external.search_docs')!, registry)).toBeNull();
     });
     it('database read errors mean no MCP tools', async () => {
       const db = fakeDb(state, OWNER_A);

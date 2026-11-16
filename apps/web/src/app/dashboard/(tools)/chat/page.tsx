@@ -23,6 +23,16 @@ async function initialThreads(): Promise<ThreadSummary[] | null> {
   } catch { return null; }
 }
 
+/** Owners and admins can approve customer MCP calls in chat. UI hint only; Agent 2's approval routes and the database enforce it. */
+async function canApprove(): Promise<boolean> {
+  try {
+    const session = await getSessionContext();
+    const role = session?.requestedTenantRejected ? undefined : session?.tenant?.role;
+    return role === 'owner' || role === 'admin';
+  } catch { return false; }
+}
+
 export default async function ChatPage() {
-  return <ChatWorkspace models={publicModels(configuredModels())} initialThreads={await initialThreads()} />;
+  const [threads, approver] = await Promise.all([initialThreads(), canApprove()]);
+  return <ChatWorkspace models={publicModels(configuredModels())} initialThreads={threads} canApprove={approver} />;
 }

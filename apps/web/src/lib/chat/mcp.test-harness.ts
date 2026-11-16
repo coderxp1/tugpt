@@ -167,11 +167,13 @@ export interface FakeState {
   approvals: Approval[];
   catalogue: string[];
   rpcLog: { fn: string; args: Row }[];
+  /** Rows written by record_mcp_tool_call (20261115000006_mcp_audit.sql). */
+  mcpAudit: Row[];
   now: () => number;
 }
 
 export function emptyState(): FakeState {
-  return { members: {}, endpoints: [], snapshots: [], tools: [], approvals: [], catalogue: ['calendar.find_availability'], rpcLog: [], now: () => Date.now() };
+  return { members: {}, endpoints: [], snapshots: [], tools: [], approvals: [], catalogue: ['calendar.find_availability'], rpcLog: [], mcpAudit: [], now: () => Date.now() };
 }
 
 const RLS_ADMIN_ONLY = new Set(['external_tool_endpoints', 'external_tool_snapshots', 'external_tools']);
@@ -243,6 +245,18 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
         if (!a) return { data: false, error: null };
         a.used_at = now;
         return { data: true, error: null };
+      }
+      if (fn === 'is_tool_approved') {
+        if (!isMember(org)) return { data: false, error: null };
+        const now = state.now();
+        return { data: state.approvals.some((x) => x.organization_id === org && x.connection_id === args.p_connection_id && x.capability === args.p_capability
+          && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null), error: null };
+      }
+      if (fn === 'record_mcp_tool_call') {
+        // Mirrors 20261115000006: members of the organization may write; nothing else is validated there.
+        if (!isMember(org)) return { data: null, error: { code: '42501', message: 'FORBIDDEN' } };
+        state.mcpAudit.push({ ...args, actor: userId });
+        return { data: null, error: null };
       }
       if (fn === 'record_connect_tool_call') {
         // Mirrors 20261115000001: capability_key REFERENCES integration_capabilities(key).

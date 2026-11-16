@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { canonicalJson, dedupeCalls, runTurn, systemPrompt, type TurnEvent, type TurnPorts } from './turn';
+import { canonicalJson, dedupeCalls, runApprovedCall, runTurn, systemPrompt, type TurnEvent, type TurnPorts } from './turn';
 import type { ParsedToolCall, ToolSpec, WireMessage } from './openai-compatible';
 
 const tool: ToolSpec = { name: 'calendar_find_availability', description: 'free/busy', parameters: { type: 'object' } };
@@ -45,7 +45,7 @@ describe('runTurn', () => {
     const { events, answer } = await collect(runTurn({ messages: [{ role: 'user', content: 'free tuesday?' }], tools: [tool] }, p));
     expect(p.executed).toHaveLength(1);
     expect(events.filter((e) => e.type === 'tool_start')).toHaveLength(1);
-    expect(events).toContainEqual({ type: 'tool_result', tool: tool.name, ok: true });
+    expect(events).toContainEqual({ type: 'tool_result', tool: tool.name, callId: 'a', ok: true });
     const final = p.streamed[0];
     expect(final.at(-1)).toEqual({ role: 'tool', tool_call_id: 'a', content: '{"busy":[]}' });
     expect(final.at(-2)).toMatchObject({ role: 'assistant', tool_calls: [{ id: 'a' }] });
@@ -75,8 +75,33 @@ describe('runTurn', () => {
       async executeTool() { throw new Error('boom'); },
     });
     const { events } = await collect(runTurn({ messages: [{ role: 'user', content: 'x' }], tools: [tool] }, p));
-    expect(events).toContainEqual({ type: 'tool_result', tool: tool.name, ok: false, code: 'INTERNAL' });
+    expect(events).toContainEqual({ type: 'tool_result', tool: tool.name, callId: 'a', ok: false, code: 'INTERNAL' });
     expect(p.streamed[0].at(-1)).toMatchObject({ role: 'tool', content: '{"error":"INTERNAL"}' });
+  });
+});
+
+describe('runApprovedCall', () => {
+  it('runs exactly the approved call once, then streams an answer without offering tools', async () => {
+    let toolRounds = 0;
+    const p = ports({ async completeWithTools() { toolRounds++; return { text: null, toolCalls: [] }; } });
+    const approved = call('call_7', { q: 'ticket' });
+    const { events, answer } = await collect(runApprovedCall({ messages: [{ role: 'user', content: 'open a ticket' }], call: approved }, p));
+    expect(toolRounds).toBe(0);
+    expect(p.executed).toEqual([approved]);
+    expect(events.slice(0, 2)).toEqual([
+      { type: 'tool_start', tool: tool.name, callId: 'call_7' },
+      { type: 'tool_result', tool: tool.name, callId: 'call_7', ok: true },
+    ]);
+    const final = p.streamed[0];
+    expect(final.at(-2)).toEqual({ role: 'assistant', content: null, tool_calls: [{ id: 'call_7', type: 'function', function: { name: tool.name, arguments: '{"q":"ticket"}' } }] });
+    expect(final.at(-1)).toEqual({ role: 'tool', tool_call_id: 'call_7', content: '{"busy":[]}' });
+    expect(answer).toBe('Tuesday is free.');
+  });
+  it('reports a refused claim as a failed tool result and still lets the model explain', async () => {
+    const p = ports({ async executeTool() { return { ok: false, code: 'APPROVAL_REQUIRED', content: '{"ok":false,"error":"APPROVAL_REQUIRED"}' }; } });
+    const { events } = await collect(runApprovedCall({ messages: [], call: call('c', {}) }, p));
+    expect(events).toContainEqual({ type: 'tool_result', tool: tool.name, callId: 'c', ok: false, code: 'APPROVAL_REQUIRED' });
+    expect(p.streamed).toHaveLength(1);
   });
 });
 
@@ -91,5 +116,6 @@ describe('helpers', () => {
     const base = { organizationName: 'Acme', now: new Date('2026-11-15T10:00:00Z'), timeZone: 'Europe/Berlin' };
     expect(systemPrompt({ ...base, attached: [] })).not.toMatch(/untrusted/);
     expect(systemPrompt({ ...base, attached: ['Google Workspace: calendar'] })).toMatch(/untrusted data/);
+    expect(systemPrompt({ ...base, attached: ['Acme Docs: create'] })).toMatch(/APPROVAL_REQUIRED, do not call it again/);
   });
 });

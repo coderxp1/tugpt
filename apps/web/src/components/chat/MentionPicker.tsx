@@ -9,6 +9,8 @@ export interface Capability {
   state: 'connected' | 'requires_connection' | 'disabled_by_policy' | 'not_available';
   /** false when the catalogue lists it but chat has no tool for it on this build. */
   toolAvailable?: boolean;
+  /** MCP only: which gate keeps it off (see pickerBlock). */
+  unavailableReason?: string;
 }
 
 export interface MentionPickerProps {

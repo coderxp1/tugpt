@@ -68,3 +68,37 @@
 .codeLang{font-family:"JetBrains Mono",ui-monospace,monospace;text-transform:lowercase}
 .copy{border:1px solid #4a4a45;background:transparent;color:#f2f2ec;border-radius:6px;padding:4px 10px;min-height:28px;font-size:12px;font-weight:600;cursor:pointer}
 .copy:hover{background:#3a3a36}.copy:focus-visible{outline:2px solid #ffe436;outline-offset:2px}
+
+/* Approval card (B-11): one MCP call that changes something */
+.approval{align-self:stretch;max-width:720px;border:1px solid #e3c873;background:#fffcf2;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:8px;font-size:14px;color:#171715}
+.approvalClosed{border-color:#deded6;background:#fafaf7}
+.approvalHead{display:flex;align-items:center;gap:10px;flex-wrap:wrap}
+.approvalHead h2{font-size:15px;margin:0}
+.permBadge{font-size:12px;font-weight:600;padding:2px 8px;border-radius:100px;background:#fff1c7;color:#5c4400;border:1px solid #e3c873}
+.permDanger{background:#fff0f0;color:#8a1414;border-color:#eab0b0}
+.approvalWhat{margin:0}
+.approvalFacts{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;margin:0}
+.approvalFacts dt{color:#686963}
+.approvalFacts dd{margin:0;overflow-wrap:anywhere}
+.host{color:#686963}
+.argsTitle{font-size:13px;margin:4px 0 0}
+.args{border-collapse:collapse;width:100%;font-size:13px}
+.args th,.args td{text-align:left;vertical-align:top;padding:4px 8px;border-top:1px solid #eee8d6}
+.args th{font-weight:500;color:#4a4b45;white-space:nowrap;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.argValue{white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+.redacted{display:inline-block;padding:0 6px;border-radius:4px;background:#ecebe4;color:#4a4b45;font-size:12px}
+.fine{font-size:12px;color:#686963;margin:0}
+.approvalStatus{margin:2px 0 0;font-weight:600}
+.approvalNotice{margin:0;font-size:13px;color:#5c4400}
+.approvalForm{display:flex;flex-direction:column;gap:8px}
+.approvalForm fieldset{border:0;padding:0;margin:0;display:flex;gap:14px;flex-wrap:wrap}
+.approvalForm legend{font-size:13px;color:#4a4b45;margin-bottom:4px}
+.approvalForm label{display:inline-flex;align-items:center;gap:6px;min-height:24px}
+.confirm{align-items:flex-start!important}
+.approvalActions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
+.approve,.reject{min-height:36px;padding:0 14px;border-radius:8px;font-size:14px;cursor:pointer}
+.approve{background:#171715;color:#fff;border:1px solid #171715}
+.approve:disabled{background:#a9a9a2;border-color:#a9a9a2;cursor:not-allowed}
+.reject{background:#fff;color:#171715;border:1px solid #c9c9c0}
+.approve:focus-visible,.reject:focus-visible,.approvalForm input:focus-visible{outline:2px solid #1d5fd1;outline-offset:2px}
+@media(max-width:640px){.approval{padding:12px}.approvalFacts{grid-template-columns:1fr}.args th{white-space:normal}}

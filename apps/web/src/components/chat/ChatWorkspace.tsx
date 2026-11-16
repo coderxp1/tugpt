@@ -1,11 +1,13 @@
 'use client';
 
 import Link from 'next/link';
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
+import { ApprovalCard } from './ApprovalCard';
 import { Markdown } from './Markdown';
 import { MentionPicker, type Capability } from './MentionPicker';
 import { pickerBlock, requestProblem, toolLabel, toolProblem, turnProblem, type ChatProblem } from '@/lib/connect-ui/chat-errors';
-import { readTurnStream } from '@/lib/chat/stream';
+import { readTurnStream, type TurnStreamEvent } from '@/lib/chat/stream';
+import { parsePendingApproval, type PendingApproval } from '@/lib/chat/approval';
 import s from './chat.module.css';
 
 /** Same-origin JSON + non-simple header: what isSameOriginMutation() requires. */
@@ -26,9 +28,14 @@ export interface ChatWorkspaceProps {
   models: PublicModel[];
   /** Server-rendered first page of the person's chats; null means "load on the client". */
   initialThreads?: Thread[] | null;
+  /** Owner or admin of the active organization: may approve MCP calls (the backend checks again). */
+  canApprove?: boolean;
 }
 
-export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspaceProps) {
+interface ApprovalItem { approval: PendingApproval; afterId: string | null }
+type RunResult = { ok: boolean; code?: string };
+
+export function ChatWorkspace({ models, initialThreads = null, canApprove = false }: ChatWorkspaceProps) {
   const [threads, setThreads] = useState<Thread[] | null>(initialThreads);
   const [threadsFailed, setThreadsFailed] = useState(false);
   const [historyOpen, setHistoryOpen] = useState(false);
@@ -41,6 +48,8 @@ export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspacePr
   const [picker, setPicker] = useState<{ open: boolean; query: string; index: number }>({ open: false, query: '', index: 0 });
   const [live, setLive] = useState<Live>(null);
   const [error, setError] = useState<ChatProblem | null>(null);
+  const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
+  const pendingApprovals = useRef<PendingApproval[]>([]);
   const fail = (text: string) => setError({ text, connect: false });
   const abort = useRef<AbortController | null>(null);
   const input = useRef<HTMLTextAreaElement>(null);
@@ -67,7 +76,7 @@ export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspacePr
 
   const open = useCallback(async (id: string) => {
     if (busy) return;
-    setActiveId(id); setError(null); setMessages([]); setHistoryOpen(false);
+    setActiveId(id); setError(null); setMessages([]); setApprovals([]); setHistoryOpen(false);
     try {
       const d = await json<{ thread: Thread; messages: Message[] }>(await fetch(`/api/v1/chat/threads/${id}`, { cache: 'no-store' }));
       setMessages(d.messages);
@@ -77,7 +86,7 @@ export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspacePr
 
   function newChat() {
     if (busy) return;
-    setActiveId(null); setMessages([]); setAttached([]); setError(null); input.current?.focus();
+    setActiveId(null); setMessages([]); setApprovals([]); setAttached([]); setError(null); input.current?.focus();
   }
 
   const matches = useMemo(() => {
@@ -113,6 +122,60 @@ export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspacePr
     if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) { e.preventDefault(); void send(); }
   }
 
+  /** Approval cards collected during a turn are placed after the answer they belong to. */
+  function flushApprovals(afterId: string | null) {
+    const list = pendingApprovals.current;
+    pendingApprovals.current = [];
+    if (list.length === 0) return;
+    setApprovals((a) => [...a, ...list.filter((p) => !a.some((x) => x.approval.callId === p.callId && x.approval.threadId === p.threadId)).map((approval) => ({ approval, afterId }))]);
+  }
+
+  function handleEvent(ev: TurnStreamEvent) {
+    const message = ev.message as Message | undefined;
+    if (ev.type === 'user' && message) setMessages((m) => [...m, message]);
+    else if (ev.type === 'delta') setLive((l) => l && { ...l, text: l.text + (ev.text ?? '') });
+    else if (ev.type === 'tool_start') setLive((l) => l && { ...l, tools: [...l.tools, { tool: ev.tool ?? '', provider: ev.provider }] });
+    else if (ev.type === 'tool_result') setLive((l) => l && { ...l, tools: l.tools.map((t) => (t.tool === ev.tool && t.ok === undefined ? { ...t, ok: ev.ok === true, code: ev.code } : t)) });
+    else if (ev.type === 'approval_required') {
+      // Malformed payloads are dropped: a card is only shown for a well-formed, server-built request.
+      const p = parsePendingApproval(ev.approval);
+      if (p) pendingApprovals.current.push(p);
+    } else if ((ev.type === 'done' || ev.type === 'error') && message) { setMessages((m) => [...m, message]); flushApprovals(message.id); }
+    if (ev.type === 'error') fail(turnProblem(ev.code));
+  }
+
+  /** Runs one approved MCP call through the server (which claims the approval) and streams the answer. */
+  async function runApproved(p: PendingApproval): Promise<RunResult> {
+    if (busy || !model || p.threadId !== activeId) return { ok: false, code: 'INTERRUPTED' };
+    setError(null);
+    const controller = new AbortController(); abort.current = controller;
+    setLive({ text: '', tools: [] });
+    let result: RunResult = { ok: false, code: 'INTERRUPTED' };
+    try {
+      const res = await fetch(`/api/v1/chat/threads/${p.threadId}/approved-call`, {
+        method: 'POST', signal: controller.signal, headers: MUTATION_HEADERS,
+        body: JSON.stringify({
+          callId: p.callId, modelKey: model.key, connectionId: p.endpointId, capability: p.capability,
+          arguments: p.arguments, argumentsSha256: p.argumentsSha256, timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+        }),
+      });
+      if (!res.ok || !res.body) {
+        const body = await res.json().catch(() => ({})) as { error?: string };
+        setError(requestProblem(body.error));
+        return { ok: false, code: 'REQUEST_REFUSED' };
+      }
+      const summary = await readTurnStream(res.body, (ev) => {
+        if (ev.type === 'tool_result') result = { ok: ev.ok === true, ...(ev.code ? { code: ev.code } : {}) };
+        handleEvent(ev);
+      });
+      if (summary.terminal === null && !controller.signal.aborted) fail(turnProblem('INTERRUPTED'));
+      return result;
+    } catch {
+      if (!controller.signal.aborted) fail('The approved call could not be sent.');
+      return result;
+    } finally { flushApprovals(null); setLive(null); abort.current = null; }
+  }
+
   async function send() {
     const content = draft.trim();
     if (!content || busy || !model) return;
@@ -138,23 +201,20 @@ export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspacePr
         const body = await res.json().catch(() => ({})) as { error?: string };
         setError(requestProblem(body.error)); setDraft(content); return;
       }
-      const summary = await readTurnStream(res.body, (ev) => {
-        const message = ev.message as Message | undefined;
-        if (ev.type === 'user' && message) setMessages((m) => [...m, message]);
-        else if (ev.type === 'delta') setLive((l) => l && { ...l, text: l.text + (ev.text ?? '') });
-        else if (ev.type === 'tool_start') setLive((l) => l && { ...l, tools: [...l.tools, { tool: ev.tool ?? '', provider: ev.provider }] });
-        else if (ev.type === 'tool_result') setLive((l) => l && { ...l, tools: l.tools.map((t) => (t.tool === ev.tool && t.ok === undefined ? { ...t, ok: ev.ok === true, code: ev.code } : t)) });
-        else if ((ev.type === 'done' || ev.type === 'error') && message) setMessages((m) => [...m, message]);
-        if (ev.type === 'error') fail(turnProblem(ev.code));
-      });
+      const summary = await readTurnStream(res.body, handleEvent);
       // A stream that ends without done/error was cut off; never present it as a finished answer.
       if (summary.terminal === null && !controller.signal.aborted) fail(turnProblem('INTERRUPTED'));
       setAttached([]);
       setThreads((t) => (t ?? []).map((x) => (x.id === id ? { ...x, title: x.title === 'New chat' ? content.slice(0, 60) : x.title, updatedAt: new Date().toISOString() } : x)));
     } catch (e) {
       if (!controller.signal.aborted) { fail(e instanceof Error && e.message ? e.message : 'The message could not be sent.'); setDraft(content); }
-    } finally { setLive(null); abort.current = null; }
+    } finally { flushApprovals(null); setLive(null); abort.current = null; }
   }
+
+  const card = (it: ApprovalItem) => (
+    <ApprovalCard key={`${it.approval.threadId}:${it.approval.callId}`} approval={it.approval} canApprove={canApprove} busy={busy} onRun={runApproved} />
+  );
+  const placed = new Set(messages.map((m) => m.id));
 
   const showPicker = picker.open && capabilities !== null;
   const activeOption = showPicker && matches[picker.index] ? `${listId}-${picker.index}` : undefined;
@@ -197,13 +257,15 @@ export function ChatWorkspace({ models, initialThreads = null }: ChatWorkspacePr
               <p>Ask anything. Type <kbd>@</kbd> to use a connected app, for example your Google Calendar.</p>
             </div>
           )}
-          {messages.map((m) => m.role === 'tool'
-            ? <p key={m.id} className={m.status === 'error' ? s.toolFail : s.toolOk}>{m.content}</p>
-            : <article key={m.id} className={m.role === 'user' ? s.user : s.assistant} aria-label={m.role === 'user' ? 'You' : 'TuGPT'}>
+          {messages.map((m) => <Fragment key={m.id}>{m.role === 'tool'
+            ? <p className={m.status === 'error' ? s.toolFail : s.toolOk}>{m.content}</p>
+            : <article className={m.role === 'user' ? s.user : s.assistant} aria-label={m.role === 'user' ? 'You' : 'TuGPT'}>
                 {m.mentions.length > 0 && <div className={s.mentions}>{m.mentions.map((x) => <span key={x.capability + x.provider} className={s.chip}>@{x.provider} {x.capability}</span>)}</div>}
                 {m.role === 'assistant' && m.content ? <Markdown text={m.content} /> : <div className={s.text}>{m.content || (m.status === 'stopped' ? 'Stopped.' : '')}</div>}
                 {m.status !== 'complete' && <small className={s.status}>{m.status === 'stopped' ? 'Stopped' : 'Not completed'}</small>}
-              </article>)}
+              </article>}
+            {approvals.filter((a) => a.afterId === m.id).map(card)}</Fragment>)}
+          {approvals.filter((a) => a.afterId === null || !placed.has(a.afterId)).map(card)}
           {live && (
             <article className={s.assistant} aria-label="TuGPT is answering">
               {live.tools.map((t, i) => <p key={i} className={t.ok === false ? s.toolFail : s.toolOk}>{toolLabel(t.tool, t.provider)}{t.ok === undefined ? '…' : t.ok ? ' · done' : <> · {toolProblem(t.code).text}{toolProblem(t.code).connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</>}</p>)}

@@ -156,3 +156,81 @@ describe('ChatWorkspace integrations', () => {
     expect((await screen.findByRole('alert')).textContent).toMatch(/cut off/);
   });
 });
+
+
+describe('ChatWorkspace approval cards', () => {
+  const toolModels: PublicModel[] = [{ ...models[0], toolCalling: true }];
+  const TID = 'c0000000-0000-4000-8000-000000000001';
+  const msg = (id: string, role: 'user' | 'assistant', content: string) => ({ id, role, content, status: 'complete', mentions: [], capabilityKey: null });
+  const approval = {
+    callId: 'call_9', threadId: TID, endpointId: 'e0000000-0000-4000-8000-00000000000a', endpointName: 'Acme Docs (test)', endpointHost: 'mcp.acme.test',
+    capability: 'external.create_ticket', toolName: 'create_ticket', toolDescription: 'Create a ticket', permissionClass: 'write',
+    arguments: { title: 'VPN', api_token: 'tok_SECRET' }, argumentsSha256: 'b'.repeat(64),
+  };
+  function stream(lines: object[]) {
+    return new Response(lines.map((l) => JSON.stringify(l)).join('\n') + '\n', { status: 200, headers: { 'content-type': 'application/x-ndjson' } });
+  }
+  async function sendWith(lines: object[], canApprove = true) {
+    fetchMock.mockImplementation((url: string) => {
+      const u = String(url);
+      if (u.endsWith('/capabilities')) return ok({ capabilities: [] });
+      if (u === `/api/v1/chat/threads/${TID}`) return ok({ thread: { ...thread, id: TID }, messages: [] });
+      if (u.endsWith('/messages')) return Promise.resolve(stream(lines));
+      return ok({ threads: [{ ...thread, id: TID }] });
+    });
+    const view = render(<ChatWorkspace models={toolModels} initialThreads={[{ ...thread, id: TID }]} canApprove={canApprove} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Carrier review plan' }));
+    await screen.findByRole('heading', { name: 'What are we working on?' });
+    fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'open a ticket' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+    return view;
+  }
+
+  it('renders the card after the answer it belongs to, without the secret value', async () => {
+    const view = await sendWith([
+      { type: 'user', message: msg('u1', 'user', 'open a ticket') },
+      { type: 'tool_start', tool: 'create_ticket', callId: 'call_9', provider: 'Acme Docs (test)' },
+      { type: 'tool_result', tool: 'create_ticket', callId: 'call_9', ok: false, code: 'APPROVAL_REQUIRED', provider: 'Acme Docs (test)' },
+      { type: 'approval_required', approval },
+      { type: 'delta', text: 'This is waiting for your approval.' },
+      { type: 'done', message: msg('a1', 'assistant', 'This is waiting for your approval.') },
+    ]);
+    const heading = await screen.findByRole('heading', { name: 'Approve this action?' });
+    const answer = screen.getByText('This is waiting for your approval.');
+    expect(answer.compareDocumentPosition(heading) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(view.container.innerHTML).not.toContain('tok_SECRET');
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it('drops a malformed approval payload instead of showing an approvable card', async () => {
+    await sendWith([
+      { type: 'user', message: msg('u1', 'user', 'x') },
+      { type: 'approval_required', approval: { ...approval, permissionClass: 'read' } },
+      { type: 'approval_required', approval: { ...approval, capability: 'external.delete_project' } },
+      { type: 'done', message: msg('a1', 'assistant', 'ok') },
+    ]);
+    await screen.findByText('ok');
+    expect(screen.queryByRole('heading', { name: 'Approve this action?' })).toBeNull();
+  });
+
+  it('still shows the card when the stream is cut off, together with the interruption error', async () => {
+    await sendWith([
+      { type: 'user', message: msg('u1', 'user', 'x') },
+      { type: 'approval_required', approval },
+      { type: 'delta', text: 'partial' },
+    ]);
+    await screen.findByRole('heading', { name: 'Approve this action?' });
+    expect((await screen.findByRole('alert')).textContent?.length).toBeGreaterThan(0);
+  });
+
+  it('members see the card without an Approve button', async () => {
+    await sendWith([
+      { type: 'user', message: msg('u1', 'user', 'x') },
+      { type: 'approval_required', approval },
+      { type: 'done', message: msg('a1', 'assistant', 'ok') },
+    ], false);
+    await screen.findByRole('heading', { name: 'Approve this action?' });
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Check again' })).toBeTruthy();
+  });
+});
