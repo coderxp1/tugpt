@@ -17,7 +17,8 @@ export interface ApprovalCardProps {
   /** Another answer is streaming; running now would interleave two turns. */
   busy: boolean;
   /** Runs the approved call once through the chat route and reports the tool result. */
-  onRun(approval: PendingApproval): Promise<{ ok: boolean; code?: string }>;
+  /** code REQUEST_REFUSED: the server refused before running; message is the server's reason. */
+  onRun(approval: PendingApproval): Promise<{ ok: boolean; code?: string; message?: string }>;
   fetchFn?: FetchFn;
   now?: () => number;
 }
@@ -96,6 +97,11 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
     dispatch({ type: 'run' });
     try {
       const r = await onRun(approval);
+      if (!r.ok && r.code === 'REQUEST_REFUSED') {
+        dispatch({ type: 'run_refused' });
+        setNotice(`Not run: ${r.message ?? 'the server refused the call'}. The approval was not used and stays valid until it expires${canApprove ? ' or you revoke it' : ''}.`);
+        return;
+      }
       dispatch({ type: 'run_done', ok: r.ok, ...(r.code ? { code: r.code } : {}) });
     } catch { dispatch({ type: 'run_done', ok: false, code: 'INTERRUPTED' }); }
   }

@@ -124,6 +124,8 @@ describe('approvalReducer', () => {
   const run = (...actions: ApprovalAction[]): ApprovalState => actions.reduce(approvalReducer, INITIAL_APPROVAL);
   it('approve -> approved -> run -> done', () => {
     expect(run({ type: 'approve' }, { type: 'approved', expiresAt: 10 }, { type: 'run' }, { type: 'run_done', ok: true })).toEqual({ kind: 'done', ok: true });
+    expect(run({ type: 'approve' }, { type: 'approved', expiresAt: 10 }, { type: 'run' }, { type: 'run_refused' })).toEqual({ kind: 'approved', expiresAt: 10 });
+    expect(run({ type: 'run_refused' })).toEqual({ kind: 'pending' });
   });
   it('a failed approval cannot be run; it can be retried or rejected', () => {
     const failed = run({ type: 'approve' }, { type: 'approve_failed', reason: 'unavailable' });

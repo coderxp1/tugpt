@@ -9,7 +9,7 @@ const TOOL: Record<string, ChatProblem> = {
   NOT_GRANTED: { text: 'You do not have access to this connection. Ask an admin to share it with you.', connect: false },
   POLICY_DISABLED: { text: 'Your organization has turned this app off.', connect: false },
   SCOPE_MISSING: { text: 'The connection is missing a permission this needs. Reconnect the account.', connect: true },
-  APPROVAL_REQUIRED: { text: 'Waiting for approval. Nothing was changed yet; see the approval card below.', connect: false },
+  APPROVAL_REQUIRED: { text: 'Waiting for approval from an owner or admin. Nothing was changed yet; see the approval card below.', connect: false },
   PROVIDER_MISMATCH: { text: 'The attached connection belongs to a different provider.', connect: true },
   CONNECTION_NOT_FOUND: { text: 'The connection no longer exists. Connect the account again.', connect: true },
   CONNECTION_NOT_ACTIVE: { text: 'The connection is not active. Connect the account again.', connect: true },

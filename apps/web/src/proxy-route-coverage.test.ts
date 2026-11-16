@@ -280,6 +280,18 @@ const ROUTES: RouteExpectation[] = [
     why: 'Proxy requires a session first (401 JSON). Then: Handler authenticates and resolves the tenant; RLS returns the thread and messages only to their owner (pgTAP workspace_chat 18-23).',
   },
   {
+    path: '/api/v1/chat/threads/[threadId]/approved-call',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Same-origin POST; handler authenticates, loads the thread through RLS (owner only), re-validates capability, MCP gate, tool, model and argument hash (409 on mismatch), and the runtime claims the single-use approval and audits the call.',
+  },
+  {
+    path: '/api/v1/chat/approvals/status',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Handler authenticates and resolves the tenant; is_tool_approved() runs on the caller RLS client and only answers for the caller organization (503 on error, never true).',
+  },
+  {
     path: '/api/v1/chat/threads/[threadId]/messages',
     kind: 'api',
     type: 'protected',

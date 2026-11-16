@@ -150,7 +150,10 @@ Tests: `approval.test.ts`, `ApprovalCard.test.tsx`, `approval-routes.test.ts`,
    non-read MCP tools, and executes through the Connect runtime, which claims
    the approval atomically. The model gets no tools in that turn. A refused
    claim (expired, revoked, already used, or different arguments) shows "Not
-   run".
+   run". If the route refuses the request before anything runs (for example
+   the MCP gate is closed, or the arguments changed), the card shows the
+   server's reason and says the approval was not used; it stays approved, so
+   it can be run later or revoked. No page-level error is raised for this.
 5. The countdown is a client-side estimate: the approval route returns no
    expiry time. When it reaches zero the card shows "expired". The database
    enforces the real expiry either way.

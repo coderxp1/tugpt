@@ -99,6 +99,15 @@ describe('ApprovalCard', () => {
     await waitFor(() => expect(status()).toContain('Not run: the database did not accept the approval'));
   });
 
+  it('a run refused before execution keeps the approval and says why', async () => {
+    render(<ApprovalCard approval={approval} canApprove busy={false} onRun={async () => ({ ok: false, code: 'REQUEST_REFUSED', message: 'This integration is not available in chat yet' })} fetchFn={fetcher({})} />);
+    confirmAndApprove();
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }));
+    await screen.findByText(/Not run: This integration is not available in chat yet\. The approval was not used and stays valid until it expires or you revoke it\./);
+    expect(screen.getByRole('button', { name: 'Run now' })).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Revoke approval' })).toBeTruthy();
+  });
+
   it('Run waits while another answer is streaming', async () => {
     render(<ApprovalCard approval={approval} canApprove busy onRun={vi.fn()} fetchFn={fetcher({})} />);
     confirmAndApprove();

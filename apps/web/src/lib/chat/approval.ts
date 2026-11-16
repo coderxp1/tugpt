@@ -221,7 +221,9 @@ export type ApprovalAction =
   | { readonly type: 'revoke_failed' }
   | { readonly type: 'expire' }
   | { readonly type: 'run' }
-  | { readonly type: 'run_done'; readonly ok: boolean; readonly code?: string };
+  | { readonly type: 'run_done'; readonly ok: boolean; readonly code?: string }
+  /** The server refused the request before running anything: the approval was not claimed and stays usable. */
+  | { readonly type: 'run_refused' };
 
 export const INITIAL_APPROVAL: ApprovalState = { kind: 'pending' };
 
@@ -239,6 +241,7 @@ export function approvalReducer(s: ApprovalState, a: ApprovalAction): ApprovalSt
     case 'expire': return s.kind === 'approved' ? { kind: 'expired' } : s;
     case 'run': return s.kind === 'approved' ? { kind: 'running', expiresAt: s.expiresAt } : s;
     case 'run_done': return s.kind === 'running' ? { kind: 'done', ok: a.ok, ...(a.code ? { code: a.code } : {}) } : s;
+    case 'run_refused': return s.kind === 'running' ? { kind: 'approved', expiresAt: s.expiresAt } : s;
     default: return s;
   }
 }

@@ -33,7 +33,7 @@ export interface ChatWorkspaceProps {
 }
 
 interface ApprovalItem { approval: PendingApproval; afterId: string | null }
-type RunResult = { ok: boolean; code?: string };
+type RunResult = { ok: boolean; code?: string; message?: string };
 
 export function ChatWorkspace({ models, initialThreads = null, canApprove = false }: ChatWorkspaceProps) {
   const [threads, setThreads] = useState<Thread[] | null>(initialThreads);
@@ -160,9 +160,11 @@ export function ChatWorkspace({ models, initialThreads = null, canApprove = fals
         }),
       });
       if (!res.ok || !res.body) {
-        const body = await res.json().catch(() => ({})) as { error?: string };
-        setError(requestProblem(body.error));
-        return { ok: false, code: 'REQUEST_REFUSED' };
+        // Refused before anything ran (gate closed, changed arguments, ...). The card explains it in
+        // context; the page-level "remove the app" message does not apply to an approved call.
+        const body = await res.json().catch(() => ({})) as { error?: unknown };
+        const reason = typeof body.error === 'string' && body.error.length <= 200 ? body.error.replace(/\.$/, '') : `the server answered ${res.status}`;
+        return { ok: false, code: 'REQUEST_REFUSED', message: reason };
       }
       const summary = await readTurnStream(res.body, (ev) => {
         if (ev.type === 'tool_result') result = { ok: ev.ok === true, ...(ev.code ? { code: ev.code } : {}) };

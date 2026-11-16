@@ -223,6 +223,29 @@ describe('ChatWorkspace approval cards', () => {
     expect((await screen.findByRole('alert')).textContent?.length).toBeGreaterThan(0);
   });
 
+  it('an approved call refused by the server keeps the approval and raises no page alert', async () => {
+    await sendWith([
+      { type: 'user', message: msg('u1', 'user', 'x') },
+      { type: 'approval_required', approval },
+      { type: 'done', message: msg('a1', 'assistant', 'ok') },
+    ]);
+    await screen.findByRole('heading', { name: 'Approve this action?' });
+    const base = fetchMock.getMockImplementation()!;
+    fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+      const u = String(url);
+      if (u === '/api/v1/connect/mcp/approvals') return ok({ approved: true });
+      if (u.startsWith('/api/v1/chat/approvals/status')) return ok({ approved: true });
+      if (u.endsWith('/approved-call')) return Promise.resolve(new Response(JSON.stringify({ error: 'This integration is not available in chat yet' }), { status: 409, headers: { 'content-type': 'application/json' } }));
+      return base(url, init);
+    });
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Approve' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Run now' }));
+    await screen.findByText(/Not run: This integration is not available in chat yet\. The approval was not used/);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(screen.getByRole('button', { name: 'Revoke approval' })).toBeTruthy();
+  });
+
   it('members see the card without an Approve button', async () => {
     await sendWith([
       { type: 'user', message: msg('u1', 'user', 'x') },
