@@ -52,6 +52,7 @@ export interface ExternalMcpRepository {
   deactivateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deleteEndpoint(orgId: string, endpointId: string): Promise<void>;
   recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number): Promise<void>;
+  revokeApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string): Promise<boolean>;
 }
 
 // The one cast for these not-yet-generated tables / RPCs.
@@ -242,6 +243,17 @@ export function createExternalMcpRepository(db: TypedSupabaseClient): ExternalMc
         p_ttl_seconds: ttlSeconds,
       });
       if (error) throw new Error('failed to record the approval');
+    },
+
+    async revokeApproval(orgId, connectionId, capability, argumentsSha256) {
+      const { data, error } = await u.rpc('revoke_tool_approval', {
+        p_organization_id: orgId,
+        p_connection_id: connectionId,
+        p_capability: capability,
+        p_arguments_sha256: argumentsSha256,
+      });
+      if (error) throw new Error('failed to revoke the approval');
+      return data === true;
     },
   };
 }

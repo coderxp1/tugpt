@@ -52,6 +52,7 @@ const ROUTES: RouteExpectation[] = [
   { path: '/api/v1/connect/oauth/callback/microsoft', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/endpoints', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/approvals', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/approvals/revoke', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/endpoints/[endpointId]', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/endpoints/[endpointId]/snapshot', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/endpoints/[endpointId]/activate', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },

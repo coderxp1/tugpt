@@ -49,10 +49,15 @@ export async function listActiveMcpTools(db: SupabaseClient, orgId: string): Pro
   if (terr) return [];
   const toolRows = Array.isArray(tools) ? tools : [];
 
+  const newest = new Map();
+  for (const s of snaps) if (!newest.has(s.endpoint_id)) newest.set(s.endpoint_id, s);
+
   const result: ActiveMcpTool[] = [];
   for (const e of eps) {
-    const snap = snaps.find((s) => s.endpoint_id === e.id && s.approved_at !== null && s.revoked_at === null);
-    if (!snap) continue;
+    // Only the NEWEST snapshot counts: a pending (unapproved) or revoked newest
+    // snapshot blocks the endpoint — never fall back to an older approved one.
+    const snap = newest.get(e.id);
+    if (!snap || snap.approved_at === null || snap.revoked_at !== null) continue;
     for (const t of toolRows.filter((x) => x.snapshot_id === snap.id)) {
       result.push({
         endpointId: e.id,
