@@ -12,7 +12,8 @@ import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } fro
 import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
 import { completeWithTools, ModelCallError, streamCompletion, type WireMessage } from '@/lib/chat/openai-compatible';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
-import { buildChatToolset, conflictingAttachments, hasRegisteredTool } from '@/lib/chat/connect';
+import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
+import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
   appendMessage, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
@@ -42,6 +43,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   const orgId = ctx.tenant.organizationId;
 
   let attached: CapabilityRow[];
+  let registry: ChatToolRegistry = builtinRegistry();
   let history: Awaited<ReturnType<typeof listMessages>>;
   let isFirst: boolean;
   try {
@@ -50,9 +52,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     attached = requested.map((m) => caps.find((c) => c.capabilityKey === m.capability && c.providerKey === m.provider))
       .filter((c): c is CapabilityRow => c !== undefined);
     if (attached.some((c) => c.state !== 'connected')) return jsonError(409, 'An attached integration is not connected');
-    if (attached.some((c) => !hasRegisteredTool(c.capabilityKey, c.providerKey))) return jsonError(409, 'This integration is not available in chat yet');
+    // Per organization: built-in tools plus runnable customer MCP tools (behind the MCP gate in lib/chat/mcp.ts).
+    if (attached.length) registry = await loadChatToolRegistry(ctx.db, orgId);
+    if (attached.some((c) => !toolAvailable(c, registry))) return jsonError(409, 'This integration is not available in chat yet');
     if (attached.length && !model.toolCalling) return jsonError(409, 'This model cannot use integrations');
-    if (conflictingAttachments(attached)) return jsonError(409, 'Attach one calendar per message');
+    const conflict = conflictingAttachments(attached, registry);
+    if (conflict) {
+      return jsonError(409, conflict.toolName === 'calendar_find_availability'
+        ? 'Attach one calendar per message'
+        : 'Two attached integrations offer the same tool. Attach one of them per message');
+    }
     history = await listMessages(ctx.db, orgId, threadId);
     isFirst = history.length === 0;
   } catch (e) { return storeErrorResponse(e); }
@@ -65,7 +74,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     });
   } catch (e) { return storeErrorResponse(e); }
 
-  const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached);
+  const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached, { registry });
   const wire: WireMessage[] = [
     { role: 'system', content: systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(body.timeZone), attached: toolset.labels }) },
     ...history.filter((m) => m.role !== 'tool' && m.status !== 'error').slice(-HISTORY)
@@ -96,7 +105,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
           if (ev.type === 'tool_result') {
             const cap = toolset.describe(ev.tool);
             await appendMessage(ctx.db, {
-              organizationId: orgId, threadId, role: 'tool', capabilityKey: cap?.capabilityKey,
+              // chat_messages.capability_key references the built-in catalogue; MCP tools are not in it.
+              organizationId: orgId, threadId, role: 'tool', capabilityKey: cap?.providerKey === MCP_PROVIDER ? undefined : cap?.capabilityKey,
               content: ev.ok ? `${cap?.providerName ?? 'Integration'} responded` : `${cap?.providerName ?? 'Integration'} failed: ${ev.code ?? 'ERROR'}`,
               status: ev.ok ? 'complete' : 'error',
             }).catch(() => undefined);

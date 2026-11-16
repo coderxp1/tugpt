@@ -1,7 +1,8 @@
 import { NextResponse } from 'next/server';
 import { chatContext, PRIVATE_HEADERS, storeErrorResponse } from '@/lib/chat/request';
 import { listCapabilities } from '@/lib/chat/store';
-import { hasRegisteredTool } from '@/lib/chat/connect';
+import { toolAvailable } from '@/lib/chat/connect';
+import { loadChatToolRegistry } from '@/lib/chat/mcp';
 
 export const dynamic = 'force-dynamic';
 
@@ -11,12 +12,14 @@ export async function GET(request: Request) {
   if (ctx instanceof NextResponse) return ctx;
   try {
     const rows = await listCapabilities(ctx.db, ctx.tenant.organizationId);
+    // Built-in tools plus runnable customer MCP tools; the MCP gate (lib/chat/mcp.ts) keeps MCP off unless provably runnable.
+    const registry = await loadChatToolRegistry(ctx.db, ctx.tenant.organizationId);
     // connectionId stays server-side: the browser selects capabilities, the server picks the connection.
     const capabilities = rows.map((r) => ({
       capabilityKey: r.capabilityKey, providerKey: r.providerKey, providerName: r.providerName,
       description: r.description, permissionClass: r.permissionClass, state: r.state,
-      // false: the catalogue lists it, but chat has no tool for it on this build.
-      toolAvailable: hasRegisteredTool(r.capabilityKey, r.providerKey),
+      // false: listed, but chat cannot run it here (no tool on this build, or MCP not provably runnable).
+      toolAvailable: toolAvailable(r, registry),
     }));
     return NextResponse.json({ capabilities }, { headers: PRIVATE_HEADERS });
   } catch (e) { return storeErrorResponse(e); }

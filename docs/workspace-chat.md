@@ -50,7 +50,7 @@ browser ──same-origin POST──▶ /api/v1/chat/threads/:id/messages
 | `TUGPT_BROKER_URL`, `TUGPT_BROKER_CALLER_KEY` | Credential broker for connector tokens (same names as `packages/connect-server`). The key is **hex**, at least 32 bytes; caller is `web`. Missing or malformed values mean every tool returns `UNAVAILABLE`; chat still works. The old `TUGPT_CREDENTIAL_BROKER_*` names are no longer read. |
 | `TUGPT_CHAT_VERIFIED_TOOL_MODELS` | Comma-separated chat model keys (e.g. `tugpt-scout`, `langdock:<model>`) that passed the staging tool-calling probe (`docs/connect/model-tool-calling.md`, `recommendedVerifiedModels`). **Empty by default: no model gets tools**, the @ picker explains why, and the messages route returns 409 `This model cannot use integrations`. |
 
-| `TUGPT_CUSTOMER_MCP_ENABLED` | Connect UI switch for customer MCP servers. **Off unless exactly `true`.** Must stay off until the egress proxy passes its probe and discovery is routed through it (B-8 in `docs/dashboard/connect-frontend.md`). Chat never calls MCP tools on this build either way (B-9). |
+| `TUGPT_CUSTOMER_MCP_ENABLED` | Connect UI switch for customer MCP servers. **Off unless exactly `true`.** Must stay off until the egress proxy passes its probe and discovery is routed through it (B-8 in `docs/dashboard/connect-frontend.md`). Chat offers MCP tools only when this is `true`, `CONNECT_EGRESS_PROXY` is a valid `http://host:port` proxy **and** an MCP audit sink exists; no audit sink exists on this build, so chat does not call MCP tools (B-9, see "Customer MCP in chat" below). |
 
 Endpoints and keys never reach the browser (`publicModels()` strips them).
 
@@ -68,3 +68,40 @@ Endpoints and keys never reach the browser (`publicModels()` strips them).
   `503 privileged_bridge_pending_review`.
 - A Google OAuth client and an Entra app registration (owner action).
 - Running credential broker on the VPS.
+
+## Customer MCP in chat (B-9)
+
+Code: `apps/web/src/lib/chat/mcp.ts` (registry and gate), `mcp-egress.ts`
+(proxy transport), `connect.ts` (toolset). Tests: `mcp-chat.test.ts`,
+`mcp-egress.test.ts`, `capabilities-route.test.ts`.
+
+**Gate (fail closed, checked on every registry load).** MCP tools are offered
+only if all hold; otherwise every MCP row is `toolAvailable: false`:
+
+1. `TUGPT_CUSTOMER_MCP_ENABLED` is exactly `true`.
+2. `CONNECT_EGRESS_PROXY` parses as a plain `http://host:port` proxy.
+3. An `McpAuditSink` is injected. **Production has none**: `connect_tool_calls`
+   has a NOT NULL foreign key to `integration_capabilities` and
+   `record_connect_tool_call` requires a `connected_accounts` row, so an MCP call
+   cannot be audited without a migration. Chat does not run tools it cannot audit.
+
+**Which tools.** Agent 2's `listActiveMcpTools` (RLS-bound client), intersected
+with endpoints that are in the caller's organization, `active`, have no
+`auth_connection_id` (no credential path exists), and whose *newest* snapshot is
+approved and not revoked (Agent 2's helper falls back to an older approved
+snapshot while a newer one is pending; chat does not). Tools with an invalid
+name, unknown permission class or non-object schema are dropped.
+
+**Each call.** The grant re-checks the same endpoint, tool and stored
+permission class against the database; `createExternalMcpTool` runs with the
+proxy-only fetch (CONNECT tunnel, TLS verified, https only, no redirects, 1 MB,
+15 s) and its SSRF floor. Read tools run directly. Every other class is `write`
+risk, so the runtime claims a single-use approval through
+`claim_tool_approval` (exact org, endpoint, capability and argument hash; not
+expired, used or revoked). No MCP credential is sent. If the audit record fails,
+the result is withheld and the call reports `INTERNAL`; the same now holds for
+built-in tools.
+
+**Messages.** Tool messages for MCP calls store `capability_key = null`
+(`chat_messages.capability_key` references the built-in catalogue).
+

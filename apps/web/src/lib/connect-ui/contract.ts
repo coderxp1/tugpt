@@ -53,9 +53,9 @@ export interface BackendGap { readonly id: string; readonly title: string; reado
  */
 export const BACKEND_GAPS = {
   EGRESS: { id: 'B-8', title: 'Customer MCP is switched off', needs: 'The egress proxy must pass its DNS-pinning, private-address-blocking and bypass-prevention probe, and tool discovery must go through it (it currently calls the server directly and follows redirects).' },
-  MCP_RUNTIME: { id: 'B-9', title: 'MCP tools in chat', needs: 'A connection and credential path for MCP endpoints in the chat tool runtime. Today it looks endpoints up as connected accounts and asks the broker for a token, so every MCP call would fail.' },
+  MCP_RUNTIME: { id: 'B-9', title: 'MCP tools in chat', needs: 'Chat can run approved MCP tools through the egress proxy, but keeps them off until the backend can audit MCP calls (connect_tool_calls only accepts built-in capabilities and connected accounts). Members also need a read path for active MCP tools (external_tool_* is readable by owners and admins only), and endpoints that need credentials need a broker path.' },
   MCP_STATE: { id: 'B-10', title: 'Saved review state', needs: 'GET /api/v1/connect/mcp/endpoints should return each endpoint\u2019s latest snapshot id and whether it is approved, so a review can be resumed after a reload.' },
-  CALL_APPROVAL: { id: 'B-11', title: 'Approve a single tool call', needs: 'An HTTP route for owners/admins to record or revoke a per-call approval (record_tool_approval / revoke_tool_approval). The runtime already refuses unapproved write calls.' },
+  CALL_APPROVAL: { id: 'B-11', title: 'Approve a single tool call', needs: 'POST /api/v1/connect/mcp/approvals records an approval, but there is no revoke route and no screen in chat to review a pending write call. Until then unapproved write calls are refused (APPROVAL_REQUIRED).' },
 } as const satisfies Record<string, BackendGap>;
 
 export const PROVIDER_NAME: Record<ConnectProvider, string> = { google: 'Google', microsoft: 'Microsoft 365' };

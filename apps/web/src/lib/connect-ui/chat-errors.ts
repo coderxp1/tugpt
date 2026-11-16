@@ -32,6 +32,7 @@ const REQUEST: Record<string, ChatProblem> = {
   'This model cannot use integrations': { text: 'The selected model has not passed tool-calling verification, so it cannot use apps. Remove the app or pick another model.', connect: false },
   'This integration is not available in chat yet': { text: 'One of the attached apps is not available in chat yet. Remove it to send the message.', connect: false },
   'Unknown model': { text: 'This model is no longer available. Pick another one.', connect: false },
+  'Two attached integrations offer the same tool. Attach one of them per message': { text: 'Two of the attached apps offer a tool with the same name. Keep one and send the other question separately.', connect: false },
   'Attach one calendar per message': { text: 'Google and Outlook calendars cannot be attached to the same message yet. Keep one and send the other question separately.', connect: false },
 };
 

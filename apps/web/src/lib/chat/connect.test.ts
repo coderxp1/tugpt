@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
-import { brokerTokenSource, conflictingAttachments, dbApprovals, hasRegisteredTool, registeredTools } from './connect';
+import { brokerTokenSource, buildChatToolset, conflictingAttachments, dbApprovals, hasRegisteredTool, registeredTools } from './connect';
 import type { CapabilityRow, ChatDb } from './store';
 
 const HEX32 = 'ab'.repeat(32);
@@ -26,7 +26,7 @@ describe('brokerTokenSource (backend contract: TUGPT_BROKER_URL + hex TUGPT_BROK
 });
 
 describe('tool registry', () => {
-  it('registers Google and Outlook calendar availability, read-only, and no customer MCP tools (B-9)', () => {
+  it('built-in registry: Google and Outlook calendar availability, read-only; MCP tools come from the per-org registry', () => {
     const tools = registeredTools();
     expect(tools.map((t) => t.provider).sort()).toEqual(['google', 'microsoft']);
     expect(tools.every((t) => t.risk === 'read')).toBe(true);
@@ -46,7 +46,7 @@ describe('conflictingAttachments', () => {
   it('flags Google + Outlook calendar in one message (same model tool name)', () => {
     const cap = registeredTools()[0].capability;
     expect(conflictingAttachments([row({ capabilityKey: cap }), row({ capabilityKey: cap, providerKey: 'microsoft', providerName: 'Microsoft 365' })]))
-      .toEqual(['Google', 'Microsoft 365']);
+      .toEqual({ providers: ['Google', 'Microsoft 365'], toolName: 'calendar_find_availability' });
   });
   it('allows a single calendar, duplicates of the same one, and ignores unconnected rows', () => {
     const cap = registeredTools()[0].capability;
@@ -74,5 +74,40 @@ describe('dbApprovals (claim_tool_approval)', () => {
     expect(await dbApprovals(never, ctx).claimApproval({ ...input, actorUserId: 'u-2' })).toBe(false);
     expect(await dbApprovals(never, ctx).claimApproval({ ...input, connectionId: 'not-a-uuid' })).toBe(false);
     expect(never.rpc).not.toHaveBeenCalled();
+  });
+});
+
+describe('audit is fail-closed (the runtime swallows audit errors, the toolset does not)', () => {
+  const CONN = '22222222-2222-4222-8222-222222222222';
+  const tool = {
+    capability: 'calendar.find_availability', modelName: 'calendar_find_availability', provider: 'google', risk: 'read' as const,
+    acceptedScopes: [], description: 'd', parameters: { type: 'object' as const },
+    validate: (raw: Record<string, unknown>) => ({ ok: true as const, value: raw }),
+    execute: vi.fn(async () => ({ ok: true as const, data: { free: 'private-calendar-data' } })),
+  };
+  function db(auditError: boolean): ChatDb {
+    const accounts = { id: CONN, organization_id: 'org-1', owner_type: 'organization', owner_user_id: null, provider_key: 'google', status: 'connected', scopes: [] };
+    const q = { select: () => q, eq: () => q, maybeSingle: async () => ({ data: accounts, error: null }) };
+    return {
+      from: () => q,
+      rpc: async (fn: string) => (fn === 'list_chat_capabilities'
+        ? { data: [{ capability_key: 'calendar.find_availability', provider_key: 'google', provider_name: 'Google', description: 'd', permission_class: 'read', state: 'connected', connection_id: CONN }], error: null }
+        : fn === 'record_connect_tool_call' ? { data: null, error: auditError ? { message: 'down' } : null } : { data: null, error: null }),
+    } as unknown as ChatDb;
+  }
+  const tokens = { getAccessToken: async () => ({ ok: true as const, value: { accessToken: 't', expiresAt: 'x', credentialVersion: 1 } }) };
+  const attached = [row({ connectionId: CONN })];
+  const ctx = { organizationId: 'org-1', userId: 'u-1', threadId: 't-1' };
+
+  it('returns the result when the audit record is written', async () => {
+    const ts = buildChatToolset(db(false), ctx, attached, { tools: [tool as never], tokens });
+    const r = await ts.execute({ id: 'c1', name: 'calendar_find_availability', arguments: {} });
+    expect(r.ok).toBe(true);
+  });
+  it('withholds the result and reports INTERNAL when the audit record fails', async () => {
+    const ts = buildChatToolset(db(true), ctx, attached, { tools: [tool as never], tokens });
+    const r = await ts.execute({ id: 'c2', name: 'calendar_find_availability', arguments: {} });
+    expect(r).toMatchObject({ ok: false, code: 'INTERNAL' });
+    expect(r.content).not.toContain('private-calendar-data');
   });
 });

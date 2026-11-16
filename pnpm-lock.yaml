@@ -270,6 +270,9 @@ importers:
       '@tugpt/appointments':
         specifier: workspace:*
         version: link:../appointments
+      '@tugpt/connect-runtime':
+        specifier: workspace:*
+        version: link:../connect-runtime
       '@tugpt/credential-broker':
         specifier: workspace:*
         version: link:../credential-broker
