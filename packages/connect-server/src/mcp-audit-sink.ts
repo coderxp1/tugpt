@@ -21,6 +21,7 @@ export function createMcpAuditSink(db: SupabaseClient): McpAuditSink {
       const { error } = await db.rpc('record_mcp_tool_call', {
         p_organization_id: event.organizationId,
         p_endpoint_id: event.endpointId,
+        p_actor_user_id: event.actorUserId,
         p_capability: event.capability ?? '',
         p_outcome: event.outcome,
         p_error_code: event.outcome === 'ok' ? null : event.outcome,
