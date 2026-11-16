@@ -30,7 +30,7 @@ CREATE OR REPLACE FUNCTION public.record_tool_approval(
   p_organization_id UUID, p_connection_id UUID, p_capability TEXT, p_arguments_sha256 TEXT, p_ttl_seconds INTEGER DEFAULT 300)
 RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 BEGIN
-  IF NOT private.has_org_role(p_organization_id, auth.uid(), ARRAY['owner','admin']::organization_role[]) THEN
+  IF NOT private.has_org_role(p_organization_id, auth.uid(), ARRAY['owner','admin']::public.organization_role[]) THEN
     RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE = '42501';
   END IF;
   IF p_arguments_sha256 IS NULL OR p_arguments_sha256 !~ '^[0-9a-f]{64}$' THEN
@@ -52,7 +52,7 @@ CREATE OR REPLACE FUNCTION public.revoke_tool_approval(
   p_organization_id UUID, p_connection_id UUID, p_capability TEXT, p_arguments_sha256 TEXT)
 RETURNS boolean LANGUAGE plpgsql SECURITY DEFINER SET search_path = pg_catalog AS $$
 BEGIN
-  IF NOT private.has_org_role(p_organization_id, auth.uid(), ARRAY['owner','admin']::organization_role[]) THEN
+  IF NOT private.has_org_role(p_organization_id, auth.uid(), ARRAY['owner','admin']::public.organization_role[]) THEN
     RAISE EXCEPTION 'FORBIDDEN' USING ERRCODE = '42501';
   END IF;
   UPDATE public.tool_approvals
