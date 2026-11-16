@@ -17,6 +17,7 @@
  * The model is offered no tools in this turn.
  */
 import { NextResponse } from 'next/server';
+import { createSsoControlClient } from '@/lib/supabase/server';
 import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } from '@/lib/chat/request';
 import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
@@ -68,7 +69,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     const caps = await listCapabilities(ctx.db, orgId);
     const row = caps.find((c) => c.providerKey === MCP_PROVIDER && c.connectionId === connectionId && c.capabilityKey === capability);
     if (!row || row.state !== 'connected') return jsonError(409, 'An attached integration is not connected');
-    const registry = await loadChatToolRegistry(ctx.db, orgId);
+    const registry = await loadChatToolRegistry(ctx.db, orgId, { serviceDb: await createSsoControlClient() });
     if (!toolAvailable(row, registry)) return jsonError(409, 'This integration is not available in chat yet');
     toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, [row], { registry });
     const spec = toolset.specs.length === 1 ? toolset.specs[0] : undefined;

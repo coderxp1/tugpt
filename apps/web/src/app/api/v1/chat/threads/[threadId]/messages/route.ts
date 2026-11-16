@@ -9,6 +9,7 @@
  * user and organization; the browser never chooses a connection.
  */
 import { NextResponse } from 'next/server';
+import { createSsoControlClient } from '@/lib/supabase/server';
 import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } from '@/lib/chat/request';
 import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
@@ -56,7 +57,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
       .filter((c): c is CapabilityRow => c !== undefined);
     if (attached.some((c) => c.state !== 'connected')) return jsonError(409, 'An attached integration is not connected');
     // Per organization: built-in tools plus runnable customer MCP tools (behind the MCP gate in lib/chat/mcp.ts).
-    if (attached.length) registry = await loadChatToolRegistry(ctx.db, orgId);
+    if (attached.length) registry = await loadChatToolRegistry(ctx.db, orgId, { serviceDb: await createSsoControlClient() });
     if (attached.some((c) => !toolAvailable(c, registry))) return jsonError(409, 'This integration is not available in chat yet');
     if (attached.length && !model.toolCalling) return jsonError(409, 'This model cannot use integrations');
     const conflict = conflictingAttachments(attached, registry);

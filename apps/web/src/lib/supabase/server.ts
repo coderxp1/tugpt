@@ -53,3 +53,30 @@ export async function createFeatureServerClient(organizationId: string): Promise
   if (!session?.mapped) throw new SsoError(401, 'session_invalid');
   return scopedFeatureAdapter(session, organizationId);
 }
+
+/** Trusted server-side identity for service_role-only RPCs (execution/audit).
+ * Uses the SSO bridge control token; never the user's session, never exposed
+ * to the browser or model. */
+export async function createSsoControlClient(): Promise<TypedSupabaseClient> {
+  const base = dbUrl();
+  const client = createSupabaseClient(base, 'server-only-dashboard-adapter', {
+    auth: { persistSession: false, autoRefreshToken: false, detectSessionInUrl: false },
+    global: { fetch: async (input, init) => {
+      const incoming = new Request(input, init);
+      const url = new URL(incoming.url);
+      if (url.origin !== base || !url.pathname.startsWith('/rest/v1/') || url.username || url.password || url.hash) {
+        throw new SsoError(503, 'configuration_unavailable');
+      }
+      const headers = new Headers(incoming.headers);
+      for (const name of ['accept-profile', 'content-profile']) {
+        if (headers.has(name) && headers.get(name) !== 'public') throw new SsoError(403, 'forbidden');
+        headers.set(name, 'public');
+      }
+      headers.set('Authorization', 'Bearer ' + bridgeToken('sso_control'));
+      headers.delete('apikey');
+      const outgoing = new Request(base + '/' + url.pathname.slice('/rest/v1/'.length) + url.search, incoming);
+      return fetch(outgoing, { headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000) });
+    } },
+  });
+  return client;
+}

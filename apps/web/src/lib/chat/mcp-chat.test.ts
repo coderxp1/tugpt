@@ -91,7 +91,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
 
   async function session(user: string, org = ORG_A, d: McpDeps = deps) {
     const db = fakeDb(state, user);
-    const registry = await loadChatToolRegistry(db, org, d);
+    const registry = await loadChatToolRegistry(db, org, { ...d, serviceDb: db as never });
     const rows = await listCapabilities(db, org);
     const pick = (endpoint: string, name: string) => rows.find((r) => r.connectionId === endpoint && r.capabilityKey === `external.${name}`) as CapabilityRow;
     const toolset = (attached: CapabilityRow[]) => buildChatToolset(db, { organizationId: org, userId: user, threadId: THREAD }, attached, { registry, mcp: d });

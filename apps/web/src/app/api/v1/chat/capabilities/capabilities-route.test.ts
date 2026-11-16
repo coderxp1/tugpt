@@ -17,6 +17,10 @@ vi.mock('@/lib/chat/request', async (orig) => ({
   ...(await orig<typeof import('@/lib/chat/request')>()),
   chatContext: async () => ({ db: fakeDb(state, OWNER), userId: OWNER, tenant: { organizationId: ORG, role: 'owner' } }),
 }));
+vi.mock('@/lib/supabase/server', async (orig) => ({
+  ...(await orig<typeof import('@/lib/supabase/server')>()),
+  createSsoControlClient: async () => fakeDb(state, OWNER),
+}));
 
 const { GET } = await import('./route');
 

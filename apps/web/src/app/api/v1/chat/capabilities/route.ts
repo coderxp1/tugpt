@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server';
+import { createSsoControlClient } from '@/lib/supabase/server';
 import { chatContext, PRIVATE_HEADERS, storeErrorResponse } from '@/lib/chat/request';
 import { listCapabilities } from '@/lib/chat/store';
 import { toolAvailable } from '@/lib/chat/connect';
@@ -13,7 +14,7 @@ export async function GET(request: Request) {
   try {
     const rows = await listCapabilities(ctx.db, ctx.tenant.organizationId);
     // Built-in tools plus runnable customer MCP tools; the MCP gate (lib/chat/mcp.ts) keeps MCP off unless provably runnable.
-    const registry = await loadChatToolRegistry(ctx.db, ctx.tenant.organizationId);
+    const registry = await loadChatToolRegistry(ctx.db, ctx.tenant.organizationId, { serviceDb: await createSsoControlClient() });
     // connectionId stays server-side: the browser selects capabilities, the server picks the connection.
     const capabilities = rows.map((r) => {
       const available = toolAvailable(r, registry);

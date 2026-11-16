@@ -34,7 +34,7 @@ import {
   createBuiltInCalendarTools, createExternalMcpTool,
   type AccessTokenSource, type ConnectionDirectory, type ConnectTool, type ExternalMcpFetch, type HostnameResolver, type ToolAuditEvent,
 } from '@tugpt/connect-runtime';
-import { createMcpAuditSink, listActiveMcpTools, mcpConnectionDirectory, type ActiveMcpTool } from '@tugpt/connect-server';
+import { createMcpAuditSink, listActiveMcpTools, resolveMcpExecution, mcpConnectionDirectory, type ActiveMcpTool } from '@tugpt/connect-server';
 import { customerMcpEnabled } from '../connect-ui/flags.server';
 
 /** The client type Agent 2's functions take (supabase-js), without a direct dependency on it. */
@@ -120,6 +120,7 @@ export interface McpDeps {
   readonly fetchFn?: ExternalMcpFetch;
   readonly resolveHostname?: HostnameResolver;
   readonly listTools?: (db: SupabaseClient, orgId: string) => Promise<ActiveMcpTool[]>;
+  readonly serviceDb?: SupabaseClient;
   readonly directory?: (db: SupabaseClient, orgId: string) => ConnectionDirectory;
 }
 
@@ -157,7 +158,7 @@ export async function runnableEndpoints(db: ChatDb, orgId: string): Promise<Set<
 function validTool(t: ActiveMcpTool): t is ActiveMcpTool & { inputSchema: JsonSchemaObject } {
   const schema = t.inputSchema as Record<string, unknown> | null;
   return typeof t.endpointId === 'string' && UUID.test(t.endpointId)
-    && typeof t.url === 'string' && typeof t.name === 'string' && TOOL_NAME.test(t.name)
+    && typeof t.name === 'string' && TOOL_NAME.test(t.name)
     && typeof t.description === 'string'
     && PERMISSION_CLASSES.includes(t.permissionClass)
     && schema !== null && typeof schema === 'object' && !Array.isArray(schema) && schema.type === 'object';
@@ -194,16 +195,25 @@ export async function loadChatToolRegistry(db: ChatDb, orgId: string, deps: McpD
     [tools, runnable] = await Promise.all([(deps.listTools ?? listActiveMcpTools)(asSupabase(db), orgId), runnableEndpoints(db, orgId)]);
   } catch { return makeRegistry(builtins, [], gate, audit); }
 
+  const serviceDb = deps.serviceDb;
+  const urls = new Map<string, string>();
+  if (serviceDb) {
+    for (const id of new Set(tools.map((t) => t.endpointId))) {
+      const r = await resolveMcpExecution(serviceDb, orgId, id);
+      if (r?.url) urls.set(id, r.url);
+    }
+  }
   const entries: McpToolEntry[] = [];
   for (const t of tools) {
-    if (!validTool(t) || !runnable.has(t.endpointId)) continue;
+    const url = urls.get(t.endpointId);
+    if (!url || !validTool(t) || !runnable.has(t.endpointId)) continue;
     const capability = `external.${t.name}`;
     if (entries.some((e) => e.endpointId === t.endpointId && e.capability === capability)) continue;
     const tool = createExternalMcpTool(
-      { url: t.url, fetchFn, ...(deps.resolveHostname ? { resolveHostname: deps.resolveHostname } : {}) },
+      { url, fetchFn, ...(deps.resolveHostname ? { resolveHostname: deps.resolveHostname } : {}) },
       { name: t.name, description: t.description, inputSchema: t.inputSchema, permissionClass: t.permissionClass },
     ) as unknown as ConnectTool<never>;
-    const endpointHost = hostOf(t.url);
+    const endpointHost = hostOf(url);
     if (!endpointHost) continue;
     entries.push({ endpointId: t.endpointId, capability, permissionClass: t.permissionClass, endpointHost, tool });
   }

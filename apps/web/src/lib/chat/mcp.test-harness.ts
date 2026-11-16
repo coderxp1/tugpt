@@ -252,7 +252,29 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
         return { data: state.approvals.some((x) => x.organization_id === org && x.connection_id === args.p_connection_id && x.capability === args.p_capability
           && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null), error: null };
       }
-      if (fn === 'record_mcp_tool_call') {
+      if (fn === 'list_mcp_capabilities') {
+        if (!isMember(org)) return { data: [], error: null };
+        const out = [];
+        for (const e of state.endpoints.filter((x) => x.organization_id === org && x.status === 'active')) {
+          const snaps = state.snapshots.filter((s) => s.endpoint_id === e.id && s.organization_id === org).sort((a, b) => Number(b.version) - Number(a.version));
+          const newest = snaps[0];
+          if (!newest || newest.approved_at == null || newest.revoked_at != null) continue;
+          for (const t of state.tools.filter((x) => x.snapshot_id === newest.id && x.organization_id === org)) {
+            out.push({ endpointId: e.id, name: t.name, description: t.description, inputSchema: t.input_schema, permissionClass: t.permission_class });
+          }
+        }
+        return { data: out, error: null };
+      }
+      if (fn === 'resolve_mcp_execution') {
+        const e = state.endpoints.find((x) => x.id === args.p_endpoint_id && x.organization_id === org && x.status === 'active');
+        if (!e) return { data: null, error: { message: 'not found' } };
+        const snaps = state.snapshots.filter((s) => s.endpoint_id === e.id && s.organization_id === org).sort((a, b) => Number(b.version) - Number(a.version));
+        const newest = snaps[0];
+        if (!newest || newest.approved_at == null || newest.revoked_at != null) return { data: null, error: null };
+        const tools = state.tools.filter((t) => t.snapshot_id === newest.id && t.organization_id === org).map((t) => ({ name: t.name, description: t.description, inputSchema: t.input_schema, permissionClass: t.permission_class }));
+        return { data: { endpointId: e.id, url: e.url, tools }, error: null };
+      }
+            if (fn === 'record_mcp_tool_call') {
         // Mirrors 20261115000006: members of the organization may write; nothing else is validated there.
         if (!isMember(org)) return { data: null, error: { code: '42501', message: 'FORBIDDEN' } };
         state.mcpAudit.push({ ...args, actor: userId });
