@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { isSameOriginMutation } from '@/lib/http/mutations';
-import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
+import { createExternalMcpRepository, RepoError } from '@/lib/connect/external-mcp-repo';
 import type { ApiError } from '@/lib/draft-api/types';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -54,12 +54,20 @@ export async function POST(request: Request) {
     if (typeof ttlSeconds !== 'number' || !Number.isInteger(ttlSeconds) || ttlSeconds <= 0 || ttlSeconds > 3600) {
       return errorResponse(400, 'INVALID_REQUEST', 'ttlSeconds must be an integer from 1 to 3600');
     }
+    const threadId = body?.threadId;
+    if (typeof threadId !== 'string' || !UUID.test(threadId)) {
+      return errorResponse(400, 'INVALID_REQUEST', 'threadId must be a valid UUID');
+    }
 
     const repo = createExternalMcpRepository(supabase);
-    const { id, expiresAt } = await repo.recordApproval(tenant.organizationId, connectionId, capability, argumentsSha256, ttlSeconds);
+    const { id, expiresAt } = await repo.recordApproval(tenant.organizationId, connectionId, capability, argumentsSha256, ttlSeconds, user.id, threadId);
 
     return NextResponse.json({ approved: true, id, expiresAt });
-  } catch {
+  } catch (e) {
+    if (e instanceof RepoError) {
+      if (e.pgCode === '42501') return errorResponse(403, 'FORBIDDEN', 'Not authorized to record this approval');
+      return errorResponse(400, 'INVALID_REQUEST', e.message);
+    }
     return errorResponse(500, 'INTERNAL', 'Failed to record the approval');
   }
 }

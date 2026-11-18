@@ -11,7 +11,7 @@ import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { isSameOriginMutation } from '@/lib/http/mutations';
-import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
+import { createExternalMcpRepository, RepoError } from '@/lib/connect/external-mcp-repo';
 import type { ApiError } from '@/lib/draft-api/types';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -46,7 +46,11 @@ export async function POST(request: Request) {
     const revoked = await repo.revokeApproval(tenant.organizationId, approvalId);
 
     return NextResponse.json({ revoked });
-  } catch {
+  } catch (e) {
+    if (e instanceof RepoError) {
+      if (e.pgCode === '42501') return errorResponse(403, 'FORBIDDEN', 'Not authorized to revoke this approval');
+      return errorResponse(400, 'INVALID_REQUEST', e.message);
+    }
     return errorResponse(500, 'INTERNAL', 'Failed to revoke the approval');
   }
 }

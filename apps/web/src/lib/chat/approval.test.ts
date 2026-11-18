@@ -79,7 +79,7 @@ describe('API clients never treat a failure as permission', () => {
     expect(url).toBe('/api/v1/connect/mcp/approvals');
     expect(init.method).toBe('POST');
     expect((init.headers as Record<string, string>)['x-tugpt-csrf']).toBe('1');
-    expect(JSON.parse(String(init.body))).toEqual({ connectionId: EP, capability: 'external.create_ticket', argumentsSha256: base.argumentsSha256, ttlSeconds: 300 });
+    expect(JSON.parse(String(init.body))).toEqual({ connectionId: EP, capability: 'external.create_ticket', argumentsSha256: base.argumentsSha256, ttlSeconds: 300, threadId: base.threadId });
   });
   it.each([
     ['500 (service-role RPC bug)', () => res(500, { error: { code: 'INTERNAL', message: 'x' } }), 'unavailable'],

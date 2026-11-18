@@ -85,7 +85,7 @@ export function conflictingAttachments(attached: readonly CapabilityRow[], regis
 }
 
 /** Per-call approval port. Only owners/admins can record approvals (record_tool_approval); claiming consumes one atomically. */
-export function dbApprovals(db: ChatDb, ctx: Pick<ChatToolContext, 'organizationId' | 'userId'>): ApprovalChecker {
+export function dbApprovals(db: ChatDb, ctx: Pick<ChatToolContext, 'organizationId' | 'userId' | 'threadId'>): ApprovalChecker {
   return {
     async claimApproval(input) {
       if (input.organizationId !== ctx.organizationId || input.actorUserId !== ctx.userId || !UUID.test(input.connectionId)) return false;
@@ -93,6 +93,7 @@ export function dbApprovals(db: ChatDb, ctx: Pick<ChatToolContext, 'organization
         const r = await db.rpc('claim_tool_approval', {
           p_organization_id: input.organizationId, p_connection_id: input.connectionId,
           p_capability: input.capability, p_arguments_sha256: input.argumentsSha256,
+          p_thread_id: ctx.threadId,
         });
         return !r.error && r.data === true;
       } catch { return false; }

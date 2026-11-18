@@ -179,7 +179,7 @@ const target = (p: PendingApproval) => ({ connectionId: p.endpointId, capability
 /** Agent 2's POST /api/v1/connect/mcp/approvals. Success only for HTTP 200 with {approved: true}. */
 export async function requestApproval(p: PendingApproval, ttlSeconds: number, fetchFn: FetchFn = fetch): Promise<ApprovalResult<{ approved: true; id: string; expiresAt: number }>> {
   if (!TTL_OPTIONS.some((o) => o.seconds === ttlSeconds)) return { ok: false, reason: 'invalid' };
-  return call(fetchFn, APPROVALS_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify({ ...target(p), ttlSeconds }) },
+  return call(fetchFn, APPROVALS_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify({ ...target(p), threadId: p.threadId, ttlSeconds }) },
     (b) => (isPlainObject(b) && b.approved === true && typeof b.id === 'string' && typeof b.expiresAt === 'string'
       ? { approved: true as const, id: b.id, expiresAt: new Date(b.expiresAt).getTime() } : undefined));
 }

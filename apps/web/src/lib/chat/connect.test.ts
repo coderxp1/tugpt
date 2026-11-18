@@ -56,14 +56,14 @@ describe('conflictingAttachments', () => {
 });
 
 describe('dbApprovals (claim_tool_approval)', () => {
-  const ctx = { organizationId: 'org-1', userId: 'u-1' };
+  const ctx = { organizationId: 'org-1', userId: 'u-1', threadId: 't-1' };
   const input = { organizationId: 'org-1', actorUserId: 'u-1', connectionId: '11111111-1111-4111-8111-111111111111', capability: 'x.write', argumentsSha256: 'ab' };
   const db = (rpc: ChatDb['rpc']) => ({ from: vi.fn(), rpc: vi.fn(rpc) }) as unknown as ChatDb & { rpc: ReturnType<typeof vi.fn> };
 
   it('claims through the RPC with the exact arguments and accepts only true', async () => {
     const d = db(async () => ({ data: true, error: null }));
     expect(await dbApprovals(d, ctx).claimApproval(input)).toBe(true);
-    expect(d.rpc).toHaveBeenCalledWith('claim_tool_approval', { p_organization_id: 'org-1', p_connection_id: input.connectionId, p_capability: 'x.write', p_arguments_sha256: 'ab' });
+    expect(d.rpc).toHaveBeenCalledWith('claim_tool_approval', { p_organization_id: 'org-1', p_connection_id: input.connectionId, p_capability: 'x.write', p_arguments_sha256: 'ab', p_thread_id: 't-1' });
   });
   it('fails closed on false, errors, throws, other tenant, other user or a bad id', async () => {
     expect(await dbApprovals(db(async () => ({ data: false, error: null })), ctx).claimApproval(input)).toBe(false);

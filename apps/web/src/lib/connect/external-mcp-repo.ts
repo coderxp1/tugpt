@@ -37,6 +37,11 @@ export interface RecordedApproval {
   readonly expiresAt: string;
 }
 
+/** Thrown by repository methods on a PostgREST error; pgCode is the SQLSTATE. */
+export class RepoError extends Error {
+  constructor(public readonly pgCode: string, message: string) { super(message); }
+}
+
 export interface ExternalMcpRepository {
   createEndpoint(orgId: string, userId: string, url: string, displayName: string): Promise<{ id: string }>;
   getEndpointUrl(orgId: string, endpointId: string): Promise<string | null>;
@@ -50,7 +55,7 @@ export interface ExternalMcpRepository {
   activateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deactivateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deleteEndpoint(orgId: string, endpointId: string): Promise<void>;
-  recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number): Promise<RecordedApproval>;
+  recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number, requestedBy: string, threadId: string): Promise<RecordedApproval>;
   revokeApproval(orgId: string, approvalId: string): Promise<boolean>;
 }
 
@@ -157,19 +162,20 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       if (error) throw new Error('failed to delete the MCP endpoint');
     },
 
-    async recordApproval(orgId, connectionId, capability, argumentsSha256, ttlSeconds) {
+    async recordApproval(orgId, connectionId, capability, argumentsSha256, ttlSeconds, requestedBy, threadId) {
       const { data, error } = await u.rpc('record_tool_approval', {
         p_organization_id: orgId, p_connection_id: connectionId, p_capability: capability,
         p_arguments_sha256: argumentsSha256, p_ttl_seconds: ttlSeconds,
+        p_requested_by: requestedBy, p_thread_id: threadId,
       });
-      if (error) throw new Error('failed to record the approval');
+      if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to record the approval');
       const row = Array.isArray(data) ? data[0] : data;
       return { id: row.id, expiresAt: row.expires_at };
     },
 
     async revokeApproval(orgId, approvalId) {
       const { data, error } = await u.rpc('revoke_tool_approval', { p_organization_id: orgId, p_approval_id: approvalId });
-      if (error) throw new Error('failed to revoke the approval');
+      if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to revoke the approval');
       return data === true;
     },
   };

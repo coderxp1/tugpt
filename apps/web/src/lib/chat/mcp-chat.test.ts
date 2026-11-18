@@ -208,7 +208,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(r.code).toBe('APPROVAL_REQUIRED');
       expect(server.toolCalls().length).toBe(before);
       expect(state.rpcLog.find((x) => x.fn === 'claim_tool_approval')?.args).toEqual({
-        p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: sha({ q: 'new' }),
+        p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: sha({ q: 'new' }), p_thread_id: THREAD,
       });
     });
 
