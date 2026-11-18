@@ -55,7 +55,7 @@ export interface ExternalMcpRepository {
   activateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deactivateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deleteEndpoint(orgId: string, endpointId: string): Promise<void>;
-  recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number, requestedBy: string, threadId: string): Promise<RecordedApproval>;
+  recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number, threadId: string): Promise<RecordedApproval>;
   revokeApproval(orgId: string, approvalId: string): Promise<boolean>;
 }
 
@@ -162,11 +162,10 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       if (error) throw new Error('failed to delete the MCP endpoint');
     },
 
-    async recordApproval(orgId, connectionId, capability, argumentsSha256, ttlSeconds, requestedBy, threadId) {
+    async recordApproval(orgId, connectionId, capability, argumentsSha256, ttlSeconds, threadId) {
       const { data, error } = await u.rpc('record_tool_approval', {
         p_organization_id: orgId, p_connection_id: connectionId, p_capability: capability,
-        p_arguments_sha256: argumentsSha256, p_ttl_seconds: ttlSeconds,
-        p_requested_by: requestedBy, p_thread_id: threadId,
+        p_arguments_sha256: argumentsSha256, p_ttl_seconds: ttlSeconds, p_thread_id: threadId,
       });
       if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to record the approval');
       const row = Array.isArray(data) ? data[0] : data;

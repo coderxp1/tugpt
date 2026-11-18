@@ -60,7 +60,7 @@ export async function POST(request: Request) {
     }
 
     const repo = createExternalMcpRepository(supabase);
-    const { id, expiresAt } = await repo.recordApproval(tenant.organizationId, connectionId, capability, argumentsSha256, ttlSeconds, user.id, threadId);
+    const { id, expiresAt } = await repo.recordApproval(tenant.organizationId, connectionId, capability, argumentsSha256, ttlSeconds, threadId);
 
     return NextResponse.json({ approved: true, id, expiresAt });
   } catch (e) {
