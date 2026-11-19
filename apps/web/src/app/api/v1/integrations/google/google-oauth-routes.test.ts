@@ -12,7 +12,7 @@
  * fixed settings path.
  */
 
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { GET as startGET } from './start/route';
 import { GET as callbackGET } from './callback/route';
 import { POST as disconnectPOST } from './disconnect/route';
@@ -252,10 +252,15 @@ describe('GET /integrations/google/callback', () => {
 });
 
 describe('POST /integrations/google/disconnect', () => {
+  // The route is a plain-form endpoint guarded by a strict same-origin Origin
+  // check (CSRF). These tests exercise the behaviour behind that guard, so the
+  // request carries the legitimate application Origin a browser would send.
+  beforeEach(() => { vi.stubEnv('TUGPT_APP_ORIGIN', 'https://app.test'); });
+  afterEach(() => { vi.unstubAllEnvs(); });
   function disconnectReq(): Request {
     return new Request('http://localhost/api/v1/integrations/google/disconnect', {
       method: 'POST',
-      headers: { 'x-tenant-id': ORG_ID },
+      headers: { 'x-tenant-id': ORG_ID, origin: 'https://app.test', 'sec-fetch-site': 'same-origin' },
     });
   }
 

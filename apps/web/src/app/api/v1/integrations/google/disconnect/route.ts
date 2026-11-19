@@ -15,6 +15,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import { crossOriginFormResponse } from '@/lib/http/mutations';
 import { defaultLogger } from '@tugpt/observability';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { createAdminSupabaseClient } from '@tugpt/database';
@@ -32,6 +33,9 @@ function errorResponse(status: number, code: string, message: string) {
 }
 
 export async function POST(request: Request) {
+  // Plain-form endpoint: strict same-origin Origin check before any session or vault work.
+  const csrf = crossOriginFormResponse(request);
+  if (csrf) return csrf;
   const requestId = request.headers.get('x-request-id') || `req-${Date.now()}`;
 
   try {

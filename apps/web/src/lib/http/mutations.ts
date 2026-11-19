@@ -19,6 +19,40 @@ export function isSameOriginMutation(request: Request): boolean {
   } catch { return false; }
 }
 
+/**
+ * Standard CSRF/origin rejection for a state-changing route handler.
+ * Returns a 403 JSON response when the request is not a same-origin JSON
+ * mutation, otherwise null. Call it as the first statement of every
+ * POST/PUT/PATCH/DELETE handler (enforced by mutation-origin-coverage.test.ts).
+ * Never redirects and never reveals which check failed.
+ */
+export function crossOriginMutationResponse(request: Request): Response | null {
+  if (isSameOriginMutation(request)) return null;
+  return new Response(JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Invalid origin' } }), {
+    status: 403,
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+  });
+}
+
+/**
+ * Origin guard for a state-changing endpoint submitted by a plain HTML form,
+ * which cannot set custom headers. Requires an exact same-origin `Origin`
+ * header (always sent by browsers on cross-site POSTs); a missing Origin is
+ * rejected. Returns a 403 JSON response on failure, otherwise null.
+ */
+export function crossOriginFormResponse(request: Request): Response | null {
+  let ok = false;
+  try {
+    ok = request.headers.get('origin') === applicationOrigin(request) &&
+      request.headers.get('sec-fetch-site') !== 'cross-site';
+  } catch { ok = false; }
+  if (ok) return null;
+  return new Response(JSON.stringify({ error: { code: 'FORBIDDEN', message: 'Invalid origin' } }), {
+    status: 403,
+    headers: { 'content-type': 'application/json', 'cache-control': 'no-store' },
+  });
+}
+
 export async function readSmallJson(request: Request): Promise<unknown> {
   if (!request.body) throw new Error('Invalid request');
   const reader = request.body.getReader();

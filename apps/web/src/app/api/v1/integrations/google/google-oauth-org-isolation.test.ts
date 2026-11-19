@@ -106,8 +106,15 @@ beforeEach(() => {
 function start(headers: Record<string, string> = {}, query = ''): Request {
   return new Request(`http://localhost/api/v1/integrations/google/start${query}`, { headers });
 }
+// Legitimate same-origin form post: passes the CSRF Origin guard so these tests
+// exercise tenant selection behind it (a 403 would also "revoke nothing").
+const APP_ORIGIN = 'https://app.test';
 function disconnect(headers: Record<string, string> = {}, query = ''): Request {
-  return new Request(`http://localhost/api/v1/integrations/google/disconnect${query}`, { method: 'POST', headers });
+  vi.stubEnv('TUGPT_APP_ORIGIN', APP_ORIGIN);
+  return new Request(`http://localhost/api/v1/integrations/google/disconnect${query}`, {
+    method: 'POST',
+    headers: { origin: APP_ORIGIN, 'sec-fetch-site': 'same-origin', ...headers },
+  });
 }
 
 describe('active-organization selection cannot reach another organization (real AuthService)', () => {

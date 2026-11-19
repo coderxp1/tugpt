@@ -10,6 +10,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import { crossOriginMutationResponse } from '@/lib/http/mutations';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
@@ -23,6 +24,10 @@ function errorResponse(status: number, code: string, message: string) {
 }
 
 export async function POST(request: Request, { params }: { params: Promise<{ endpointId: string }> }) {
+  // CSRF/origin guard first: no session, DB, broker or egress work for a
+  // cross-origin or non-JSON mutation (Agent 1 findings D7/X6).
+  const csrf = crossOriginMutationResponse(request);
+  if (csrf) return csrf;
   try {
     const { endpointId } = await params;
 
