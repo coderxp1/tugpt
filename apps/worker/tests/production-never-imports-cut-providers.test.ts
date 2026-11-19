@@ -76,6 +76,7 @@ export const PRODUCTION_ROOTS = [
   'packages/jobs/src',
   'packages/observability/src',
   'packages/security/src',
+  'packages/workspace-core/src',
 ];
 
 /** Not scanned, with the reason. Anything else new must be classified. */
