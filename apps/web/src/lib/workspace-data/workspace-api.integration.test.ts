@@ -144,6 +144,15 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
     store = new FilesystemBlobStore(blobDir);
     setBlobStoreForTests(store);
     svc = new PostgrestClient(URL_!, { headers: { Authorization: `Bearer ${jwt('a4900000-0000-4000-8000-000000000001', secret, 'service_role')}` } }) as unknown as KnowledgeDeps['db'];
+    // The suite assumes the state fixtures.sql creates (it also clears the per-user rate-limit windows).
+    // A second run on the same database would otherwise fail a dozen tests for unrelated-looking reasons.
+    const left = async (table: string) => (await (svc as unknown as PostgrestClient).from(table)
+      .select('id', { count: 'exact', head: true }).in('organization_id', [ORG_A, ORG_B])).count ?? 0;
+    const [agentsLeft, collectionsLeft] = [await left('custom_agents'), await left('knowledge_collections')];
+    if (agentsLeft + collectionsLeft > 0) {
+      throw new Error(`Integration database is not fresh (${agentsLeft} agents, ${collectionsLeft} collections left from a previous run). ` +
+        'Reload apps/web/tests/workspace-it/fixtures.sql, which also resets the rate-limit windows, then run again.');
+    }
 
     const emb = await listen(async (req, res) => {
       const body = JSON.parse(await readBody(req)) as { input: string[] };
