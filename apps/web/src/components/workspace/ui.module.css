@@ -1,0 +1,98 @@
+/* Shared Workspace UI parts: dialogs, menus, buttons, fields, states and badges.
+   Same system as the frame: ink #171715 on paper/white, TuGPT yellow #ffe436 as the one accent,
+   purple #8c4bce only for focus. Targets are at least 40px, 44px on touch. */
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+/* Buttons */
+.button,.buttonPrimary,.buttonDanger,.buttonGhost{display:inline-flex;align-items:center;justify-content:center;gap:7px;min-height:38px;padding:0 14px;border-radius:10px;font:inherit;font-size:13.5px;font-weight:650;line-height:1.1;text-decoration:none;cursor:pointer;white-space:nowrap}
+.button{background:#fff;color:#171715;border:1px solid #d9d7cc}
+.button:hover{background:#f6f5f0}
+.buttonPrimary{background:#171715;color:#fff;border:1px solid #171715}
+.buttonPrimary:hover{background:#2e2e2a}
+.buttonDanger{background:#9b1c1c;color:#fff;border:1px solid #9b1c1c}
+.buttonDanger:hover{background:#7f1616}
+.buttonGhost{background:transparent;color:#2b2b28;border:1px solid transparent}
+.buttonGhost:hover{background:#efede5}
+.button:disabled,.buttonPrimary:disabled,.buttonDanger:disabled,.buttonGhost:disabled{opacity:.5;cursor:not-allowed}
+.iconButton{display:inline-grid;place-items:center;width:34px;height:34px;border-radius:9px;border:0;background:transparent;color:#4a4b45;cursor:pointer;flex:none}
+.iconButton:hover{background:#e9e7dd;color:#171715}
+.iconButton:disabled{opacity:.45;cursor:not-allowed}
+:is(.button,.buttonPrimary,.buttonDanger,.buttonGhost,.iconButton,.menuItem,.field input,.field textarea,.field select,.choice input):focus-visible{outline:3px solid #8c4bce;outline-offset:2px}
+
+/* Dialog */
+.overlay{position:fixed;inset:0;z-index:1000;background:rgba(23,23,21,.42);display:grid;place-items:center;padding:16px;animation:fade .12s ease-out}
+.dialog{min-width:0;box-sizing:border-box;width:min(460px,100%);max-height:calc(100dvh - 32px);overflow:auto;background:#fff;color:#171715;border-radius:16px;box-shadow:0 24px 64px rgba(23,23,21,.28),0 0 0 1px rgba(23,23,21,.06);padding:18px 18px 16px;display:grid;gap:12px;font-family:inherit}
+.dialogWide{width:min(640px,100%)}
+.dialog:focus{outline:none}
+.dialogHead{display:flex;align-items:flex-start;justify-content:space-between;gap:12px}
+.dialogHead h2{margin:4px 0 0;font-size:17px;line-height:1.3}
+.dialogDesc{margin:-4px 0 0;color:#5d5e57;font-size:13.5px}
+.dialogBody{min-width:0;display:grid;gap:12px;font-size:14px}
+.dialogFoot{display:flex;justify-content:flex-end;flex-wrap:wrap;gap:8px;padding-top:4px}
+@keyframes fade{from{opacity:0}to{opacity:1}}
+
+/* Fields */
+.field{min-width:0;display:grid;gap:5px;font-size:13.5px}
+.field>span:first-child,.fieldLabel{font-weight:650;color:#2b2b28}
+.field input,.field textarea,.field select{font:inherit;font-size:14px;color:#171715;background:#fff;border:1px solid #d9d7cc;border-radius:10px;padding:9px 11px;min-height:40px;width:100%;box-sizing:border-box}
+.field textarea{resize:vertical;min-height:96px;line-height:1.45}
+.field input:focus,.field textarea:focus,.field select:focus{border-color:#171715}
+.help{color:#5d5e57;font-size:12.5px;margin:0}
+.fieldError{color:#9b1c1c;font-size:12.5px;margin:0}
+.counter{justify-self:end;font-size:12px;color:#5d5e57;font-variant-numeric:tabular-nums}
+.choices{display:grid;gap:6px;border:0;margin:0;padding:0}
+.choices legend{font-weight:650;font-size:13.5px;margin-bottom:4px;padding:0}
+.choice{display:flex;gap:10px;align-items:flex-start;border:1px solid #e2e0d6;border-radius:10px;padding:10px 12px;cursor:pointer;font-size:13.5px}
+.choice:has(input:checked){border-color:#171715;box-shadow:inset 0 0 0 1px #171715;background:#fffdf0}
+.choice input{margin-top:2px;accent-color:#171715}
+.choice small{display:block;color:#5d5e57;font-size:12.5px}
+.choice[aria-disabled="true"]{opacity:.55;cursor:not-allowed}
+
+/* Menu (popover with role=menu) */
+.menu{position:absolute;z-index:60;min-width:200px;background:#fff;border:1px solid #e2e0d6;border-radius:12px;box-shadow:0 12px 32px rgba(23,23,21,.16);padding:5px;display:grid;gap:1px}
+.menuItem{display:flex;align-items:center;gap:9px;width:100%;min-height:36px;padding:0 10px;border:0;border-radius:8px;background:transparent;color:#2b2b28;font:inherit;font-size:13.5px;text-align:left;cursor:pointer}
+.menuItem:hover,.menuItem:focus{background:#f1f0ea;outline:none}
+.menuItem:focus-visible{outline:3px solid #8c4bce;outline-offset:-2px}
+.menuDanger{color:#9b1c1c}
+.menuSep{height:1px;background:#efede5;margin:4px 2px}
+
+/* States */
+.loading{display:grid;gap:8px}
+.skeleton,.skeletonTall{border-radius:12px;background:linear-gradient(90deg,#efede5,#f7f6f1,#efede5);background-size:200% 100%;animation:shimmer 1.2s linear infinite}
+.skeleton{height:44px}
+.skeletonTall{height:96px}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.notice{display:flex;gap:10px;align-items:flex-start;border:1px dashed #cfccbf;border-radius:14px;padding:14px 16px;background:#fbfaf6;font-size:13.5px;color:#4a4b45}
+.notice svg{flex:none;margin-top:2px;color:#8a6d00}
+.notice strong{display:block;color:#171715;font-size:14px}
+.notice p{margin:3px 0 0}
+.error{display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin:0;padding:10px 12px;border-radius:12px;background:#fff6f6;color:#8a1f11;font-size:13.5px;border:1px solid #f0c4c4}
+.error p{margin:0}
+.compact{padding:10px 12px}
+.empty{display:grid;grid-template-columns:auto 1fr;gap:4px 12px;align-items:start;border:1px solid #e2e0d6;border-radius:14px;padding:18px;background:#fff}
+.empty strong{font-size:14.5px}
+.empty p{margin:3px 0 0;color:#5d5e57;font-size:13.5px}
+.emptyMark{display:grid;place-items:center;width:40px;height:40px;border-radius:12px;background:#f4f3ee;box-shadow:inset 0 0 0 1px #e2e0d6;color:#4a4b45;grid-row:span 2}
+.emptyActions{grid-column:2;display:flex;flex-wrap:wrap;gap:8px;margin-top:8px}
+
+/* Badges */
+.badge{display:inline-flex;align-items:center;gap:5px;font-size:11.5px;font-weight:650;line-height:18px;border-radius:999px;padding:1px 9px;border:1px solid;white-space:nowrap}
+.tone_neutral{background:#f4f3ee;border-color:#e2e0d6;color:#4a4b45}
+.tone_good{background:#effaf1;border-color:#bfe3c6;color:#1d5b2a}
+.tone_warn{background:#fff8d6;border-color:#eadb85;color:#6e5200}
+.tone_bad{background:#fff1f1;border-color:#f0c4c4;color:#8a1f11}
+.tone_info{background:#f1f4ff;border-color:#c9d3f5;color:#2a3f8f}
+
+/* Upload progress list */
+.uploads{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.upload{display:grid;grid-template-columns:auto minmax(0,1fr) auto;gap:4px 10px;align-items:center;border:1px solid #e2e0d6;border-radius:10px;padding:8px 10px;font-size:13px}
+.upload strong{font-weight:600;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.upload small{color:#5d5e57}
+.progress{grid-column:2 / -1;height:4px;border-radius:2px;background:#efede5;overflow:hidden}
+.progress>span{display:block;height:100%;width:40%;background:#171715;border-radius:2px;animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{from{transform:translateX(-100%)}to{transform:translateX(260%)}}
+.drop{display:grid;place-items:center;gap:6px;text-align:center;border:1.5px dashed #cfccbf;border-radius:14px;padding:18px;color:#4a4b45;font-size:13.5px;background:#fbfaf6}
+.dropActive{border-color:#171715;background:#fffbe0}
+
+@media(pointer:coarse){.button,.buttonPrimary,.buttonDanger,.buttonGhost,.menuItem{min-height:44px}.iconButton{width:44px;height:44px}}
+@media(prefers-reduced-motion:reduce){.skeleton,.skeletonTall,.progress>span,.overlay{animation:none}}

@@ -1,0 +1,12 @@
+.head{grid-template-columns:minmax(0,1fr) auto;align-items:end;gap:16px}
+.head>div{display:grid;gap:8px}
+@media(max-width:560px){.head{grid-template-columns:1fr}.head>button{justify-self:start}}
+.live:empty{display:none}
+.toast{margin:0;padding:9px 12px;border-radius:10px;background:#effaf1;border:1px solid #bfe3c6;color:#1d5b2a;font-size:13.5px}
+.cardText{min-width:0;flex:1}
+.cardText h3{overflow-wrap:anywhere}
+.updated{font-size:12px;color:#5d5e57;align-self:center}
+.fieldFoot{display:flex;justify-content:space-between;gap:12px;align-items:flex-start}
+.starter{display:flex;gap:6px;align-items:center}
+.starter>div{flex:1;min-width:0}
+.twoUp{display:grid;grid-template-columns:repeat(auto-fit,minmax(min(220px,100%),1fr));gap:6px}

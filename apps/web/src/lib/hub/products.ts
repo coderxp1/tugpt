@@ -81,7 +81,7 @@ export const PRODUCTS: readonly ProductDefinition[] = [
   { id: 'media', titleKey: 'hub.product.media', descriptionKey: 'hub.product.media.desc', glyph: 'film', href: null, slot: { x: 74, y: 18 } },
   { id: 'calendar', titleKey: 'hub.product.calendar', descriptionKey: 'hub.product.calendar.desc', glyph: 'calendar', href: null, slot: { x: 80, y: 39 } },
   { id: 'analytics', titleKey: 'hub.product.analytics', descriptionKey: 'hub.product.analytics.desc', glyph: 'chart', href: '/dashboard/analytics', slot: { x: 80, y: 61 } },
-  { id: 'workspace', titleKey: 'hub.product.workspace', descriptionKey: 'hub.product.workspace.desc', glyph: 'chat', href: '/dashboard/chat', slot: { x: 74, y: 82 } },
+  { id: 'workspace', titleKey: 'hub.product.workspace', descriptionKey: 'hub.product.workspace.desc', glyph: 'chat', href: '/workspace', slot: { x: 74, y: 82 } },
 ];
 
 const STATE_KEYS: Record<ProductState, MessageKey> = {

@@ -1,38 +1,10 @@
-import type { Metadata } from 'next';
-import { configuredModels, publicModels } from '@/lib/chat/models';
-import { asChatDb, listThreads, type ThreadSummary } from '@/lib/chat/store';
-import { getSessionContext } from '@/lib/tenant/server';
-import { createAuthenticatedServerClient } from '@/lib/supabase/server';
-import { ChatWorkspace } from '@/components/chat/ChatWorkspace';
-
-export const dynamic = 'force-dynamic';
-export const metadata: Metadata = { title: 'Chat · TuGPT' };
+import { redirect } from 'next/navigation';
 
 /**
- * The first page of the person's own chats is rendered on the server so the
- * list is there on first paint instead of flashing "Loading chats…". It uses
- * the same RLS-scoped client, organization and user as GET /api/v1/chat/threads.
- * When the request selected an organization the user is not a member of, or the
- * read fails, it passes null and the client loads (and can retry) on its own.
+ * Chat moved to the Workspace (/workspace) in Phase 1 of the Dashboard / Workspace split.
+ * This address stays so bookmarks and old links keep working. Temporary (307) on purpose:
+ * browsers do not cache it, so the decision stays reversible.
  */
-async function initialThreads(): Promise<ThreadSummary[] | null> {
-  const session = await getSessionContext();
-  if (!session?.tenant || session.requestedTenantRejected) return null;
-  try {
-    return await listThreads(asChatDb(await createAuthenticatedServerClient()), session.tenant.organizationId, session.userId);
-  } catch { return null; }
-}
-
-/** Owners and admins can approve customer MCP calls in chat. UI hint only; Agent 2's approval routes and the database enforce it. */
-async function canApprove(): Promise<boolean> {
-  try {
-    const session = await getSessionContext();
-    const role = session?.requestedTenantRejected ? undefined : session?.tenant?.role;
-    return role === 'owner' || role === 'admin';
-  } catch { return false; }
-}
-
-export default async function ChatPage() {
-  const [threads, approver] = await Promise.all([initialThreads(), canApprove()]);
-  return <ChatWorkspace models={publicModels(configuredModels())} initialThreads={threads} canApprove={approver} />;
+export default function DashboardChatRedirect(): never {
+  redirect('/workspace');
 }

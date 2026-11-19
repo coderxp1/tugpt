@@ -38,7 +38,7 @@ describe('the product registry', () => {
 
   it('links the Workspace entry to Chat, which is built', () => {
     const ws = PRODUCTS.find((p) => p.id === 'workspace');
-    expect(ws?.href).toBe('/dashboard/chat');
+    expect(ws?.href).toBe('/workspace');
     expect(byId(healthy).workspace.state).toBe('live');
   });
 

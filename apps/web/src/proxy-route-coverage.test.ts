@@ -77,7 +77,7 @@ const ROUTES: RouteExpectation[] = [
     // and useless: `/` was create-next-app boilerplate the entire time, and a
     // reason written about tenant data could never catch that. It now
     // redirects to the conversation inbox and renders nothing at all.
-    why: 'Redirects to /dashboard, the product hub. Renders nothing and reads nothing; the proxy gates the destination.',
+    why: 'Redirects to /workspace, the landing page after login. Renders nothing and reads nothing; the proxy gates the destination.',
   },
   {
     path: '/auth/login',
@@ -155,7 +155,43 @@ const ROUTES: RouteExpectation[] = [
     path: '/dashboard/chat',
     kind: 'page',
     type: 'protected',
+    why: 'Retired address kept for bookmarks: a server redirect (307) to /workspace. Renders and reads nothing; protected so it never answers a signed-out visitor differently.',
+  },
+  {
+    path: '/workspace',
+    kind: 'page',
+    type: 'protected',
     why: 'Workspace chat shell. Threads and messages are loaded by the /api/v1/chat handlers through the user\'s RLS-bound client; owner-only per 20261115000001.',
+  },
+  {
+    path: '/workspace/agents',
+    kind: 'page',
+    type: 'protected',
+    why: 'Workspace agents page. Built-in assistant plus the public model catalogue (labels only); custom agents load client-side from /api/v1/agents (C-1) once it exists. Protected like the rest of /workspace.',
+  },
+  {
+    path: '/workspace/library',
+    kind: 'page',
+    type: 'protected',
+    why: 'Workspace library. Knowledge (GET /api/v1/knowledge) and collections (/api/v1/library/*) are fetched client-side (session, tenant, RLS to the active organization); the page itself only reads the session role.',
+  },
+  {
+    path: '/workspace/approvals',
+    kind: 'page',
+    type: 'protected',
+    why: 'Workspace approvals. History and decisions are fetched client-side from /api/v1/approvals (session, tenant, RLS; org scope and decisions re-checked for owner/admin); the page itself only reads the session role and user id.',
+  },
+  {
+    path: '/workspace/images',
+    kind: 'page',
+    type: 'protected',
+    why: 'Workspace image studio. Reuses ImageStudio, which calls /api/v1/create/images (session-gated, tenant-scoped). Renders no tenant data itself.',
+  },
+  {
+    path: '/workspace/c/[threadId]',
+    kind: 'page',
+    type: 'protected',
+    why: 'One Workspace chat. The thread is fetched by GET /api/v1/chat/threads/[id] through the user\'s RLS-bound client, so another person\'s id yields not-found.',
   },
   {
     path: '/dashboard/connect',

@@ -30,7 +30,7 @@ export function Overview({ products, hasOrganization }: { products: readonly Pro
     </div>
     <section className={s.hero} aria-labelledby="hero-title">
       <div className={s.heroCopy}><span className={s.tag}>Your connected platform</span><h2 id="hero-title">Big ideas start<br />right here.</h2><p>Ask TuGPT anything in Chat, on private models running on TuGPT’s own EU GPU. Your chats are saved and only you can see them.</p>
-        <div className={s.heroActions}><Link className={s.primary} href="/dashboard/chat" prefetch={false}>Start a chat <span aria-hidden="true">→</span></Link><a className={s.heroLink} href="#platform">Explore your platform ↘</a></div>
+        <div className={s.heroActions}><Link className={s.primary} href="/workspace" prefetch={false}>Start a chat <span aria-hidden="true">→</span></Link><a className={s.heroLink} href="#platform">Explore your platform ↘</a></div>
       </div>
       <div className={s.heroArt} aria-hidden="true"><div className={s.orbit} />
         <div className={`${s.floatCard} ${s.one}`}><span className={s.floatIcon}><Glyph name="spark" /></span><div>Ideas in motion<small>Powered by your context</small></div></div>

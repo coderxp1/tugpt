@@ -1,0 +1,57 @@
+/* Recent chats in the Workspace sidebar. Paper rail, ink text, a yellow marker on the open chat. */
+.recent{display:flex;flex-direction:column;min-height:0;flex:1;margin-top:14px}
+.label{font-size:11px;letter-spacing:.12em;text-transform:uppercase;font-weight:700;color:#5d5e57;margin:0 10px 4px}
+.scroll{overflow-y:auto;min-height:0;flex:1;padding:0 2px;scrollbar-width:thin}
+.group+.group{margin-top:10px}
+.groupLabel{font-size:11.5px;font-weight:600;color:#6f706a;margin:6px 10px 2px}
+.list{list-style:none;margin:0;padding:0;display:grid;grid-template-columns:minmax(0,1fr);gap:1px}
+.list>li{min-width:0}
+.item,.itemActive{position:relative;display:block;width:100%;padding:7px 10px 7px 14px;border-radius:8px;font-size:13.5px;line-height:20px;color:#2b2b28;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-decoration:none;min-height:34px}
+.item:hover{background:#e9e7dd}
+.item[aria-disabled="true"]{color:#8a8b84;cursor:not-allowed}
+.item[aria-disabled="true"]:hover{background:transparent}
+.itemActive{background:#fff;color:#171715;font-weight:650;box-shadow:0 1px 0 #dedcd2}
+.itemActive::before{content:"";position:absolute;left:4px;top:8px;bottom:8px;width:3px;border-radius:2px;background:#ffe436;box-shadow:0 0 0 1px #171715}
+.item:focus-visible,.itemActive:focus-visible,.loadError button:focus-visible{outline:3px solid #8c4bce;outline-offset:-1px}
+.muted{font-size:13px;color:#5d5e57;padding:6px 10px;margin:0;overflow-wrap:anywhere}
+.note{font-size:11.5px;color:#5d5e57;margin:8px 10px 0}
+.skeleton{height:32px;border-radius:8px;background:linear-gradient(90deg,#e8e6dc,#f1efe6,#e8e6dc);background-size:200% 100%;animation:shimmer 1.2s linear infinite}
+@keyframes shimmer{from{background-position:200% 0}to{background-position:-200% 0}}
+.loadError{font-size:13px;color:#8a1f11;display:grid;gap:8px;justify-items:start;padding:0 10px}.loadError p{margin:0}
+.loadError button{border:1px solid #cfccbf;background:#fff;border-radius:8px;padding:6px 12px;min-height:36px;font-weight:600;color:#171715;cursor:pointer}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+@media(prefers-reduced-motion:reduce){.skeleton{animation:none}}
+/* Conversation management (only when the conversations API is available). */
+.row{position:relative;display:flex;align-items:center}
+.row>a{padding-right:34px}
+.title{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;min-width:0}
+.snippet{display:block;font-size:12px;line-height:16px;color:#5d5e57;font-weight:400;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.item:has(.snippet),.itemActive:has(.snippet){white-space:normal}
+.more,.folderMore{position:absolute;right:2px;top:50%;transform:translateY(-50%);display:inline-grid;place-items:center;width:30px;height:30px;border:0;border-radius:7px;background:transparent;color:#4a4b45;cursor:pointer;opacity:0}
+.row:hover .more,.row:focus-within .more,.more[aria-expanded="true"],.folder:hover>.folderMore,.folder:focus-within>.folderMore,.folderMore[aria-expanded="true"]{opacity:1}
+.more:hover,.folderMore:hover{background:#dedcd2;color:#171715}
+.more:focus-visible,.folderMore:focus-visible,.headButton:focus-visible,.folderSummary:focus-visible,.archivedLink:focus-visible,.toast button:focus-visible{outline:3px solid #8c4bce;outline-offset:-1px;opacity:1}
+@media(hover:none){.more,.folderMore{opacity:1}}
+.folders{margin-bottom:10px}
+.sectionHead{display:flex;align-items:center;justify-content:space-between;padding-right:2px}
+.headButton{display:inline-grid;place-items:center;width:30px;height:30px;border:0;border-radius:7px;background:transparent;color:#4a4b45;cursor:pointer}
+.headButton:hover{background:#e9e7dd;color:#171715}
+.folder{position:relative}
+.folderSummary{display:flex;align-items:center;gap:8px;min-height:34px;padding:6px 36px 6px 10px;border-radius:8px;font-size:13.5px;color:#2b2b28;cursor:pointer;list-style:none}
+.folderSummary::-webkit-details-marker{display:none}
+.folderSummary:hover{background:#e9e7dd}
+.folderSummary svg{flex:none;color:#6f706a}
+.folderMore{top:17px}
+.folder>details>summary{padding-right:36px}
+.count{margin-left:auto;font-size:11.5px;color:#6f706a;font-variant-numeric:tabular-nums}
+.indent{padding-left:14px}
+.mutedIndent{font-size:12.5px;color:#5d5e57;margin:2px 0 6px 34px}
+.live:empty{display:none}
+.toast{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:8px 4px 0;padding:8px 10px;border-radius:10px;background:#171715;color:#fff;font-size:12.5px}
+.toast button{border:0;background:transparent;color:#ffe436;font-weight:700;cursor:pointer;padding:4px 6px;border-radius:6px;font:inherit;font-size:12.5px}
+.noteWarn{font-size:11.5px;color:#8a1f11;margin:8px 10px 0}
+.archivedLink{display:flex;align-items:center;gap:7px;margin:8px 4px 0;min-height:32px;padding:0 8px;border:0;border-radius:8px;background:transparent;color:#4a4b45;font:inherit;font-size:12.5px;cursor:pointer;align-self:flex-start}
+.archivedLink:hover{background:#e9e7dd;color:#171715}
+.archivedList{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.archivedList li{display:flex;align-items:center;justify-content:space-between;gap:12px;border:1px solid #e2e0d6;border-radius:10px;padding:8px 8px 8px 12px;font-size:13.5px}
+@media(pointer:coarse){.more,.folderMore,.headButton{width:40px;height:40px}}

@@ -43,7 +43,7 @@ export function ProviderActions({ provider, state, canManage, start, disconnect,
   if (state === 'connected') {
     return (
       <div className={s.actionsRow}>
-        <Link className={s.primary} href="/dashboard/chat">Use in Chat</Link>
+        <Link className={s.primary} href="/workspace">Use in Chat</Link>
         {canManage && <button ref={trigger} type="button" className={s.secondary} onClick={() => setConfirming(true)}>Disconnect…</button>}
         {confirming && (
           <DisconnectDialog

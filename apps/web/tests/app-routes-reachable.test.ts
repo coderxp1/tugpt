@@ -43,7 +43,31 @@ const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
   { path: '/auth/website/error', by: 'Historical error page retained for old bookmarks; start/callback are explicitly retired410 with no new OAuth redirects.' },
   {
     path: '/',
-    by: 'Whatever a person types or bookmarks for the bare domain. It redirects to /dashboard and renders nothing.',
+    by: 'Whatever a person types or bookmarks for the bare domain. It redirects to /workspace and renders nothing.',
+  },
+  {
+    path: '/dashboard/chat',
+    by: 'Old bookmarks and links from before Phase 1; the page is a server redirect to /workspace and renders nothing.',
+  },
+  {
+    path: '/workspace/agents',
+    by: 'The Workspace sidebar "Agents" link and the composer agent menu "Browse agents" (WorkspaceFrame.tsx, AgentMenu.tsx; asserted in WorkspaceFrame.test.tsx and ChatView.test.tsx).',
+  },
+  {
+    path: '/workspace/library',
+    by: 'The Workspace sidebar "Library" link and the new-chat "More starters in the Library" link (WorkspaceFrame.tsx, NewChatHome.tsx; asserted in WorkspaceFrame.test.tsx).',
+  },
+  {
+    path: '/workspace/approvals',
+    by: 'The Workspace sidebar "Approvals" link, shown once GET /api/v1/approvals answers, and the "View approvals" link in the decision notice (WorkspaceFrame.tsx; asserted in FrameApprovals.test.tsx).',
+  },
+  {
+    path: '/workspace/images',
+    by: 'The Workspace sidebar "Images" link, the composer "Create an image" button and the image starter (asserted in WorkspaceFrame.test.tsx and ChatView.test.tsx).',
+  },
+  {
+    path: '/workspace/c/[threadId]',
+    by: 'Every recent chat in the Workspace sidebar links to one (ThreadList.tsx, asserted in WorkspaceFrame.test.tsx). A dynamic route has no single URL.',
   },
   {
     path: '/auth/login',
@@ -59,7 +83,7 @@ const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
   },
   {
     path: '/dashboard',
-    by: 'The bare domain redirects here (app/page.tsx), and the product name in every tool page header (AppShell.tsx) links back to it, asserted in AppShell.test.tsx.',
+    by: 'The Workspace sidebar and top bar "Dashboard" links (WorkspaceFrame.tsx, asserted in WorkspaceFrame.test.tsx), and the product name in every tool page header (AppShell.tsx).',
   },
   {
     path: '/dashboard/drafts/[draftId]',

@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen } from '@testing-library/react';
 
-const nav = vi.hoisted(() => ({ path: '/dashboard/chat' }));
+const nav = vi.hoisted(() => ({ path: '/dashboard/create' }));
 vi.mock('next/navigation', () => ({ usePathname: () => nav.path }));
 vi.mock('@/i18n/provider', () => ({ useT: () => (k: string) => (k === 'hub.state.held' ? 'On hold pending review' : k) }));
 import { DashboardFrame } from './DashboardFrame';
@@ -27,7 +27,7 @@ describe('DashboardFrame', () => {
   });
 
   it('shows the same person on every dashboard page and never an organization or company name', () => {
-    for (const [path, overview] of [['/dashboard', true], ['/dashboard/chat', false], ['/dashboard/create', false], ['/dashboard/connect', false], ['/dashboard/settings', false], ['/dashboard/inbox', false]] as const) {
+    for (const [path, overview] of [['/dashboard', true], ['/dashboard/create', false], ['/dashboard/connect', false], ['/dashboard/settings', false], ['/dashboard/inbox', false]] as const) {
       nav.path = path;
       render(<DashboardFrame fullName="Ben Kraus" email="ben@nordwind.example" overview={overview}><p>x</p></DashboardFrame>);
       const side = screen.getByLabelText('Dashboard navigation');
@@ -37,7 +37,15 @@ describe('DashboardFrame', () => {
       expect(screen.getByRole('link', { name: 'Your account: Ben Kraus' })).toBeTruthy();
       cleanup();
     }
-    nav.path = '/dashboard/chat';
+    nav.path = '/dashboard/create';
+  });
+
+  it('links to the Workspace from the sidebar and the top bar (chat moved to /workspace)', () => {
+    render(<DashboardFrame email="anna@example.test"><p>x</p></DashboardFrame>);
+    const hrefs = screen.getAllByRole('link').map((a) => a.getAttribute('href'));
+    expect(hrefs.filter((h) => h === '/workspace').length).toBeGreaterThanOrEqual(2);
+    expect(hrefs).not.toContain('/dashboard/chat');
+    expect(screen.getByRole('link', { name: 'dashboard.openWorkspace' }).getAttribute('href')).toBe('/workspace');
   });
 
   it('falls back to the email when the person has no display name', () => {

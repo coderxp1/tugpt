@@ -1,10 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { MUTATION_HEADERS } from './ChatWorkspace';
+import { MUTATION_HEADERS } from './useChatSession';
 import { isSameOriginMutation } from '@/lib/http/mutations';
 
-const source = readFileSync(path.join(__dirname, 'ChatWorkspace.tsx'), 'utf8');
+const source = readFileSync(path.join(__dirname, 'useChatSession.ts'), 'utf8');
 
 describe('chat client mutations pass the same-origin guard', () => {
   it('every POST in the chat client uses MUTATION_HEADERS', () => {

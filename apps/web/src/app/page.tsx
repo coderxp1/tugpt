@@ -26,6 +26,10 @@
  * Since 2026-11-01 `/` points at the Dashboard hub (/dashboard), the product
  * hub every signed-in person lands on; the inbox is one product inside it.
  *
+ * Since 2026-11-16 `/` points at the Workspace (/workspace): product decision 4 of the
+ * Dashboard / Workspace split makes the Workspace the landing page after login. The Dashboard
+ * stays one click away (Workspace sidebar and top bar).
+ *
  * When a real landing page exists, replace this — and remember that `/` is
  * classified `public` in proxy.ts, so whatever replaces it is served to
  * anyone who asks. See proxy-route-coverage.test.ts.
@@ -34,5 +38,5 @@
 import { redirect } from 'next/navigation';
 
 export default function RootPage(): never {
-  redirect('/dashboard');
+  redirect('/workspace');
 }

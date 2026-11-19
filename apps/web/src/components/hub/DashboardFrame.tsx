@@ -17,7 +17,6 @@ const modules: readonly { href: string; title: string; icon: ProductGlyph; held?
   { href: '/dashboard/analytics', title: 'Usage & Costs', icon: 'chart' },
 ];
 const destinations: readonly { href: string; title: string }[] = [
-  { href: '/dashboard/chat', title: 'Chat' },
   { href: '/dashboard/connect', title: 'Connect' },
   { href: '/dashboard/create', title: 'Create' },
   { href: '/dashboard/settings', title: 'Settings' },
@@ -73,7 +72,8 @@ export function DashboardFrame({ fullName = null, email, children, overview = fa
       <button type="button" className={s.mobileClose} onClick={close} aria-label="Close navigation">×</button>
       <nav className={s.sideNav} aria-label="Overview navigation">
         {navLink('/dashboard', 'Overview', 'chart', overview)}
-        {navLink('/dashboard/chat', 'Chat', 'chat', is('/dashboard/chat'))}
+        {/* Chat moved to the Workspace (Phase 1): same session, separate app frame. */}
+        {navLink('/workspace', t('workspace.name'), 'chat')}
       </nav>
       <div className={s.sideLabel}>Your platform</div>
       <nav className={s.sideNav} aria-label="Platform navigation">
@@ -101,7 +101,7 @@ export function DashboardFrame({ fullName = null, email, children, overview = fa
       <header className={s.topbar}>
         <button ref={menu} className={s.mobileMenu} type="button" aria-label="Open navigation" aria-controls="dashboard-sidebar" aria-expanded={open} onClick={() => setOpen(!open)}><span aria-hidden="true">☰</span></button>
         <div className={s.crumb}>TuGPT <span aria-hidden="true"> / </span><strong>{overview ? 'Overview' : current?.title ?? 'Dashboard'}</strong></div>
-        <div className={s.topActions}><Link href="/dashboard/settings" prefetch={false} className={s.accountMark} aria-label={`Your account: ${displayName}`}>{initial}</Link></div>
+        <div className={s.topActions}><Link href="/workspace" prefetch={false} className={s.openWorkspace}>{t('dashboard.openWorkspace')}</Link><Link href="/dashboard/settings" prefetch={false} className={s.accountMark} aria-label={`Your account: ${displayName}`}>{initial}</Link></div>
       </header>
       <main id="contenido" className={overview ? s.content : s.toolContent}>{children}</main>
     </div>

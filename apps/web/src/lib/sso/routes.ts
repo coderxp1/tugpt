@@ -28,7 +28,7 @@ export async function complete(request:Request){try{
  const ticket=cookieValue(request.headers.get('cookie'),TICKET_COOKIE);if(!ticket)throw new SsoError(401,'ticket_invalid');
  const raw=opaque();const row=await control<{expires_at:string}|null>('consume_ticket',{p_ticket_hash:digest(ticket),p_session_hash:digest(raw)});
  if(!row)throw new SsoError(401,'ticket_invalid');
- const h=headers(request);h.append('Set-Cookie',cookie(TICKET_COOKIE,'',0));h.append('Set-Cookie',cookie(SESSION_COOKIE,raw,(Date.parse(row.expires_at)-Date.now())/1000));h.set('Location','/dashboard');return new Response(null,{status:303,headers:h});
+ const h=headers(request);h.append('Set-Cookie',cookie(TICKET_COOKIE,'',0));h.append('Set-Cookie',cookie(SESSION_COOKIE,raw,(Date.parse(row.expires_at)-Date.now())/1000));h.set('Location','/workspace');return new Response(null,{status:303,headers:h});
  }catch(e){const r=failure(request,e);r.headers.append('Set-Cookie',cookie(TICKET_COOKIE,'',0));return r;}}
 export async function revoke(request:Request){try{const id=await identity(request);await control('revoke_auth_session',{p_subject:id.subject,p_auth_session:id.auth_session});return json(request,200,{revoked:true},true);}catch(e){return failure(request,e,true);}}
 export async function logout(request:Request){try{

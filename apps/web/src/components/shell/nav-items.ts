@@ -22,8 +22,8 @@ export interface NavItem {
  * "what did the AI write" about the subset that already has a draft.
  */
 export const NAV_ITEMS: readonly NavItem[] = [
-  // Chat is the workspace's front door (2026-11).
-  { href: '/dashboard/chat', labelKey: 'nav.chat' },
+  // Chat is the Workspace's front door; since Phase 1 it lives at /workspace (2026-11-16).
+  { href: '/workspace', labelKey: 'nav.chat' },
   { href: '/dashboard/inbox', labelKey: 'nav.inbox' },
   { href: '/dashboard/drafts', labelKey: 'nav.drafts' },
   // Knowledge sits with the reviewer's tools: it is what the drafts

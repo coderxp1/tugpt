@@ -1,0 +1,110 @@
+/*
+ * Workspace identity: the same TuGPT ink, yellow and paper as the Dashboard, turned inside out.
+ * The Dashboard is a dark control rail around white panels; the Workspace is a light paper rail
+ * around one white working canvas, with a yellow marker for "where you are".
+ */
+.frame{--ink:#171715;--paper:#f4f3ee;--line:#e2e0d6;--muted:#5d5e57;--yellow:#ffe436;--focus:#8c4bce;--rail:272px;
+  display:grid;grid-template-columns:var(--rail) minmax(0,1fr);height:100dvh;width:100%;flex:1;min-height:0;
+  background:#fff;color:var(--ink);font:15px/1.45 Rooftop,Arial,sans-serif;color-scheme:light}
+.frame *{box-sizing:border-box}
+/* Zero specificity: component classes (buttons, chips) keep their own colours. */
+:where(.frame a){color:inherit;text-decoration:none}
+.frame :is(a,button,summary,select,textarea,input):focus-visible{outline:3px solid var(--focus);outline-offset:2px}
+.frame svg{display:block;flex:none}
+.skip{position:absolute;left:12px;top:-60px;z-index:100;background:var(--ink);color:#fff!important;padding:10px 14px;border-radius:8px}
+.skip:focus{top:12px}
+.sr{position:absolute;width:1px;height:1px;padding:0;margin:-1px;overflow:hidden;clip:rect(0,0,0,0);white-space:nowrap;border:0}
+
+.sidebar{background:var(--paper);border-right:1px solid var(--line);display:flex;flex-direction:column;min-height:0;height:100dvh;padding:14px 10px 10px;overflow:hidden;z-index:40}
+.head{display:flex;align-items:center;gap:6px;padding:2px 4px 12px 6px}
+.brand{display:flex;align-items:center;gap:8px;min-width:0;margin-right:auto}
+.word{font:24px/1 Gravity,Arial,sans-serif;letter-spacing:-1px}
+.app{font-size:10.5px;font-weight:700;letter-spacing:.08em;text-transform:uppercase;border:1.5px solid var(--ink);border-radius:5px;padding:2px 6px;margin-left:2px}
+.collapse,.close{width:34px;height:34px;display:grid;place-items:center;border-radius:8px;border:0;background:transparent;color:var(--muted);cursor:pointer}
+.collapse:hover,.close:hover{background:#e6e4da;color:var(--ink)}
+.close{display:none}
+
+.newChat{display:flex;align-items:center;gap:10px;min-height:42px;padding:0 14px;border-radius:10px;background:var(--yellow);color:var(--ink)!important;font-weight:700;font-size:14.5px;box-shadow:inset 0 0 0 1.5px var(--ink)}
+.newChat:hover{background:#ffed78}
+.newChat[aria-disabled="true"]{opacity:.55;cursor:not-allowed}
+
+.search{position:relative;display:flex;align-items:center;gap:8px;margin-top:10px;padding:0 10px;min-height:38px;border-radius:9px;background:#fff;border:1px solid var(--line);color:var(--muted)}
+.search:focus-within{border-color:var(--ink);box-shadow:0 0 0 3px #8c4bce2e}
+.search input{flex:1;min-width:0;border:0;background:transparent;font:inherit;font-size:13.5px;color:var(--ink);padding:8px 0;outline:none}
+.search input::-webkit-search-cancel-button{cursor:pointer}
+.frame .search input:focus-visible{outline:none}
+.kbd{font:600 10.5px/1 Rooftop,Arial,sans-serif;color:#7b7c75;border:1px solid #d9d7cc;border-radius:5px;padding:3px 5px;background:var(--paper)}
+
+.nav{display:grid;gap:1px;margin-top:10px}
+.navItem{display:flex;align-items:center;gap:10px;min-height:38px;padding:0 10px;border-radius:9px;font-size:14px;color:#2b2b28}
+.navItem:hover{background:#e9e7dd}
+.navItem.current{background:#fff;font-weight:700;box-shadow:0 1px 0 var(--line)}
+
+.later{margin:8px 2px 0;border-top:1px solid var(--line);padding-top:6px;font-size:13px}
+.later summary{cursor:pointer;color:var(--muted);font-weight:700;font-size:11px;letter-spacing:.12em;text-transform:uppercase;padding:7px 8px;border-radius:8px;list-style-position:inside}
+.later ul{list-style:none;margin:2px 0 0;padding:0;display:grid;gap:1px;max-height:24dvh;overflow-y:auto}
+.laterOff,.laterLink{display:flex;align-items:baseline;justify-content:space-between;gap:8px;padding:5px 10px;border-radius:8px}
+.laterOff{color:#6f706a;cursor:default}
+.laterLink:hover{background:#e9e7dd}
+.laterOff small,.laterLink small{font-size:10.5px;white-space:nowrap;color:var(--muted);border:1px solid #cfccbf;border-radius:4px;padding:0 5px}
+.laterLink small{border-color:var(--ink);color:var(--ink)}
+
+.foot{margin-top:auto;padding-top:8px;border-top:1px solid var(--line);display:grid;gap:4px}
+.toDashboard{display:flex;align-items:center;gap:10px;min-height:38px;padding:0 10px;border-radius:9px;font-size:13.5px;font-weight:600;color:#2b2b28}
+.toDashboard:hover{background:#e9e7dd}
+.footHint{margin-left:auto;font-size:11px;font-weight:500;color:var(--muted)}
+
+.profile{position:relative}
+.person{display:flex;align-items:center;gap:10px;width:100%;padding:6px 8px;min-height:48px;border-radius:10px;border:0;background:transparent;color:var(--ink);cursor:pointer;text-align:left;font:inherit}
+.person:hover,.person[aria-expanded="true"]{background:#e9e7dd}
+.avatar{width:32px;height:32px;border-radius:50%;display:grid;place-items:center;background:var(--ink);color:#fff;font-weight:700;font-size:13px;flex:none}
+.identity{display:grid;min-width:0;font-size:13px;flex:1}
+.identity strong,.identity small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.identity small{color:var(--muted)}
+.profileMenu{position:absolute;left:0;right:0;bottom:calc(100% + 6px);background:#fff;border:1px solid var(--line);border-radius:12px;box-shadow:0 14px 40px #17171526;padding:6px;display:grid;gap:2px;z-index:60}
+.profileHead{display:grid;padding:8px 10px 10px;border-bottom:1px solid #efede5;margin-bottom:4px;font-size:13px;min-width:0}
+.profileHead strong,.profileHead small{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.profileHead small{color:var(--muted)}
+.menuItem{display:flex;align-items:center;gap:10px;min-height:38px;padding:0 10px;border-radius:8px;font-size:13.5px;color:#2b2b28}
+.menuItem:hover,.menuItem:focus{background:#f4f3ee;outline:none}
+.frame .menuItem:focus-visible{outline:2px solid var(--focus);outline-offset:-2px}
+
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;height:100dvh}
+.topbar{display:none}
+.content{flex:1;min-height:0;min-width:0;outline:none;overflow:hidden}
+.backdrop{display:none}
+
+/* Desktop: collapsed rail. The top bar appears so the sidebar can be brought back. */
+@media(min-width:1024px){
+  .frame.collapsed{grid-template-columns:minmax(0,1fr)}
+  .frame.collapsed .sidebar{display:none}
+  .frame.collapsed .topbar{display:flex}
+  .frame.collapsed .topDashboard{display:none}
+}
+.topbar{align-items:center;gap:8px;min-height:54px;padding:8px 12px;border-bottom:1px solid var(--line);background:#fff;flex:none}
+.menu,.topNew{width:38px;height:38px;display:grid;place-items:center;border:1px solid #dcdad0;border-radius:10px;background:#fff;cursor:pointer;color:var(--ink)}
+.menu:hover,.topNew:hover{background:var(--paper)}
+.topNew[aria-disabled="true"]{opacity:.5;cursor:not-allowed}
+.topBrand{display:flex;align-items:center;gap:7px;font-weight:700;font-size:14px;margin-right:auto}
+.topDashboard{min-height:38px;display:flex;align-items:center;padding:0 14px;border-radius:100px;background:var(--ink);color:#fff!important;font-weight:700;font-size:13px}
+
+@media(max-width:1023px){
+  .frame{display:block}
+  .collapse{display:none}
+  .sidebar{position:fixed;left:0;top:0;width:min(304px,88vw);transform:translateX(-105%);visibility:hidden;transition:transform .22s ease,visibility .22s;box-shadow:0 0 40px #0003}
+  /* Visible from the first frame when opening (focus moves in at once); hidden only after the slide-out. */
+  .sidebar.open{transform:translateX(0);visibility:visible;transition:transform .22s ease,visibility 0s}
+  .close{display:grid}
+  .kbd{display:none}
+  .backdrop{display:block;position:fixed;inset:0;background:#17171580;border:0;z-index:39;width:100%;height:100dvh}
+  .topbar{display:flex}
+}
+@media(max-width:420px){.topDashboard{padding:0 12px;font-size:12.5px}}
+@media(prefers-reduced-motion:reduce){.sidebar{transition:none}}
+@media(forced-colors:active){.newChat,.navItem.current{border:1px solid CanvasText}}
+/* Approvals: pending count in the nav, decisions announced politely above the page. */
+.navBadge{margin-left:auto;min-width:22px;height:20px;padding:0 6px;border-radius:999px;background:#ffe436;color:#171715;box-shadow:inset 0 0 0 1px #171715;font-size:11.5px;font-weight:750;display:inline-grid;place-items:center;font-variant-numeric:tabular-nums}
+.liveRegion:empty{display:none}
+.decided{margin:10px 16px 0;padding:9px 12px;border-radius:10px;background:#fffbe0;border:1px solid #eadb85;color:#3d3300;font-size:13.5px}
+.decided a{color:#171715;font-weight:700;text-decoration:underline;text-underline-offset:2px}
+.decided a:focus-visible{outline:3px solid #8c4bce;outline-offset:2px}

@@ -19,7 +19,7 @@ describe('reference-based working Dashboard', () => {
  it('renders the organization, account and English greeting', () => { renderHub(); expect(screen.getAllByText('TuGPT').length).toBeGreaterThan(0); expect(screen.getByText('owner@example.com')).toBeTruthy(); expect(screen.getByRole('heading', {name:'Good to have you here.'})).toBeTruthy(); });
  it('preserves every implemented destination instead of opening dialogs', () => {
   renderHub(); const list=screen.getByRole('list',{name:'TuGPT products'});
-  expect(within(list).getAllByRole('link').map(a=>a.getAttribute('href')).sort()).toEqual(['/dashboard/chat','/dashboard/inbox','/dashboard/drafts','/dashboard/knowledge','/dashboard/analytics'].sort());
+  expect(within(list).getAllByRole('link').map(a=>a.getAttribute('href')).sort()).toEqual(['/workspace','/dashboard/inbox','/dashboard/drafts','/dashboard/knowledge','/dashboard/analytics'].sort());
   expect(screen.queryByRole('dialog')).toBeNull();
  });
  it('represents exactly all fourteen official Blueprint areas', () => {
@@ -27,7 +27,7 @@ describe('reference-based working Dashboard', () => {
   expect([...areas].sort()).toEqual([...BLUEPRINT_AREAS].sort()); expect(areas.size).toBe(14);
  });
  it('links Chat, and does not fabricate actions for planned capabilities', () => {
-  const {container}=renderHub(); expect(container.querySelector('[data-capability="workspace"] a')?.getAttribute('href')).toBe('/dashboard/chat');
+  const {container}=renderHub(); expect(container.querySelector('[data-capability="workspace"] a')?.getAttribute('href')).toBe('/workspace');
   for(const id of ['media','calendar','whatsapp','voice','crm','research','agents','privacy','developer','mcp']) expect(container.querySelector(`[data-capability="${id}"] a`)).toBeNull();
   expect(container.querySelectorAll('a[href*="workspace.tugpt.pro"]').length).toBe(0);
  });
