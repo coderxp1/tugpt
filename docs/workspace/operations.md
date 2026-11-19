@@ -2,13 +2,19 @@
 
 Scope: what an operator must configure or know to run the workspace features
 (chat threads, library, custom agents) safely. Values verified on a fresh
-database built from the 112 committed migrations (latest `20261120100009`).
+database built from the 113 committed migrations (latest `20261120100010`).
 
 ## 1. Deploy order
 
 1. Apply migrations **before** deploying the app. The app calls
    `link_custom_agent_collection` (100009) and the 8-argument
    `search_chat_threads` (100007); an old database returns 404/500 for those.
+   Since Q-9 the app selects `chat_messages.citations` / `knowledge_unavailable`
+   (100010) on every thread read: deploying the app before 100010 makes
+   PostgREST reject those selects (unknown column), so thread reads and sends
+   fail (status code not separately verified). 100010 is additive (two
+   NOT NULL columns with constant defaults, two CHECKs), so it is safe to apply
+   while the old app runs.
 2. Deploy web and worker together; the worker writes chunks the web reads.
 3. Migrations are frozen once committed; checksums live in
    `supabase/migrations/checksums.json`.

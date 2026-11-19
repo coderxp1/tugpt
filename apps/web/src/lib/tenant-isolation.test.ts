@@ -16,7 +16,7 @@ function recordingDb(result: unknown) {
       const done: DbResult = { data: result, error: null };
       const q: DbQuery = {
         select: () => q, eq: (c, v) => { filters[c] = v; return q; }, is: (c, v) => { filters[c] = v; return q; },
-        order: () => q, limit: () => q,
+        in: (c, v) => { filters[c] = v; return q; }, order: () => q, limit: () => q,
         single: () => Promise.resolve(done), maybeSingle: () => Promise.resolve(done),
         then: (ok, ko) => Promise.resolve(done).then(ok, ko),
       };

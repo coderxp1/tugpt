@@ -10,6 +10,7 @@
  * intersected with the CALLER's connected capabilities, and its collections
  * are searched under the CALLER's RLS.
  */
+import type { MessageCitation } from '@/lib/chat/store';
 import type { TenantContext } from '@tugpt/auth';
 import type { Collection, FileVisibility, SearchHit } from './contracts';
 import { check, num, oneOf, optStr, rows, str, type WorkspaceDb } from './db';
@@ -366,6 +367,7 @@ export function agentSystemPrompt(base: string, agent: { name: string; instructi
   return lines.join('\n');
 }
 
-export interface Citation { readonly n: number; readonly documentId: string; readonly collectionId: string; readonly fileId: string; readonly title: string; readonly ordinal: number; readonly snippet: string }
+/** One source of an agent answer: streamed in the 'citations' event and stored on the assistant message (20261120100010). */
+export type Citation = MessageCitation;
 export const toCitations = (hits: readonly SearchHit[]): Citation[] =>
   hits.map((h, i) => ({ n: i + 1, documentId: h.documentId, collectionId: h.collectionId, fileId: h.fileId, title: h.title, ordinal: h.ordinal, snippet: h.snippet }));

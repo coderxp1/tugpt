@@ -180,17 +180,19 @@ const RLS_ADMIN_ONLY = new Set(['external_tool_endpoints', 'external_tool_snapsh
 
 class Query implements DbQuery {
   private filters: [string, unknown][] = [];
+  private anyOf: [string, readonly unknown[]][] = [];
   private sort: [string, boolean] | null = null;
   private max: number | null = null;
   constructor(private readonly rows: () => Row[], private readonly cols: string) {}
   select(): DbQuery { return this; }
   eq(column: string, value: unknown): DbQuery { this.filters.push([column, value]); return this; }
   is(column: string, value: null): DbQuery { this.filters.push([column, value]); return this; }
+  in(column: string, values: readonly unknown[]): DbQuery { this.anyOf.push([column, values]); return this; }
   // PostgREST defaults to ascending; Agent 2's code calls .order('name') without options.
   order(column: string, options?: { ascending: boolean }): DbQuery { this.sort = [column, options?.ascending ?? true]; return this; }
   limit(n: number): DbQuery { this.max = n; return this; }
   private run(): Row[] {
-    let out = this.rows().filter((r) => this.filters.every(([k, v]) => r[k] === v));
+    let out = this.rows().filter((r) => this.filters.every(([k, v]) => r[k] === v) && this.anyOf.every(([k, vs]) => vs.includes(r[k])));
     if (this.sort) {
       const [k, asc] = this.sort;
       out = [...out].sort((a, b) => (a[k] === b[k] ? 0 : (a[k] as never) < (b[k] as never) ? (asc ? -1 : 1) : (asc ? 1 : -1)));

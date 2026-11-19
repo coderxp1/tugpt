@@ -44,6 +44,27 @@ Roles: `owner`, `admin`, `agent` (member) and `viewer`. "Admin" below means owne
   with a composite FK; any other folder returns 404.
 - Conversations are private to their owner. Org owners and admins do **not** see members' threads.
 
+### Saved threads: agent identity and citations (Q-9, migration `20261120100010`)
+
+`GET /api/v1/chat/threads/{id}` returns `{thread:{id,title,modelKey,updatedAt,agentId}, messages: Message[]}`.
+`POST /chat/threads` and the plain `GET /chat/threads` list carry `agentId` too; the search/paged list
+(`search_chat_threads`) does **not** yet.
+
+- `agentId` is `null` for plain chat and after the agent was deleted (FK `ON DELETE SET NULL`). A binding to an
+  agent the caller can no longer read is still returned; `GET /agents/{id}` then answers 404 and a new message 409.
+- Every message has `citations: Citation[]` and `knowledgeUnavailable: boolean`. Only assistant messages can be
+  non-empty (CHECK `chat_messages_citations_assistant_only`); user/tool messages are always `[]` / `false`.
+- `Citation = {n, documentId, collectionId, fileId, title, ordinal, snippet}`, exactly the streamed `citations`
+  event. Shape is enforced in the database (`chat_messages_citations_valid`: ≤20 entries, exactly these keys,
+  lowercase uuids, `n` 1–999, `ordinal` ≥0, title 1–255, snippet ≤2000 characters).
+- Stored citations are a **snapshot** written together with the assistant message. On every read they are
+  re-authorized under the reader's RLS: a citation whose document is no longer readable, was deleted or moved
+  to another collection/file is **omitted** (remaining entries keep their original `n`). The stored row is not
+  changed, so regained access restores it. Title renames are not reflected.
+- A failed knowledge search is persisted as `knowledgeUnavailable: true` with `citations: []`.
+- Another user, another tenant or a forged tenant claim gets `404` for the thread; there is no oracle for
+  `agentId` or citations.
+
 ## 3. Approvals (persistent)
 
 These extend Agent 2's MCP approvals; they don't replace them. A **request** can exist before anyone
@@ -299,7 +320,7 @@ Details hold IDs, hashes and classes only: no arguments, file content, filenames
 `…100004_workspace_library` (frozen), then `20261120100001_workspace_knowledge_vectors` ·
 `…100002_workspace_document_jobs` · `…100003_workspace_rate_limits` · `…100004_workspace_custom_agents` ·
 `…100005_workspace_storage_maintenance` · `…100006_workspace_document_dedupe` (one document per content per collection) ·
-`…100007_workspace_conversation_cursor` (composite thread cursor) · `…100008_workspace_agent_save` (atomic agent save) · `…100009_workspace_agent_owner_edit` (owner-only editing in the database, atomic single link). All are registered in `supabase/migrations/checksums.json`. Any
+`…100007_workspace_conversation_cursor` (composite thread cursor) · `…100008_workspace_agent_save` (atomic agent save) · `…100009_workspace_agent_owner_edit` (owner-only editing in the database, atomic single link) · `…100010_workspace_message_citations` (persisted citations and `knowledge_unavailable` on assistant messages, Q-9). All are registered in `supabase/migrations/checksums.json`. Any
 further change needs a **new** migration ID.
 
 ## 10. Tests

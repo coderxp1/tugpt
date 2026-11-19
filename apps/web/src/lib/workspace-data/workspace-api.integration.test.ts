@@ -1127,6 +1127,145 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         expect(o[2].citations.map((c: { collectionId: string }) => c.collectionId)).toEqual([ownerOnlyCol]);
       });
 
+      describe('Q-9 saved threads: agent identity and citations survive a reload', () => {
+        const CITATION_KEYS = ['collectionId', 'documentId', 'fileId', 'n', 'ordinal', 'snippet', 'title'];
+        const getThread = (threadId: string) => call('thread', 'GET', { params: { threadId } });
+        const assistants = (json: { messages: { role: string }[] }) => json.messages.filter((m) => m.role === 'assistant') as any[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+
+        it('restores agentId and exactly the streamed citations, after the stream and after a second turn', async () => {
+          as(U.memberA);
+          const ev = events((await run(privAgent, { content: 'What ships with the quantum ledger migration?' })).text);
+          const tid = ev[0].thread.id as string;
+          const streamed = ev[2].citations;
+          expect(streamed.map((c: { fileId: string }) => c.fileId)).toEqual([mdFile]);
+          const done = ev.at(-1)!;
+          expect(done.type).toBe('done');
+          expect(done.message).toMatchObject({ role: 'assistant', citations: streamed, knowledgeUnavailable: false });
+
+          const g = await getThread(tid);
+          expect(g.status).toBe(200);
+          expect(Object.keys(g.json.thread).sort()).toEqual(['agentId', 'id', 'modelKey', 'title', 'updatedAt']);
+          expect(g.json.thread).toMatchObject({ id: tid, agentId: privAgent });
+          expect(g.json.messages.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant']);
+          expect(g.json.messages[0]).toMatchObject({ role: 'user', citations: [], knowledgeUnavailable: false });
+          expect(g.json.messages[1]).toEqual(done.message); // the restored row is the streamed final message
+          expect(Object.keys(g.json.messages[1].citations[0]).sort()).toEqual(CITATION_KEYS);
+          expect(g.json.messages[1].citations[0]).toMatchObject({ n: 1, collectionId: privateCol, fileId: mdFile, title: 'roadmap.md' });
+
+          // A second turn through the chat route (agent thread): both answers keep their own sources.
+          const ev2 = events((await send(tid, 'quantum ledger again')).text);
+          expect(ev2.at(-1)!.type).toBe('done');
+          const g2 = await getThread(tid);
+          expect(g2.json.thread.agentId).toBe(privAgent);
+          const a = assistants(g2.json);
+          expect(a).toHaveLength(2);
+          expect(a[0].citations).toEqual(streamed);
+          expect(a[1].citations).toEqual(ev2.find((e) => e.type === 'citations')!.citations);
+          expect(a[1].citations.length).toBeGreaterThan(0);
+        });
+
+        it('another user, another tenant or a forged tenant cannot read the thread, its agentId or its citations', async () => {
+          as(U.memberA);
+          const tid = events((await run(privAgent, { content: 'quantum ledger' })).text)[0].thread.id as string;
+          as(U.ownerA);
+          expect((await getThread(tid)).status).toBe(404);
+          as(U.ownerB);
+          expect((await getThread(tid)).status).toBe(404);
+          as(U.ownerB, ORG_A); // forged tenant claim
+          expect((await getThread(tid)).status).toBe(404);
+          as(U.memberA, ORG_B); // the owner, but under the wrong tenant
+          expect((await getThread(tid)).status).toBe(404);
+          for (const who of [U.ownerA, U.ownerB]) {
+            as(who);
+            const db = clients.get(who.id) as PostgrestClient;
+            expect((await db.from('chat_threads').select('agent_id').eq('id', tid)).data).toEqual([]);
+            expect((await db.from('chat_messages').select('citations,knowledge_unavailable').eq('thread_id', tid)).data).toEqual([]);
+            expect((await db.from('chat_threads').select('id').eq('agent_id', privAgent)).data).toEqual([]);
+          }
+          as(U.memberA);
+          expect((await getThread(tid)).json.thread.agentId).toBe(privAgent);
+        });
+
+        it('ordinary conversations: agentId null and no citations', async () => {
+          as(U.memberA);
+          const ev = events((await send(T_MEMBER, 'plain hello')).text);
+          expect(ev.map((e) => e.type)).not.toContain('citations');
+          expect(ev.at(-1)!.message).toMatchObject({ role: 'assistant', citations: [], knowledgeUnavailable: false });
+          const g = await getThread(T_MEMBER);
+          expect(g.status).toBe(200);
+          expect(g.json.thread).toMatchObject({ id: T_MEMBER, agentId: null });
+          expect(g.json.messages.length).toBeGreaterThan(0);
+          expect(g.json.messages.every((m: { citations: unknown[]; knowledgeUnavailable: boolean }) => m.citations.length === 0 && m.knowledgeUnavailable === false)).toBe(true);
+          // The plain list carries agentId too.
+          const listed = (await call('threads', 'GET')).json.threads as { id: string; agentId: string | null }[];
+          expect(listed.find((t) => t.id === T_MEMBER)).toMatchObject({ agentId: null });
+        });
+
+        it('citations follow the reader\'s current access; a deleted agent leaves agentId null', async () => {
+          as(U.ownerA);
+          const shared = (await call('collections', 'POST', { body: { name: 'Release notes', visibility: 'organization' } })).json.collection.id as string;
+          let desk = '';
+          try {
+            const f = (await upload('release.md', '# Release\n\nThe zebra protocol ships in Q4.', 'text/markdown')).json.file.id;
+            expect((await call('documents', 'POST', { params: { collectionId: shared }, body: { fileId: f } })).status).toBe(202);
+            expect(await drain()).toBe(1);
+            as(U.memberA);
+            desk = (await call('agents', 'POST', { body: { name: 'Zebra desk', instructions: 'Use the release notes.' } })).json.agent.id;
+            expect((await call('agentCollections', 'POST', { params: { agentId: desk }, body: { collectionId: shared } })).status).toBe(201);
+            const ev = events((await run(desk, { content: 'zebra protocol' })).text);
+            const tid = ev[0].thread.id as string;
+            const streamed = ev[2].citations;
+            expect(streamed.map((c: { collectionId: string }) => c.collectionId)).toEqual([shared]);
+            expect(assistants((await getThread(tid)).json)[0].citations).toEqual(streamed);
+
+            as(U.ownerA);
+            expect((await call('collection', 'PATCH', { params: { collectionId: shared }, body: { visibility: 'private' } })).status).toBe(200);
+            as(U.memberA);
+            const hidden = await getThread(tid);
+            expect(hidden.status).toBe(200);
+            expect(assistants(hidden.json)[0]).toMatchObject({ content: 'Hello from agent', citations: [] }); // omitted, not leaked
+            // The stored snapshot is untouched (owner's own RLS read), only the API response is filtered.
+            const own = clients.get(U.memberA.id) as PostgrestClient;
+            expect(((await own.from('chat_messages').select('citations').eq('thread_id', tid).eq('role', 'assistant')).data ?? [])[0].citations).toEqual(streamed);
+
+            as(U.ownerA);
+            expect((await call('collection', 'PATCH', { params: { collectionId: shared }, body: { visibility: 'organization' } })).status).toBe(200);
+            as(U.memberA);
+            expect(assistants((await getThread(tid)).json)[0].citations).toEqual(streamed);
+
+            as(U.ownerA);
+            expect((await call('collection', 'DELETE', { params: { collectionId: shared } })).status).toBe(200);
+            as(U.memberA);
+            expect(assistants((await getThread(tid)).json)[0].citations).toEqual([]); // document gone
+
+            expect((await call('agent', 'DELETE', { params: { agentId: desk } })).status).toBe(200);
+            desk = '';
+            const after = await getThread(tid);
+            expect(after.status).toBe(200);
+            expect(after.json.thread.agentId).toBeNull();
+            expect(assistants(after.json)).toHaveLength(1);
+          } finally {
+            as(U.ownerA);
+            await call('collection', 'DELETE', { params: { collectionId: shared } });
+            if (desk) { as(U.memberA); await call('agent', 'DELETE', { params: { agentId: desk } }); }
+          }
+        });
+
+        it('stores and restores knowledgeUnavailable when the knowledge search fails', async () => {
+          const agentsModule = await import('@/lib/workspace-data/agents');
+          const spy = vi.spyOn(agentsModule, 'retrieveForAgent').mockRejectedValueOnce(new Error('search down'));
+          try {
+            as(U.memberA);
+            const ev = events((await run(privAgent, { content: 'quantum ledger' })).text);
+            expect(spy).toHaveBeenCalledTimes(1);
+            expect(ev[2]).toMatchObject({ type: 'citations', citations: [], knowledgeUnavailable: true });
+            expect(ev.at(-1)!.message).toMatchObject({ citations: [], knowledgeUnavailable: true });
+            const restored = assistants((await getThread(ev[0].thread.id)).json)[0];
+            expect(restored).toMatchObject({ citations: [], knowledgeUnavailable: true });
+          } finally { spy.mockRestore(); }
+        });
+      });
+
       it('reports model outages as an error event and keeps the user message', async () => {
         as(U.memberA);
         llmFail = true;

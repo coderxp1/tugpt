@@ -7,6 +7,8 @@
  *   {type:'user',message} {type:'citations',citations,knowledgeUnavailable}
  *   {type:'tool_start'|'tool_result',...,provider} {type:'delta',text}
  *   {type:'approval_required',approval} {type:'done',message} | {type:'error',code}
+ * The assistant message (done/error) stores the streamed citations and
+ * knowledgeUnavailable, so GET /chat/threads/{id} restores them.
  * The chat client ignores the event types it does not know ('agent',
  * 'citations').
  *
@@ -216,7 +218,8 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
       const send = (e: object) => controller.enqueue(encoder.encode(`${JSON.stringify(e)}\n`));
       send({ type: 'agent', agent: { id: agent.id, name: agent.name, version: agent.version }, thread, unavailableTools: unavailable });
       send({ type: 'user', message: userMessage });
-      send({ type: 'citations', citations: toCitations(hits), knowledgeUnavailable });
+      const citations = toCitations(hits);
+      send({ type: 'citations', citations, knowledgeUnavailable });
       let answer = '';
       let status: 'complete' | 'error' | 'stopped' = 'complete';
       let errorCode: string | null = null;
@@ -255,6 +258,8 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
         const saved = await appendMessage(ctx.db, {
           organizationId: orgId, threadId, role: 'assistant', modelKey: model.key, status,
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
+          // Persist what was streamed, so a reloaded thread shows the same sources (re-authorised on read).
+          citations, knowledgeUnavailable,
         });
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key, ...(isFirst ? { title: titleFrom(content) } : {}) });
         if (!signal.aborted) send(errorCode ? { type: 'error', code: errorCode, message: saved } : { type: 'done', message: saved });

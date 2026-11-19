@@ -43,6 +43,16 @@ chars, collections ≤ 10. `version` does not bump on links-only saves.
   search has no cursor.
 - Agent-thread messages: 409 "This agent is no longer available to you";
   archived thread 404; a deleted agent turns the thread into plain chat.
+- **Reload (Q-9):** `GET /chat/threads/:id` →
+  `{thread:{id,title,modelKey,updatedAt,agentId}, messages:[{id,role,content,
+  createdAt,status,mentions,capabilityKey,citations,knowledgeUnavailable}]}`.
+  `citations` has the same shape as the stream event and equals the `done`
+  message. `agentId` is `null` for plain chat or a deleted agent; a binding to
+  an agent you can no longer read is still returned (then `GET /agents/:id`
+  404, send 409). Citations whose document the reader can no longer read are
+  omitted (not redacted); user/tool messages always have `[]`/`false`. The
+  plain list and `POST` include `agentId`; the search/paged list does not yet.
+  Restoring this into the UI and validating it is Agent 3's task.
 
 ## Stream events (NDJSON, one object per line, `type` field)
 
