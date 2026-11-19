@@ -57,6 +57,8 @@ export interface RpcCall {
   readonly hasId: boolean;
   readonly sessionId: string | null;
   readonly authorization: string | null;
+  /** The MCP-Protocol-Version request header, or null. */
+  readonly protocolVersion: string | null;
   /** HTTP status this server answered with. */
   status?: number;
 }
@@ -69,8 +71,11 @@ export type ToolReply = { text: string; isError?: boolean } | { rpcError: string
  * notify500 the `notifications/initialized` POST is answered 500
  * wrongId   tools/call replies carry a different id
  * noJsonrpc tools/call replies lack `jsonrpc: "2.0"`
+ * badVersion initialize negotiates protocolVersion 1999-01-01, which no client supports.
+ * collide    tools/call answers with an SSE stream whose FIRST event is a server->client request
+ *            (roots/list) carrying the same id as the client's request, then the real response.
  */
-export type ServerMode = 'ok' | 'http500' | 'redirect' | 'sse' | 'huge' | 'notify500' | 'wrongId' | 'noJsonrpc';
+export type ServerMode = 'ok' | 'http500' | 'redirect' | 'sse' | 'huge' | 'notify500' | 'wrongId' | 'noJsonrpc' | 'badVersion' | 'collide';
 /**
  * MCP Streamable HTTP session management (spec 2025-06-18, "Session Management"):
  * stateful   the server assigns a session ONLY in the `Mcp-Session-Id` response header of initialize,
@@ -108,7 +113,8 @@ export async function startMcpServer(tlsMaterial: { key: string; cert: string })
       try { msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
       const method = String(msg.method);
       const sessionHeader = (req.headers['mcp-session-id'] as string | undefined) ?? null;
-      const call: RpcCall = { method, params: msg.params, id: msg.id, hasId: 'id' in msg, sessionId: sessionHeader, authorization: req.headers.authorization ?? null };
+      const call: RpcCall = { method, params: msg.params, id: msg.id, hasId: 'id' in msg, sessionId: sessionHeader, authorization: req.headers.authorization ?? null,
+        protocolVersion: (req.headers['mcp-protocol-version'] as string | undefined) ?? null };
       calls.push(call);
       const end = (status: number, headers: Record<string, string> = {}, body?: string) => { call.status = status; res.writeHead(status, headers).end(body); };
       if (state.mode === 'http500') { end(500, {}, 'boom'); return; }
@@ -135,7 +141,7 @@ export async function startMcpServer(tlsMaterial: { key: string; cert: string })
       }
       let body: Record<string, unknown>;
       if (method === 'initialize') {
-        body = { jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1' } } };
+        body = { jsonrpc: '2.0', id: msg.id, result: { protocolVersion: state.mode === 'badVersion' ? '1999-01-01' : '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1' } } };
       } else if (method === 'tools/list') {
         body = { jsonrpc: '2.0', id: msg.id, result: { tools: [
           { name: 'search_docs', description: 'Search the documentation', inputSchema: { type: 'object', properties: { q: { type: 'string' } } } },
@@ -151,6 +157,11 @@ export async function startMcpServer(tlsMaterial: { key: string; cert: string })
         if (state.mode === 'noJsonrpc') delete body.jsonrpc;
       } else {
         body = { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'unknown method' } };
+      }
+      if (state.mode === 'collide' && method === 'tools/call') {
+        const serverRequest = `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', id: msg.id, method: 'roots/list' })}\n\n`;
+        end(200, { ...responseHeaders, 'content-type': 'text/event-stream' }, `${serverRequest}event: message\ndata: ${JSON.stringify(body)}\n\n`);
+        return;
       }
       if (state.mode === 'sse') {
         const json = JSON.stringify(body, null, 1).split('\n');

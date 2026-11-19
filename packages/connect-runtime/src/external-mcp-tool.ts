@@ -214,6 +214,18 @@ const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
 const MAX_DESCRIPTION_LENGTH = 2000;
 export const MAX_SNAPSHOT_TOOLS = 256;
 const MAX_TOOL_PAGES = 10;
+/** Largest MCP reply body this adapter parses, independent of the transport's own cap (egress: 1 MiB). */
+export const MAX_MCP_REPLY_BYTES = 1024 * 1024;
+/** Largest tools/call text result handed on; bigger results are OUTPUT_TOO_LARGE, never truncated. */
+export const MAX_MCP_RESULT_TEXT_BYTES = 64 * 1024;
+/** MCP protocol revisions this client implements. The negotiated one is sent as MCP-Protocol-Version. */
+export const SUPPORTED_MCP_PROTOCOL_VERSIONS: readonly string[] = ['2025-06-18', '2025-03-26'];
+const CLIENT_PROTOCOL_VERSION = '2025-06-18';
+
+/** A reply exceeded MAX_MCP_REPLY_BYTES (discovery: DISCOVERY_TOO_LARGE; tools/call: OUTPUT_TOO_LARGE). */
+class McpTooLargeError extends McpDiscoveryError {
+  constructor() { super('DISCOVERY_TOO_LARGE', 'MCP reply too large'); }
+}
 
 function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
@@ -240,10 +252,13 @@ function replyMessages(text: string, contentType: string | null): string[] {
  * JSON-RPC 2.0 with exactly this id; a JSON-RPC error object is an error; no response at all is an error.
  */
 function parseRpcReply(text: string, id: number, contentType: string | null = null): Record<string, unknown> {
+  if (Buffer.byteLength(text, 'utf8') > MAX_MCP_REPLY_BYTES) throw new McpTooLargeError();
   for (const c of replyMessages(text, contentType)) {
     let msg: unknown;
     try { msg = JSON.parse(c); } catch { continue; }
-    if (!isRecord(msg) || !('id' in msg) || msg.id !== id) continue; // notifications, other requests
+    if (!isRecord(msg) || !('id' in msg) || msg.id !== id) continue; // notifications, other responses
+    // A server->client REQUEST (it has a method) may reuse our id: ids are per sender. It is not our response.
+    if ('method' in msg) continue;
     if (msg.jsonrpc !== '2.0') throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'reply is not JSON-RPC 2.0');
     if ('error' in msg && msg.error !== undefined) throw new McpDiscoveryError('DISCOVERY_RPC_ERROR', 'MCP endpoint returned a JSON-RPC error');
     if (!isRecord(msg.result)) throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'JSON-RPC reply has no result object');
@@ -262,14 +277,20 @@ function parseRpcReply(text: string, id: number, contentType: string | null = nu
  * protocol, and trusting it would let a reply body choose a header value.
  * The notification carries no `id` and must be answered 2xx (202 per spec); anything else aborts.
  * Only 200 is accepted for requests; redirects are never followed.
+ * Version: the initialize result's `protocolVersion` must be one this client implements, otherwise the
+ * session is abandoned before any other message; the negotiated version is sent as the
+ * `MCP-Protocol-Version` header on every later message (spec 2025-06-18, transports).
  */
 const SESSION_ID_PATTERN = /^[\x21-\x7e]{1,256}$/; // visible ASCII, per spec
 
 async function openMcpSession(endpoint: ExternalMcpEndpoint, fetchFn: ExternalMcpFetch) {
+  // Set once, after initialize; read by send() for every later message.
+  const protocol: { negotiated?: string } = {};
   async function send(message: Record<string, unknown>, sessionId: string | undefined) {
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
     if (endpoint.authHeader) headers.authorization = endpoint.authHeader;
     if (sessionId !== undefined) headers['mcp-session-id'] = sessionId;
+    if (protocol.negotiated !== undefined) headers['mcp-protocol-version'] = protocol.negotiated;
     return fetchFn(endpoint.url, { method: 'POST', headers, redirect: 'manual', body: JSON.stringify({ jsonrpc: '2.0', ...message }) });
   }
   async function request(id: number, method: string, params: unknown, sessionId: string | undefined) {
@@ -279,7 +300,7 @@ async function openMcpSession(endpoint: ExternalMcpEndpoint, fetchFn: ExternalMc
   }
 
   const init = await request(1, 'initialize', {
-    protocolVersion: '2025-06-18',
+    protocolVersion: CLIENT_PROTOCOL_VERSION,
     capabilities: {},
     clientInfo: { name: 'tugpt', version: '1.0.0' },
   }, undefined);
@@ -288,6 +309,11 @@ async function openMcpSession(endpoint: ExternalMcpEndpoint, fetchFn: ExternalMc
     throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'Mcp-Session-Id header is not visible ASCII');
   }
   const sessionId = header ?? undefined;
+  const version = init.result.protocolVersion;
+  if (typeof version !== 'string' || !SUPPORTED_MCP_PROTOCOL_VERSIONS.includes(version)) {
+    throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'MCP endpoint negotiated an unsupported protocol version');
+  }
+  protocol.negotiated = version;
 
   const ack = await send({ method: 'notifications/initialized' }, sessionId);
   if (ack.status < 200 || ack.status > 299) {
@@ -297,6 +323,7 @@ async function openMcpSession(endpoint: ExternalMcpEndpoint, fetchFn: ExternalMc
   let nextId = 2;
   return {
     sessionId,
+    protocolVersion: version,
     call: (method: string, params: unknown) => request(nextId++, method, params, sessionId).then((r) => r.result),
   };
 }
@@ -370,8 +397,10 @@ function normalizeModelName(name: string): string {
  *
  * Every execute opens a fresh session (initialize -> notifications/initialized -> tools/call) and maps
  * every failure - SSRF floor, transport, non-200, notification not 2xx, malformed or mismatched reply,
- * JSON-RPC error, `isError: true`, malformed result - to PROVIDER_UNAVAILABLE. A reply body is never
- * returned unless it is a well-formed result for this exact call.
+ * unsupported protocol version, JSON-RPC error, `isError: true`, malformed result - to PROVIDER_UNAVAILABLE.
+ * A reply body over MAX_MCP_REPLY_BYTES or a text result over MAX_MCP_RESULT_TEXT_BYTES is
+ * OUTPUT_TOO_LARGE (never truncated; the runtime applies its own, smaller cap to what reaches the model).
+ * A reply body is never returned unless it is a well-formed result for this exact call.
  */
 export function createExternalMcpTool(
   endpoint: ExternalMcpEndpoint,
@@ -400,6 +429,7 @@ export function createExternalMcpTool(
     },
     async execute(args): Promise<ToolOutput> {
       const unavailable = { ok: false, code: 'PROVIDER_UNAVAILABLE' as ToolErrorCode } as const;
+      const tooLarge = { ok: false, code: 'OUTPUT_TOO_LARGE' as ToolErrorCode } as const;
       try {
         await assertPublicEndpoint(endpoint.url, endpoint.resolveHostname);
         const session = await openMcpSession(endpoint, fetchFn);
@@ -410,9 +440,10 @@ export function createExternalMcpTool(
           .filter((c): c is { type: 'text'; text: string } => isRecord(c) && c.type === 'text' && typeof c.text === 'string')
           .map((c) => c.text)
           .join('\n');
+        if (Buffer.byteLength(text, 'utf8') > MAX_MCP_RESULT_TEXT_BYTES) return tooLarge;
         return { ok: true, data: { content: text } };
-      } catch {
-        return unavailable;
+      } catch (e) {
+        return e instanceof McpTooLargeError ? tooLarge : unavailable;
       }
     },
   };

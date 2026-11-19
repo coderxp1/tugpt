@@ -86,6 +86,19 @@ one routine, `openMcpSession`, used by both `createExternalMcpTool` (chat) and `
 | `notifications/initialized` | A notification: **no `id`**. Must be answered 2xx (202 per spec); anything else aborts the call before `tools/call`. It was previously sent with `id: 2` and its failure was swallowed. |
 | Replies | JSON or SSE. SSE events are split on blank lines, multi-line `data:` is joined, and server notifications in the stream are skipped. The response must be `jsonrpc: "2.0"` with **this request's id** and an object `result`. A JSON-RPC `error`, `isError: true`, or non-array `content` fails the call. |
 | Result | Only `type: "text"` parts with string `text` are returned to the model. Every failure is `PROVIDER_UNAVAILABLE`, and the chat layer audits it as such. |
+| Protocol version (M6) | The negotiated `protocolVersion` in the `initialize` result must be one of `SUPPORTED_MCP_PROTOCOL_VERSIONS` (`2025-06-18`, `2025-03-26`); an unsupported or missing value aborts before any other message. The negotiated value is sent as `MCP-Protocol-Version` on every message after `initialize` (not on `initialize` itself). |
+| Id collision (M6) | A message carrying a `method` (a server->client request or notification) is never taken as our response, even when it reuses our request id. |
+| Size caps (M6) | Reply body over `MAX_MCP_REPLY_BYTES` (1 MiB) or returned text over `MAX_MCP_RESULT_TEXT_BYTES` (64 KiB): `OUTPUT_TOO_LARGE` on `tools/call`, `DISCOVERY_TOO_LARGE` (HTTP 502) on discovery; nothing of the body is returned. These sit under the egress transport cap (1 MiB, cuts the stream) and above the runtime model cap (8 KiB, `OUTPUT_TOO_LARGE`). |
+
+### Chat turn rules (M6)
+
+| Rule | Where |
+|---|---|
+| **Unique call ids.** After de-duplication, `assignCallIds` keeps a model id only if it matches `^[A-Za-z0-9_.:-]{1,128}$` and is unused in this turn and in the thread history; otherwise it becomes `tugpt_r<round>_<i>`. Before M6, two calls with the same id (or the parser fallback `call_0` repeated each round) made `tool_call_id` pairing, the audit-failure set and the approval card ambiguous. | `apps/web/src/lib/chat/turn.ts` |
+| **Call budget.** Chat calls go through `ConnectToolRuntime.executeBudgetedCall`; one toolset (one runtime) per request, so `maxCallsPerTurn` (4) is enforced for one-at-a-time calls. The extra call is refused as `CALL_BUDGET_EXCEEDED`, audited, and never sent. Before M6 the budget only applied to `executeCalls` batches, which chat did not use. | `packages/connect-runtime/src/runtime.ts`, `apps/web/src/lib/chat/connect.ts` |
+| **Ordering.** For every round: one `assistant` message with all `tool_calls`, then exactly one `tool` message per call in the same order (failed or refused calls included). | `turn.ts`; tested in `turn.test.ts` and `mcp-chat.test.ts` |
+
+Execution remains **disabled** (customer MCP and chat tool execution are fenced; `proxy.ts` returns 503). These tests use a scripted fake model: no real model provider has been exercised.
 
 Each chat tool call opens a fresh session. Tests: `external-mcp-session.test.ts` (in-memory transport
 double implementing the server side strictly) and `apps/web/src/lib/chat/mcp-chat.test.ts` ("MCP

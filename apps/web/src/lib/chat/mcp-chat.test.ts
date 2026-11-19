@@ -19,6 +19,7 @@ import { createEgressMcpFetch } from './mcp-egress';
 import { loadChatToolRegistry, mcpUnavailableReason, runnableEndpoints, type McpAuditSink, type McpDeps } from './mcp';
 import { argumentsSha256 } from './approval.server';
 import { canonicalJson, runTurn, type TurnEvent } from './turn';
+import type { WireMessage } from './openai-compatible';
 import { listCapabilities, type CapabilityRow } from './store';
 import { toolLabel, toolProblem } from '../connect-ui/chat-errors';
 import {
@@ -400,6 +401,130 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(msgs.slice(1).every((c) => c.sessionId === server.sessions.at(-1))).toBe(true);
       expect(msgs[1].hasId).toBe(false);
       expect(proxy.connects.slice(connects).every((c) => c === `${MCP_HOST}:443`)).toBe(true);
+    });
+  });
+
+  describe('M6: multi-call turns, call ids, session continuity, size caps, call budget, protocol', () => {
+    type Asst = Extract<WireMessage, { role: 'assistant' }>;
+    /** Runs a full turn through the REAL toolset; the model's rounds are scripted (labelled fake model). */
+    async function turnWith(attached: CapabilityRow[], rounds: { id: string; name: string; arguments: Record<string, unknown> }[][]) {
+      const { toolset } = await session(OWNER_A);
+      const ts = toolset(attached);
+      let r = 0; let final: WireMessage[] = [];
+      const events: TurnEvent[] = [];
+      const gen = runTurn({ messages: [{ role: 'user', content: 'go' }], tools: ts.specs, maxToolRounds: rounds.length + 1 }, {
+        async completeWithTools() { return { text: null, toolCalls: rounds[r++] ?? [] }; },
+        executeTool: (c) => ts.execute(c),
+        async *stream(m) { final = [...m]; yield 'done'; },
+      });
+      for (;;) { const n = await gen.next(); if (n.done) break; events.push(n.value); }
+      return { final, events };
+    }
+    function pairs(final: WireMessage[]) {
+      let pending: NonNullable<Asst['tool_calls']> = [];
+      const out: { id: string; name: string; args: Record<string, unknown>; content: string }[] = [];
+      for (const m of final) {
+        if (m.role === 'assistant' && m.tool_calls) pending = [...m.tool_calls];
+        if (m.role === 'tool') {
+          const tc = pending.find((t) => t.id === m.tool_call_id);
+          out.push({ id: m.tool_call_id, name: tc?.function.name ?? '<unpaired>', args: tc ? JSON.parse(tc.function.arguments) : null, content: m.content });
+        }
+      }
+      return out;
+    }
+
+    it('a turn with several calls and DUPLICATE model ids: each call runs once in its own session, results pair with the right call, a write without approval never reaches the server', async () => {
+      const { pick } = await session(OWNER_A);
+      const toolCallsBefore = server.toolCalls().length;
+      const callsBefore = server.calls.length;
+      const { final, events } = await turnWith([pick(EP_A, 'search_docs'), pick(EP_A, 'create_ticket')], [[
+        { id: 'dup', name: 'search_docs', arguments: { q: 'one' } },
+        { id: 'dup', name: 'search_docs', arguments: { q: 'two' } },
+        { id: 'dup', name: 'create_ticket', arguments: { q: 'needs-approval' } },
+      ]]);
+      const p = pairs(final);
+      expect(new Set(p.map((x) => x.id)).size).toBe(3);
+      expect(p.map((x) => x.name)).toEqual(['search_docs', 'search_docs', 'create_ticket']);
+      expect(JSON.parse(p[0].content)).toEqual({ ok: true, data: { content: 'search_docs:{"q":"one"}' } });
+      expect(JSON.parse(p[1].content)).toEqual({ ok: true, data: { content: 'search_docs:{"q":"two"}' } });
+      expect(p[0].args).toEqual({ q: 'one' }); expect(p[1].args).toEqual({ q: 'two' });
+      expect(JSON.parse(p[2].content)).toMatchObject({ ok: false, error: 'APPROVAL_REQUIRED' });
+      // Order on the wire: assistant(tool_calls), then one tool message per call in the same order.
+      expect(final.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'tool']);
+      // The server saw exactly the two reads; the write never left the runtime.
+      const tc = server.toolCalls().slice(toolCallsBefore);
+      expect(tc.map((c) => c.params)).toEqual([{ name: 'search_docs', arguments: { q: 'one' } }, { name: 'search_docs', arguments: { q: 'two' } }]);
+      // Session continuity: each call is initialize -> initialized -> tools/call under ONE session id, distinct per call.
+      const wire = server.calls.slice(callsBefore);
+      expect(wire.map((c) => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call', 'initialize', 'notifications/initialized', 'tools/call']);
+      expect([wire[1].sessionId, wire[2].sessionId]).toEqual([tc[0].sessionId, tc[0].sessionId]);
+      expect([wire[4].sessionId, wire[5].sessionId]).toEqual([tc[1].sessionId, tc[1].sessionId]);
+      expect(tc[0].sessionId).not.toBe(tc[1].sessionId);
+      expect(server.sessions).toEqual(expect.arrayContaining([tc[0].sessionId, tc[1].sessionId]));
+      // Events carry the same unique ids, and audits one row per call.
+      expect(events.filter((e) => e.type === 'tool_result').map((e) => (e as { callId: string }).callId)).toEqual(p.map((x) => x.id));
+      expect(audits.map((a) => [a.capability, a.outcome])).toEqual([['external.search_docs', 'ok'], ['external.search_docs', 'ok'], ['external.create_ticket', 'APPROVAL_REQUIRED']]);
+    });
+
+    it('MCP-Protocol-Version: the real server receives the negotiated version on every message after initialize', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const before = server.calls.length;
+      expect((await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'v' }))).ok).toBe(true);
+      expect(server.calls.slice(before).map((c) => [c.method, c.protocolVersion])).toEqual([
+        ['initialize', null], ['notifications/initialized', '2025-06-18'], ['tools/call', '2025-06-18'],
+      ]);
+    });
+
+    it('an unsupported negotiated protocol version aborts before tools/call (audited, nothing returned)', async () => {
+      server.mode = 'badVersion';
+      server.onTool = () => ({ text: 'must-not-run' });
+      const { pick, toolset } = await session(OWNER_A);
+      const before = server.calls.length;
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'v' }));
+      expect(r.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(server.calls.slice(before).map((c) => c.method)).toEqual(['initialize']);
+      expect(audits.map((a) => a.outcome)).toEqual(['PROVIDER_UNAVAILABLE']);
+    });
+
+    it('a server->client request reusing our id (SSE) does not replace the real response', async () => {
+      server.mode = 'collide';
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'c' }));
+      expect(r).toEqual({ ok: true, content: JSON.stringify({ ok: true, data: { content: 'search_docs:{"q":"c"}' } }) });
+    });
+
+    it.each([
+      ['9 KiB (over the runtime 8 KiB model cap)', 9 * 1024],
+      ['100 KiB (over the adapter 64 KiB result cap)', 100 * 1024],
+    ])('an oversized tool result, %s, is OUTPUT_TOO_LARGE: audited, nothing of it reaches the model', async (_l, size) => {
+      server.onTool = () => ({ text: 'Q'.repeat(size) });
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'big' }));
+      expect(r.ok).toBe(false);
+      expect(r.code).toBe('OUTPUT_TOO_LARGE');
+      expect(r.content).not.toContain('QQQQ');
+      expect(Buffer.byteLength(r.content)).toBeLessThan(1024);
+      expect(audits.map((a) => a.outcome)).toEqual(['OUTPUT_TOO_LARGE']);
+    });
+
+    it('a 2 MiB reply is cut at the egress transport cap and fails closed', async () => {
+      server.mode = 'huge';
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'huge' }));
+      expect(r.ok).toBe(false);
+      expect(r.content).not.toContain('xxxx');
+      expect(Buffer.byteLength(r.content)).toBeLessThan(1024);
+    });
+
+    it('the per-turn call budget (4) applies to one-at-a-time chat calls: the 5th is refused, audited, and never sent', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const ts = toolset([pick(EP_A, 'search_docs')]);
+      const before = server.toolCalls().length;
+      const rs = [];
+      for (let i = 1; i <= 5; i++) rs.push(await ts.execute(call('search_docs', { q: `n${i}` }, `b${i}`)));
+      expect(rs.map((r) => r.code ?? 'ok')).toEqual(['ok', 'ok', 'ok', 'ok', 'CALL_BUDGET_EXCEEDED']);
+      expect(server.toolCalls().length - before).toBe(4);
+      expect(audits.map((a) => a.outcome)).toEqual(['ok', 'ok', 'ok', 'ok', 'CALL_BUDGET_EXCEEDED']);
     });
   });
 
