@@ -36,7 +36,9 @@ describe.skipIf(!opensslAvailable())('createEgressMcpFetch through a real CONNEC
     const before = proxy.connects.length;
     const res = await createEgressMcpFetch({ proxyUrl: proxy.url, ca: tlsMaterial.cert })(url, init({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }));
     expect(res.status).toBe(200);
-    expect(JSON.parse(await res.text()).result.sessionId).toBe('sess-1');
+    // Response headers survive the tunnel: the MCP session id is only ever in Mcp-Session-Id.
+    expect(res.headers?.get('mcp-session-id')).toMatch(/^sess-[0-9a-f-]{36}$/);
+    expect(JSON.parse(await res.text()).result.sessionId).toBeUndefined();
     expect(proxy.connects.slice(before)).toEqual([`${MCP_HOST}:443`]);
   });
 
@@ -84,9 +86,10 @@ describe.skipIf(!opensslAvailable())('createEgressMcpFetch through a real CONNEC
 
   it('caps the response size', async () => {
     server.mode = 'huge';
+    server.sessionMode = 'stateless'; // a transport test: no MCP session is opened here
     try {
       const f = createEgressMcpFetch({ proxyUrl: proxy.url, ca: tlsMaterial.cert, maxResponseBytes: 64 * 1024 });
       expect(await code(f(url, init({ jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'x', arguments: {} } })))).toBe('EGRESS_RESPONSE_TOO_LARGE');
-    } finally { server.mode = 'ok'; }
+    } finally { server.mode = 'ok'; server.sessionMode = 'stateful'; }
   });
 });

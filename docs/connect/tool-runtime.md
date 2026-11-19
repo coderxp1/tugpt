@@ -71,3 +71,23 @@ Multiple calls in one turn run **serially**, capped at 8 per turn (`CALL_BUDGET_
 - **Postgres `CredentialStore`** for the broker (currently `InMemoryCredentialStore`).
 - **Live test.** Needs an owner-provisioned **staging** Google OAuth client and a dedicated test Google account. The production credential stays untouched (owner decision #4).
 - **Seeded capability row.** `calendar.find_availability` is seeded with `is_available=false`. Flip it only after the live staging test.
+
+## Customer MCP transport contract (chat execution and snapshot discovery)
+
+`packages/connect-runtime/src/external-mcp-tool.ts` speaks MCP Streamable HTTP (spec 2025-06-18) through
+one routine, `openMcpSession`, used by both `createExternalMcpTool` (chat) and `listExternalMcpTools`
+(snapshot discovery):
+
+| Step | Rule |
+|---|---|
+| Transport | `endpoint.fetchFn` (the egress-proxy fetch) is **required**. `createExternalMcpTool` throws at construction without it; there is no default or global fetch. Redirects are never followed. |
+| `initialize` | Request id 1; only HTTP 200 is accepted. |
+| Session id | **Only** the `Mcp-Session-Id` response header of `initialize`. It must be visible ASCII (1-256 chars). It is sent on every later message. Without the header the server is stateless and no session header is sent. Nothing in the result body is ever used: before M5, `createExternalMcpTool` read `result.sessionId` (never the header), so it sent no session to spec-compliant servers, which reject that with 400. Discovery fell back to the body value. |
+| `notifications/initialized` | A notification: **no `id`**. Must be answered 2xx (202 per spec); anything else aborts the call before `tools/call`. It was previously sent with `id: 2` and its failure was swallowed. |
+| Replies | JSON or SSE. SSE events are split on blank lines, multi-line `data:` is joined, and server notifications in the stream are skipped. The response must be `jsonrpc: "2.0"` with **this request's id** and an object `result`. A JSON-RPC `error`, `isError: true`, or non-array `content` fails the call. |
+| Result | Only `type: "text"` parts with string `text` are returned to the model. Every failure is `PROVIDER_UNAVAILABLE`, and the chat layer audits it as such. |
+
+Each chat tool call opens a fresh session. Tests: `external-mcp-session.test.ts` (in-memory transport
+double implementing the server side strictly) and `apps/web/src/lib/chat/mcp-chat.test.ts` ("MCP
+session contract over real sockets": real TLS, the real CONNECT egress path through the proxy double,
+and the harness server that enforces the contract).

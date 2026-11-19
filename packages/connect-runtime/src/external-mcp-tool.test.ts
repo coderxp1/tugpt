@@ -23,7 +23,7 @@ function fakeMcpFetch(): ExternalMcpFetch {
       return {
         status: 200,
         text: async () =>
-          JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-06-18', capabilities: {}, sessionId: 'sess-1' } }),
+          JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-06-18', capabilities: {} } }),
       };
     }
     if (body.method === 'notifications/initialized') {
@@ -81,7 +81,7 @@ describe('createExternalMcpTool', () => {
   });
 
   it('validates arguments are a JSON object', () => {
-    const tool = createExternalMcpTool({ url: 'https://customer.example.com/mcp', resolveHostname: PUBLIC }, TOOL_DEF);
+    const tool = createExternalMcpTool({ url: 'https://customer.example.com/mcp', resolveHostname: PUBLIC, fetchFn: fakeMcpFetch() }, TOOL_DEF);
     expect(tool.validate('nope' as unknown as Readonly<Record<string, unknown>>, 0).ok).toBe(false);
     expect(tool.validate({ id: 'x' }, 0).ok).toBe(true);
   });
@@ -124,11 +124,8 @@ describe('assertPublicEndpoint (SSRF)', () => {
 });
 
 describe('B-8 no direct fetch (egress proxy required)', () => {
-  it('fails closed when no proxy-aware fetch is injected', async () => {
-    const tool = createExternalMcpTool({ url: 'https://customer.example.com/mcp', resolveHostname: async () => ['93.184.216.34'] }, TOOL_DEF);
-    const result = await tool.execute({}, { accessToken: 'x', now: () => 0 });
-    expect(result.ok).toBe(false);
-    if (result.ok) return;
-    expect(result.code).toBe('PROVIDER_UNAVAILABLE');
+  it('refuses to build a tool without a proxy-aware fetch (no deferred, silent failure)', () => {
+    expect(() => createExternalMcpTool({ url: 'https://customer.example.com/mcp', resolveHostname: async () => ['93.184.216.34'] }, TOOL_DEF))
+      .toThrow(/egress proxy required/);
   });
 });

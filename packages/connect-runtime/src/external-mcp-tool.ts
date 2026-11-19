@@ -219,21 +219,86 @@ function isRecord(v: unknown): v is Record<string, unknown> {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
-/** Parse one JSON-RPC reply (plain JSON or an SSE stream) and return the message for `id`. */
-function parseRpcReply(text: string, id: number): Record<string, unknown> {
-  const candidates: string[] = [];
-  const dataLines = text.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart());
-  if (dataLines.length > 0) candidates.push(...dataLines); else candidates.push(text);
-  for (const c of candidates) {
+/**
+ * The JSON-RPC messages in a reply body. Streamable HTTP answers either with one JSON message or with an
+ * SSE stream; an SSE event's data is the concatenation of its `data:` lines joined by "\n" (events are
+ * separated by a blank line), and a stream may carry server notifications/requests before the response.
+ */
+function replyMessages(text: string, contentType: string | null): string[] {
+  const looksSse = (contentType ?? '').toLowerCase().startsWith('text/event-stream') || /^(event|data|id|retry):/m.test(text.trimStart().slice(0, 64));
+  if (!looksSse) return [text];
+  const out: string[] = [];
+  for (const block of text.split(/\r?\n\r?\n/)) {
+    const data = block.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).replace(/^ /, ''));
+    if (data.length > 0) out.push(data.join('\n'));
+  }
+  return out;
+}
+
+/**
+ * Parse one JSON-RPC reply and return the `result` of the response to `id`. Strict: the response must be
+ * JSON-RPC 2.0 with exactly this id; a JSON-RPC error object is an error; no response at all is an error.
+ */
+function parseRpcReply(text: string, id: number, contentType: string | null = null): Record<string, unknown> {
+  for (const c of replyMessages(text, contentType)) {
     let msg: unknown;
     try { msg = JSON.parse(c); } catch { continue; }
-    if (!isRecord(msg) || msg.id !== id) continue;
+    if (!isRecord(msg) || !('id' in msg) || msg.id !== id) continue; // notifications, other requests
     if (msg.jsonrpc !== '2.0') throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'reply is not JSON-RPC 2.0');
     if ('error' in msg && msg.error !== undefined) throw new McpDiscoveryError('DISCOVERY_RPC_ERROR', 'MCP endpoint returned a JSON-RPC error');
     if (!isRecord(msg.result)) throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'JSON-RPC reply has no result object');
     return msg.result;
   }
   throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'no JSON-RPC reply for the request');
+}
+
+/**
+ * One MCP Streamable HTTP session (spec 2025-06-18): initialize, then the `notifications/initialized`
+ * notification, then requests.
+ *
+ * Session contract: the session id is ONLY the `Mcp-Session-Id` RESPONSE HEADER of the initialize reply.
+ * When present it is sent on every later message; when absent the server is stateless and no header is
+ * sent. Nothing in the initialize result body is ever used as a session id - that is not part of the
+ * protocol, and trusting it would let a reply body choose a header value.
+ * The notification carries no `id` and must be answered 2xx (202 per spec); anything else aborts.
+ * Only 200 is accepted for requests; redirects are never followed.
+ */
+const SESSION_ID_PATTERN = /^[\x21-\x7e]{1,256}$/; // visible ASCII, per spec
+
+async function openMcpSession(endpoint: ExternalMcpEndpoint, fetchFn: ExternalMcpFetch) {
+  async function send(message: Record<string, unknown>, sessionId: string | undefined) {
+    const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
+    if (endpoint.authHeader) headers.authorization = endpoint.authHeader;
+    if (sessionId !== undefined) headers['mcp-session-id'] = sessionId;
+    return fetchFn(endpoint.url, { method: 'POST', headers, redirect: 'manual', body: JSON.stringify({ jsonrpc: '2.0', ...message }) });
+  }
+  async function request(id: number, method: string, params: unknown, sessionId: string | undefined) {
+    const res = await send({ id, method, params }, sessionId);
+    if (res.status !== 200) throw new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${res.status}`);
+    return { result: parseRpcReply(await res.text(), id, res.headers?.get('content-type') ?? null), headers: res.headers };
+  }
+
+  const init = await request(1, 'initialize', {
+    protocolVersion: '2025-06-18',
+    capabilities: {},
+    clientInfo: { name: 'tugpt', version: '1.0.0' },
+  }, undefined);
+  const header = init.headers?.get('mcp-session-id') ?? null;
+  if (header !== null && !SESSION_ID_PATTERN.test(header)) {
+    throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'Mcp-Session-Id header is not visible ASCII');
+  }
+  const sessionId = header ?? undefined;
+
+  const ack = await send({ method: 'notifications/initialized' }, sessionId);
+  if (ack.status < 200 || ack.status > 299) {
+    throw new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${ack.status} to initialized`);
+  }
+
+  let nextId = 2;
+  return {
+    sessionId,
+    call: (method: string, params: unknown) => request(nextId++, method, params, sessionId).then((r) => r.result),
+  };
 }
 
 function validateTool(raw: unknown): ExternalMcpToolListEntry {
@@ -267,38 +332,14 @@ export async function listExternalMcpTools(
   if (typeof fetchFn !== 'function') throw new Error('egress proxy required for customer MCP (B-8)');
   await assertPublicEndpoint(endpoint.url, endpoint.resolveHostname);
 
-  async function send(message: Record<string, unknown>, sessionId?: string) {
-    const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
-    if (endpoint.authHeader) headers.authorization = endpoint.authHeader;
-    if (sessionId) headers['mcp-session-id'] = sessionId;
-    return fetchFn(endpoint.url, { method: 'POST', headers, redirect: 'manual', body: JSON.stringify({ jsonrpc: '2.0', ...message }) });
-  }
-  async function rpc(id: number, method: string, params: unknown, sessionId?: string) {
-    const res = await send({ id, method, params }, sessionId);
-    if (res.status !== 200) throw new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${res.status}`);
-    return { result: parseRpcReply(await res.text(), id), headers: res.headers };
-  }
-
-  const init = await rpc(1, 'initialize', {
-    protocolVersion: '2025-06-18',
-    capabilities: {},
-    clientInfo: { name: 'tugpt', version: '1.0.0' },
-  });
-  const headerSession = init.headers?.get('mcp-session-id') ?? null;
-  const sessionId = headerSession ?? (typeof init.result.sessionId === 'string' ? init.result.sessionId : undefined);
-
-  // A notification carries no id (JSON-RPC 2.0); servers answer 202/200/204.
-  const ack = await send({ method: 'notifications/initialized' }, sessionId);
-  if (ack.status < 200 || ack.status > 299) {
-    throw new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${ack.status} to initialized`);
-  }
+  const session = await openMcpSession(endpoint, fetchFn);
 
   const tools: ExternalMcpToolListEntry[] = [];
   const seen = new Set<string>();
   let cursor: string | undefined;
   for (let page = 0; ; page++) {
     if (page >= MAX_TOOL_PAGES) throw new McpDiscoveryError('DISCOVERY_TOO_LARGE', 'too many tools/list pages');
-    const { result } = await rpc(2 + page, 'tools/list', cursor ? { cursor } : {}, sessionId);
+    const result = await session.call('tools/list', cursor ? { cursor } : {});
     if (!Array.isArray(result.tools)) throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'tools/list result has no tools array');
     for (const raw of result.tools) {
       const tool = validateTool(raw);
@@ -320,35 +361,24 @@ function normalizeModelName(name: string): string {
   return MODEL_NAME_PATTERN.test(candidate) ? candidate : `mcp_${candidate}`;
 }
 
+/**
+ * A ConnectTool that runs one approved external MCP tool.
+ *
+ * `endpoint.fetchFn` is REQUIRED - callers pass the egress-proxy fetch. There is no default transport and
+ * no deferred failure: constructing the tool without one throws, so a mis-wired caller fails at
+ * registry build time instead of every call silently reporting PROVIDER_UNAVAILABLE.
+ *
+ * Every execute opens a fresh session (initialize -> notifications/initialized -> tools/call) and maps
+ * every failure - SSRF floor, transport, non-200, notification not 2xx, malformed or mismatched reply,
+ * JSON-RPC error, `isError: true`, malformed result - to PROVIDER_UNAVAILABLE. A reply body is never
+ * returned unless it is a well-formed result for this exact call.
+ */
 export function createExternalMcpTool(
   endpoint: ExternalMcpEndpoint,
   toolDef: ExternalMcpToolDef,
 ): ConnectTool<Record<string, unknown>> {
-  const fetchFn: ExternalMcpFetch =
-    endpoint.fetchFn ??
-    (async () => {
-      throw new Error('egress proxy required for customer MCP (B-8)');
-    });
-
-  async function rpc(id: number, method: string, params: unknown, sessionId?: string): Promise<unknown> {
-    const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
-    if (endpoint.authHeader) headers.authorization = endpoint.authHeader;
-    if (sessionId) headers['mcp-session-id'] = sessionId;
-    const res = await fetchFn(endpoint.url, {
-      method: 'POST',
-      headers,
-      redirect: 'manual',
-      body: JSON.stringify({ jsonrpc: '2.0', id, method, params }),
-    });
-    if (res.status !== 200) throw new Error(`MCP endpoint returned HTTP ${res.status}`);
-    const text = await res.text();
-    const dataLine = text
-      .split(/\r?\n/)
-      .filter((l) => l.startsWith('data:'))
-      .map((l) => l.slice(5).trimStart())
-      .join('\n');
-    return JSON.parse(dataLine || text) as unknown;
-  }
+  const fetchFn = endpoint.fetchFn;
+  if (typeof fetchFn !== 'function') throw new TypeError('egress proxy required for customer MCP (B-8): endpoint.fetchFn is missing');
 
   const capability = `external.${toolDef.name}`;
   const modelName = normalizeModelName(toolDef.name);
@@ -369,27 +399,20 @@ export function createExternalMcpTool(
       return { ok: true, value: raw as Record<string, unknown> };
     },
     async execute(args): Promise<ToolOutput> {
+      const unavailable = { ok: false, code: 'PROVIDER_UNAVAILABLE' as ToolErrorCode } as const;
       try {
         await assertPublicEndpoint(endpoint.url, endpoint.resolveHostname);
-        const init = (await rpc(1, 'initialize', {
-          protocolVersion: '2025-06-18',
-          capabilities: {},
-          clientInfo: { name: 'tugpt', version: '1.0.0' },
-        })) as { result?: { sessionId?: string } };
-        const sessionId = init.result?.sessionId;
-        await rpc(2, 'notifications/initialized', undefined, sessionId).catch(() => undefined);
-        const call = (await rpc(3, 'tools/call', { name: toolDef.name, arguments: args }, sessionId)) as {
-          result?: { content?: Array<{ type?: string; text?: string }>; isError?: boolean };
-          error?: unknown;
-        };
-        if (call.error || call.result?.isError) return { ok: false, code: 'PROVIDER_UNAVAILABLE' as ToolErrorCode };
-        const text = (call.result?.content ?? [])
-          .filter((c) => c.type === 'text')
-          .map((c) => c.text ?? '')
+        const session = await openMcpSession(endpoint, fetchFn);
+        const result = await session.call('tools/call', { name: toolDef.name, arguments: args });
+        if (result.isError === true) return unavailable;
+        if (result.content !== undefined && !Array.isArray(result.content)) return unavailable;
+        const text = ((result.content ?? []) as unknown[])
+          .filter((c): c is { type: 'text'; text: string } => isRecord(c) && c.type === 'text' && typeof c.text === 'string')
+          .map((c) => c.text)
           .join('\n');
         return { ok: true, data: { content: text } };
       } catch {
-        return { ok: false, code: 'PROVIDER_UNAVAILABLE' as ToolErrorCode };
+        return unavailable;
       }
     },
   };

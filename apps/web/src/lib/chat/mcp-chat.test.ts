@@ -14,6 +14,7 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolAuditEvent } from '@tugpt/connect-runtime';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from './connect';
+import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch } from './mcp-egress';
 import { loadChatToolRegistry, mcpUnavailableReason, type McpAuditSink, type McpDeps } from './mcp';
 import { argumentsSha256 } from './approval.server';
@@ -80,6 +81,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     audits = [];
     auditFails = false;
     server.mode = 'ok';
+    server.sessionMode = 'stateful';
     server.onTool = (name, args) => ({ text: `${name}:${JSON.stringify(args)}` });
     proxy.refuse = false;
     deps = {
@@ -187,7 +189,9 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(r).toEqual({ ok: true, content: JSON.stringify({ ok: true, data: { content: 'search_docs:{"q":"vpn"}' } }) });
       const last = server.toolCalls().at(-1)!;
       expect(last.params).toEqual({ name: 'search_docs', arguments: { q: 'vpn' } });
-      expect(last.sessionId).toBe('sess-1');
+      // The session id comes from the Mcp-Session-Id header of THIS call's initialize, and the server accepted it.
+      expect(last.sessionId).toBe(server.sessions.at(-1));
+      expect(last.status).toBe(200);
       expect(last.authorization).toBeNull();
       expect(proxy.connects.length).toBeGreaterThan(connectsBefore);
       expect(proxy.connects.slice(connectsBefore).every((c) => c === `${MCP_HOST}:443`)).toBe(true);
@@ -301,6 +305,79 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(r.ok).toBe(false);
       expect(r.code).toBe('INTERNAL');
       expect(r.content).not.toContain('secret-result');
+    });
+  });
+
+  describe('MCP session contract over real sockets (spec 2025-06-18 session management)', () => {
+    /** The requests one execute made: from its initialize to the end of the log. */
+    const lastSession = () => server.calls.slice(server.calls.map((c) => c.method).lastIndexOf('initialize'));
+
+    it('the session id comes only from the Mcp-Session-Id header and is sent on every later message', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'h' }));
+      expect(r.ok).toBe(true);
+      const msgs = lastSession();
+      expect(msgs.map((c) => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call']);
+      expect(msgs[0].sessionId).toBeNull();
+      expect(msgs.slice(1).every((c) => c.sessionId === server.sessions.at(-1))).toBe(true);
+      expect(msgs.map((c) => c.status)).toEqual([200, 202, 200]);
+    });
+
+    it('the initialized notification carries no id; requests carry numeric ids', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'n' }));
+      const [init, note, tool] = lastSession();
+      expect(note.hasId).toBe(false);
+      expect([init.hasId, typeof init.id, tool.hasId, typeof tool.id]).toEqual([true, 'number', true, 'number']);
+    });
+
+    it('every execute opens its own session', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const ts = toolset([pick(EP_A, 'search_docs')]);
+      const n = server.sessions.length;
+      await ts.execute(call('search_docs', { q: '1' }));
+      await ts.execute(call('search_docs', { q: '2' }));
+      expect(server.sessions.length).toBe(n + 2);
+      const calls = server.toolCalls().slice(-2);
+      expect(calls[0].sessionId).not.toBe(calls[1].sessionId);
+    });
+
+    it('a stateless server (no Mcp-Session-Id) works and receives no session header', async () => {
+      server.sessionMode = 'stateless';
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 's' }));
+      expect(r).toEqual({ ok: true, content: JSON.stringify({ ok: true, data: { content: 'search_docs:{"q":"s"}' } }) });
+      expect(lastSession().every((c) => c.sessionId === null)).toBe(true);
+    });
+
+    it('a failed initialized notification aborts before tools/call and is audited as unavailable', async () => {
+      server.mode = 'notify500';
+      const { pick, toolset } = await session(OWNER_A);
+      const before = server.toolCalls().length;
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }));
+      expect(r.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(server.toolCalls().length).toBe(before);
+      expect(audits.map((a) => a.outcome)).toEqual(['PROVIDER_UNAVAILABLE']);
+    });
+
+    it.each(['wrongId', 'noJsonrpc'] as const)('a %s reply is not returned to the model', async (mode) => {
+      server.mode = mode;
+      server.onTool = () => ({ text: 'must-not-leak' });
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }));
+      expect(r.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(r.content).not.toContain('must-not-leak');
+    });
+
+    it('snapshot discovery uses the same contract through the real egress proxy', async () => {
+      const connects = proxy.connects.length;
+      const tools = await listExternalMcpTools({ url: URL_A, resolveHostname }, createEgressMcpFetch({ proxyUrl: proxy.url, ca: tlsMaterial.cert }));
+      expect(tools.map((t) => t.name)).toEqual(['search_docs', 'create_ticket']);
+      const msgs = lastSession();
+      expect(msgs.map((c) => [c.method, c.status])).toEqual([['initialize', 200], ['notifications/initialized', 202], ['tools/list', 200]]);
+      expect(msgs.slice(1).every((c) => c.sessionId === server.sessions.at(-1))).toBe(true);
+      expect(msgs[1].hasId).toBe(false);
+      expect(proxy.connects.slice(connects).every((c) => c === `${MCP_HOST}:443`)).toBe(true);
     });
   });
 

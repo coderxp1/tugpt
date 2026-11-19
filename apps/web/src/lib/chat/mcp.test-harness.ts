@@ -2,7 +2,12 @@
  * Test-only harness for the customer MCP chat path. Not imported by app code.
  *
  * REAL (actual sockets on 127.0.0.1, actual TLS, actual JSON-RPC):
- *   - startMcpServer: an HTTPS MCP server (Streamable HTTP, JSON or SSE replies)
+ *   - startMcpServer: an HTTPS MCP server (Streamable HTTP, JSON or SSE replies) that follows the
+ *     spec's session contract: the session id exists ONLY in the `Mcp-Session-Id` header of the
+ *     initialize response; later requests without it get 400, with an unknown one 404; the
+ *     `notifications/initialized` message must carry no id. (Before M5 this double put a
+ *     `sessionId` in the initialize RESULT BODY, which no real server does, and accepted requests
+ *     without a session - which is how a client that never sent the header passed.)
  *   - startConnectProxy: an HTTP CONNECT egress-proxy double with an allowlist
  *     that maps the requested authority to a local port, the way the real
  *     proxy resolves once and connects to the address it checked
@@ -17,6 +22,7 @@
  *     record_connect_tool_call (rejects capabilities outside the catalogue).
  */
 import { execFileSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { mkdtempSync, readFileSync, rmSync } from 'node:fs';
 import http from 'node:http';
 import https from 'node:https';
@@ -43,14 +49,44 @@ export function makeCertificate(host = MCP_HOST): { key: string; cert: string } 
   } finally { rmSync(dir, { recursive: true, force: true }); }
 }
 
-export interface RpcCall { readonly method: string; readonly params: unknown; readonly sessionId: string | null; readonly authorization: string | null }
+export interface RpcCall {
+  readonly method: string;
+  readonly params: unknown;
+  /** The request's `id` member; `undefined` when absent (a JSON-RPC notification). */
+  readonly id: unknown;
+  readonly hasId: boolean;
+  readonly sessionId: string | null;
+  readonly authorization: string | null;
+  /** HTTP status this server answered with. */
+  status?: number;
+}
 export type ToolReply = { text: string; isError?: boolean } | { rpcError: string };
-export type ServerMode = 'ok' | 'http500' | 'redirect' | 'sse' | 'huge';
+/**
+ * ok        JSON replies
+ * sse       Streamable HTTP SSE replies, preceded by an unrelated server notification event and with the
+ *           response's JSON split over two `data:` lines (both legal per the SSE and MCP specs)
+ * http500 / redirect / huge   failure modes
+ * notify500 the `notifications/initialized` POST is answered 500
+ * wrongId   tools/call replies carry a different id
+ * noJsonrpc tools/call replies lack `jsonrpc: "2.0"`
+ */
+export type ServerMode = 'ok' | 'http500' | 'redirect' | 'sse' | 'huge' | 'notify500' | 'wrongId' | 'noJsonrpc';
+/**
+ * MCP Streamable HTTP session management (spec 2025-06-18, "Session Management"):
+ * stateful   the server assigns a session ONLY in the `Mcp-Session-Id` response header of initialize,
+ *            answers later requests without it 400 and with an unknown one 404. The initialize result
+ *            body carries no session id - that field is not part of the protocol.
+ * stateless  the server assigns no session and accepts requests without the header.
+ */
+export type SessionMode = 'stateful' | 'stateless';
 
 export interface McpServer {
   readonly port: number;
   readonly calls: RpcCall[];
   mode: ServerMode;
+  sessionMode: SessionMode;
+  /** Session ids this server has issued, in order. */
+  readonly sessions: string[];
   onTool: (name: string, args: Record<string, unknown>) => ToolReply;
   toolCalls(): RpcCall[];
   close(): Promise<void>;
@@ -58,37 +94,72 @@ export interface McpServer {
 
 export async function startMcpServer(tlsMaterial: { key: string; cert: string }): Promise<McpServer> {
   const calls: RpcCall[] = [];
+  const sessions: string[] = [];
   const state = {
     mode: 'ok' as ServerMode,
+    sessionMode: 'stateful' as SessionMode,
     onTool: ((name: string, args: Record<string, unknown>) => ({ text: `${name}:${JSON.stringify(args)}` })) as McpServer['onTool'],
   };
   const server = https.createServer(tlsMaterial, (req, res) => {
     const chunks: Buffer[] = [];
     req.on('data', (c: Buffer) => chunks.push(c));
     req.on('end', () => {
-      let msg: { id?: number; method?: string; params?: unknown };
+      let msg: { id?: unknown; method?: string; params?: unknown; jsonrpc?: unknown };
       try { msg = JSON.parse(Buffer.concat(chunks).toString('utf8')); } catch { res.writeHead(400).end(); return; }
       const method = String(msg.method);
-      calls.push({ method, params: msg.params, sessionId: (req.headers['mcp-session-id'] as string) ?? null, authorization: req.headers.authorization ?? null });
-      if (state.mode === 'http500') { res.writeHead(500).end('boom'); return; }
-      if (state.mode === 'redirect') { res.writeHead(302, { location: 'https://169.254.169.254/latest/meta-data/' }).end(); return; }
-      if (method === 'notifications/initialized') { res.writeHead(202).end(); return; }
-      let body: unknown;
+      const sessionHeader = (req.headers['mcp-session-id'] as string | undefined) ?? null;
+      const call: RpcCall = { method, params: msg.params, id: msg.id, hasId: 'id' in msg, sessionId: sessionHeader, authorization: req.headers.authorization ?? null };
+      calls.push(call);
+      const end = (status: number, headers: Record<string, string> = {}, body?: string) => { call.status = status; res.writeHead(status, headers).end(body); };
+      if (state.mode === 'http500') { end(500, {}, 'boom'); return; }
+      if (state.mode === 'redirect') { end(302, { location: 'https://169.254.169.254/latest/meta-data/' }); return; }
+      if (msg.jsonrpc !== '2.0') { end(400); return; }
+
+      const responseHeaders: Record<string, string> = {};
       if (method === 'initialize') {
-        body = { jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1' }, sessionId: 'sess-1' } };
+        if (state.sessionMode === 'stateful') {
+          const sid = `sess-${randomUUID()}`;
+          sessions.push(sid);
+          responseHeaders['mcp-session-id'] = sid;
+        }
+      } else if (state.sessionMode === 'stateful') {
+        if (!sessionHeader) { end(400, {}, 'missing Mcp-Session-Id'); return; }
+        if (!sessions.includes(sessionHeader)) { end(404, {}, 'unknown session'); return; }
+      }
+
+      if (method === 'notifications/initialized') {
+        // A notification has no id. A message with an id is a request, which this method is not.
+        if ('id' in msg) { end(400, {}, 'notifications carry no id'); return; }
+        end(state.mode === 'notify500' ? 500 : 202);
+        return;
+      }
+      let body: Record<string, unknown>;
+      if (method === 'initialize') {
+        body = { jsonrpc: '2.0', id: msg.id, result: { protocolVersion: '2025-06-18', capabilities: { tools: {} }, serverInfo: { name: 'test', version: '1' } } };
+      } else if (method === 'tools/list') {
+        body = { jsonrpc: '2.0', id: msg.id, result: { tools: [
+          { name: 'search_docs', description: 'Search the documentation', inputSchema: { type: 'object', properties: { q: { type: 'string' } } } },
+          { name: 'create_ticket', description: 'Open a ticket', inputSchema: { type: 'object', properties: { title: { type: 'string' } } } },
+        ] } };
       } else if (method === 'tools/call') {
         const p = msg.params as { name: string; arguments: Record<string, unknown> };
         const reply = state.onTool(p.name, p.arguments ?? {});
         body = 'rpcError' in reply
           ? { jsonrpc: '2.0', id: msg.id, error: { code: -32000, message: reply.rpcError } }
           : { jsonrpc: '2.0', id: msg.id, result: { content: [{ type: 'text', text: state.mode === 'huge' ? 'x'.repeat(2 * 1024 * 1024) : reply.text }], isError: reply.isError === true } };
+        if (state.mode === 'wrongId') body.id = 999;
+        if (state.mode === 'noJsonrpc') delete body.jsonrpc;
       } else {
         body = { jsonrpc: '2.0', id: msg.id, error: { code: -32601, message: 'unknown method' } };
       }
       if (state.mode === 'sse') {
-        res.writeHead(200, { 'content-type': 'text/event-stream' }).end(`event: message\ndata: ${JSON.stringify(body)}\n\n`);
+        const json = JSON.stringify(body, null, 1).split('\n');
+        const half = Math.ceil(json.length / 2);
+        const preamble = `event: message\ndata: ${JSON.stringify({ jsonrpc: '2.0', method: 'notifications/message', params: { level: 'info', data: 'working' } })}\n\n`;
+        const event = `event: message\nid: 1\ndata: ${json.slice(0, half).join(' ')}\ndata: ${json.slice(half).join(' ')}\n\n`;
+        end(200, { ...responseHeaders, 'content-type': 'text/event-stream' }, preamble + event);
       } else {
-        res.writeHead(200, { 'content-type': 'application/json' }).end(JSON.stringify(body));
+        end(200, { ...responseHeaders, 'content-type': 'application/json' }, JSON.stringify(body));
       }
     });
   });
@@ -96,8 +167,11 @@ export async function startMcpServer(tlsMaterial: { key: string; cert: string })
   return {
     port: (server.address() as AddressInfo).port,
     calls,
+    sessions,
     get mode() { return state.mode; },
     set mode(m) { state.mode = m; },
+    get sessionMode() { return state.sessionMode; },
+    set sessionMode(m) { state.sessionMode = m; },
     get onTool() { return state.onTool; },
     set onTool(f) { state.onTool = f; },
     toolCalls: () => calls.filter((c) => c.method === 'tools/call'),

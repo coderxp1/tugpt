@@ -10,7 +10,7 @@ function listFetch(): ExternalMcpFetch {
     if (body.method === 'initialize') {
       return {
         status: 200,
-        text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-06-18', capabilities: {}, sessionId: 'sess-1' } }),
+        text: async () => JSON.stringify({ jsonrpc: '2.0', id: body.id, result: { protocolVersion: '2025-06-18', capabilities: {} } }),
       };
     }
     if (body.method === 'notifications/initialized') {
