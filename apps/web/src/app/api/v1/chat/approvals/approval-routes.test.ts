@@ -98,19 +98,19 @@ describe('GET /api/v1/chat/approvals/status', () => {
   });
   it('reports the database answer and never grants anything', async () => {
     expect(await (await statusReq(q)).json()).toEqual({ approved: false });
-    approve(state, { organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
+    approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
     const res = await statusReq(q);
     expect(res.headers.get('cache-control')).toContain('no-store');
     expect(await res.json()).toEqual({ approved: true });
     expect(state.approvals[0].used_at).toBeNull(); // a status check does not consume
     user = MEMBER;
-    expect(await (await statusReq(q)).json()).toEqual({ approved: true });
+    expect(await (await statusReq(q)).json()).toEqual({ approved: false }); // another user (not the requester) cannot see the approval
     user = STRANGER;
     expect(await (await statusReq(q)).json()).toEqual({ approved: false });
   });
   it('expired and revoked approvals are not approved', async () => {
-    approve(state, { organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() - 1 });
-    approve(state, { organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 }).revoked_at = Date.now();
+    approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() - 1 });
+    approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 }).revoked_at = Date.now();
     expect(await (await statusReq(q)).json()).toEqual({ approved: false });
   });
 });
@@ -147,7 +147,7 @@ describe('POST /api/v1/chat/threads/[id]/approved-call', () => {
     expect(state.mcpAudit).toEqual([expect.objectContaining({ p_endpoint_id: EP, p_capability: 'external.create_ticket', p_outcome: 'APPROVAL_REQUIRED', p_arguments_sha256: HASH })]);
   });
   it('with an approval the runtime claims it once (before execution); here the call then fails because no MCP server is reachable', async () => {
-    const a = approve(state, { organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
+    const a = approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
     const ev = await events(await runReq(body()));
     expect(a.used_at).not.toBeNull();
     expect(ev[1]).toMatchObject({ type: 'tool_result', ok: false, code: 'PROVIDER_UNAVAILABLE' });
@@ -157,7 +157,7 @@ describe('POST /api/v1/chat/threads/[id]/approved-call', () => {
     expect(again[1]).toMatchObject({ code: 'APPROVAL_REQUIRED' });
   });
   it('a member can run an approval that an owner recorded; the claim is per organization', async () => {
-    approve(state, { organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
+    approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
     user = MEMBER;
     const res = await runReq(body());
     // The fake mirrors owner/admin-only reads of external_tool_* (as the B-9 tests assume), so members get no runnable MCP tool.

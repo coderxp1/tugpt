@@ -213,7 +213,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     });
 
     it('a single-use approval runs the exact call once; a reuse is refused', async () => {
-      approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'new' }), expires_at: Date.now() + 60_000 });
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'new' }), expires_at: Date.now() + 60_000 });
       const { pick, toolset } = await session(OWNER_A);
       const ts = toolset([pick(EP_A, 'create_ticket')]);
       const before = server.toolCalls().length;
@@ -224,9 +224,9 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     });
 
     it('an approval for other arguments, an expired or a revoked approval is refused', async () => {
-      approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'other' }), expires_at: Date.now() + 60_000 });
-      approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'old' }), expires_at: Date.now() - 1 });
-      const revoked = approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'rev' }), expires_at: Date.now() + 60_000 });
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'other' }), expires_at: Date.now() + 60_000 });
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'old' }), expires_at: Date.now() - 1 });
+      const revoked = approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'rev' }), expires_at: Date.now() + 60_000 });
       revoked.revoked_at = Date.now();
       const { pick, toolset } = await session(OWNER_A);
       const ts = toolset([pick(EP_A, 'create_ticket')]);
@@ -236,8 +236,8 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     });
 
     it('an approval for another organization or endpoint does not count', async () => {
-      approve(state, { organization_id: ORG_B, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'new' }), expires_at: Date.now() + 60_000 });
-      approve(state, { organization_id: ORG_A, connection_id: EP_A_SECOND, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'new' }), expires_at: Date.now() + 60_000 });
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_B, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'new' }), expires_at: Date.now() + 60_000 });
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A_SECOND, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'new' }), expires_at: Date.now() + 60_000 });
       const { pick, toolset } = await session(OWNER_A);
       expect((await toolset([pick(EP_A, 'create_ticket')]).execute(call('create_ticket', { q: 'new' }))).code).toBe('APPROVAL_REQUIRED');
     });
@@ -246,7 +246,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       const { pick, toolset } = await session(OWNER_A);
       const ts = toolset([pick(EP_A, 'delete_project')]);
       expect((await ts.execute(call('delete_project', { q: 'p1' }))).code).toBe('APPROVAL_REQUIRED');
-      approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.delete_project', arguments_sha256: sha({ q: 'p1' }), expires_at: Date.now() + 60_000 });
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A, capability: 'external.delete_project', arguments_sha256: sha({ q: 'p1' }), expires_at: Date.now() + 60_000 });
       expect((await ts.execute(call('delete_project', { q: 'p1' }))).ok).toBe(true);
     });
 
@@ -306,7 +306,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
 
   describe('streaming events', () => {
     it('emits tool_start / tool_result with the server-side provider label, then the answer', async () => {
-      approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'ok' }), expires_at: Date.now() + 60_000 });
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'ok' }), expires_at: Date.now() + 60_000 });
       const { pick, toolset } = await session(OWNER_A);
       const ts = toolset([pick(EP_A, 'search_docs'), pick(EP_A, 'create_ticket')]);
       const toolMessages: string[] = [];
@@ -366,11 +366,26 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(denied.outcome).toBe('APPROVAL_REQUIRED');
       expect(argumentsSha256(args)).toBe(denied.argumentsSha256);
       expect(argumentsSha256({ meta: { a: 1, b: 2 }, tags: ['it', 'urgent'], title: 'VPN broken' })).toBe(denied.argumentsSha256);
-      approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
-      expect((await fakeDb(state, OWNER_A).rpc('is_tool_approved', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args) })).data).toBe(true);
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
+      expect((await fakeDb(state, OWNER_A).rpc('is_tool_approved', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: THREAD })).data).toBe(true);
       expect((await ts.execute(call('create_ticket', args))).ok).toBe(true);
       expect((await ts.execute(call('create_ticket', args))).code).toBe('APPROVAL_REQUIRED');
       expect((await ts.execute(call('create_ticket', { ...args, title: 'changed' }))).code).toBe('APPROVAL_REQUIRED');
+    });
+    it('F-4: another user cannot claim an approval', async () => {
+      const args = { q: 'x' };
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD, organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
+      expect((await fakeDb(state, MEMBER_A).rpc('claim_tool_approval', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: THREAD })).data).toBe(false);
+    });
+    it('F-4: another thread cannot reuse an approval', async () => {
+      const args = { q: 'y' };
+      approve(state, { requested_by: OWNER_A, thread_id: THREAD, organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
+      expect((await fakeDb(state, OWNER_A).rpc('claim_tool_approval', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: 'c0000000-0000-4000-8000-0000000000ff' })).data).toBe(false);
+    });
+    it('F-4: missing requester/thread cannot pass', async () => {
+      const args = { q: 'z' };
+      approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
+      expect((await fakeDb(state, OWNER_A).rpc('claim_tool_approval', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: THREAD })).data).toBe(false);
     });
   });
 

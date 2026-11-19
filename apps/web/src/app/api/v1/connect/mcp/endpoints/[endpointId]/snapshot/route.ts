@@ -11,6 +11,7 @@ import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { listExternalMcpTools } from '@tugpt/connect-runtime';
+import { createEgressMcpFetch, EGRESS_PROXY_ENV, EgressError } from '@/lib/chat/mcp-egress';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
 import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
 import { createHash } from 'node:crypto';

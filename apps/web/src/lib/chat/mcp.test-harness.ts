@@ -242,7 +242,7 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
         const now = state.now();
         const a = state.approvals.filter((x) => x.organization_id === org && x.connection_id === args.p_connection_id && x.capability === args.p_capability
           && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null
-          && (x.requested_by == null || x.requested_by === userId) && (x.thread_id == null || x.thread_id === args.p_thread_id))[0];
+          && x.requested_by === userId && x.thread_id === args.p_thread_id)[0];
         if (!a) return { data: false, error: null };
         a.used_at = now;
         return { data: true, error: null };
@@ -252,7 +252,7 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
         const now = state.now();
         return { data: state.approvals.some((x) => x.organization_id === org && x.connection_id === args.p_connection_id && x.capability === args.p_capability
           && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null
-          && (x.requested_by == null || x.requested_by === userId) && (x.thread_id == null || x.thread_id === args.p_thread_id)), error: null };
+          && x.requested_by === userId && x.thread_id === args.p_thread_id), error: null };
       }
       if (fn === 'list_mcp_capabilities') {
         if (!isMember(org)) return { data: [], error: null };

@@ -49,6 +49,7 @@ export interface ExternalMcpRepository {
   hasApprovedSnapshot(orgId: string, endpointId: string): Promise<boolean>;
   listEndpoints(orgId: string): Promise<ExternalToolEndpoint[]>;
   createSnapshot(orgId: string, endpointId: string, version: number, contentSha256: string, tools: readonly ExternalToolListEntry[]): Promise<string>;
+  getLatestSnapshotVersion(orgId: string, endpointId: string): Promise<number>;
   getSnapshot(orgId: string, snapshotId: string): Promise<{ id: string; approvedAt: string | null } | null>;
   listSnapshotTools(orgId: string, snapshotId: string): Promise<ExternalToolWithPermission[]>;
   approveSnapshot(orgId: string, snapshotId: string, tools: readonly { name: string; permissionClass: PermissionClass }[]): Promise<void>;
@@ -105,6 +106,19 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       const { data, error } = await u.rpc('list_endpoints_admin', { p_organization_id: orgId });
       if (error || !Array.isArray(data)) throw new Error('failed to list MCP endpoints');
       return data as ExternalToolEndpoint[];
+    },
+
+    async getLatestSnapshotVersion(orgId, endpointId) {
+      const { data, error } = await u
+        .from('external_tool_snapshots')
+        .select('version')
+        .eq('organization_id', orgId)
+        .eq('endpoint_id', endpointId)
+        .order('version', { ascending: false })
+        .limit(1)
+        .maybeSingle();
+      if (error) return 0;
+      return (data?.version as number) ?? 0;
     },
 
     async createSnapshot(orgId, endpointId, version, contentSha256, tools) {
