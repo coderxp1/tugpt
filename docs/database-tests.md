@@ -200,6 +200,26 @@ Dropping and recreating a function to change its arity deserves a
 the new one. Otherwise a `CREATE OR REPLACE` that accidentally leaves the old
 overload callable still passes.
 
+## Route-level lock regression (snapshot route)
+
+`scripts/regression/snapshot-route-lock.py` drives the real chain Next → PostgREST → Postgres on a
+**disposable** database (it re-creates one endpoint row and, in `slow-write` mode, a temporary trigger).
+A real psql session holds the endpoint row lock, a table lock, or slows the insert, for a chosen number
+of seconds after one `POST …/snapshot` is sent. Expected results (`lock_timeout=2s`, app timeout 5 s):
+
+| Case | Expected |
+|---|---|
+| `row` / `tools-ddl` held < 2 s | 201, next version |
+| `row` held ≥ 2 s (also just below 5 s) | 409 `SNAPSHOT_VERSION_CONFLICT` after ~2 s, nothing written |
+| `tools-ddl` held ≥ 2 s | 503 `SNAPSHOT_STORE_BUSY` + `Retry-After: 2` after ~2 s, nothing written |
+| `snap-read` held < 5 s, `slow-write` < 5 s | 201, next version |
+| `slow-write` > 5 s | 503 `DATABASE_TIMEOUT` after ~5 s; the outcome is unknown to the app and the snapshot can still commit, complete (all tool rows), after the response |
+
+Every case also asserts no idle-in-transaction sessions, no ungranted locks, contiguous versions,
+no snapshot without its tool rows, and that a follow-up request gets the next version. Never 500.
+Required environment: `SNAP_BASE_URL`, `SNAP_ORIGIN`, `SNAP_ORG_ID`, `SNAP_ENDPOINT_ID`,
+`SNAP_ENDPOINT_URL`, `SNAP_COOKIE_FILE`, `SNAP_PG_CONTAINER`, `SNAP_PG_PW_FILE`.
+
 ## Known gap
 
 The `database-tests` job runs but is **not yet a required status check** on
