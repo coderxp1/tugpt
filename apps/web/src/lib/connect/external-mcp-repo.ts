@@ -61,6 +61,9 @@ export interface ExternalMcpRepository {
 }
 
 /** The requested snapshot version is no longer latest+1 (a concurrent snapshot won). */
+/** SQLSTATE of create_mcp_snapshot's version conflict; PostgREST maps PTxyz to HTTP xyz and never retries it. */
+export const SNAPSHOT_CONFLICT_SQLSTATE = 'PT409';
+
 export class SnapshotVersionConflictError extends Error {
   constructor() { super('snapshot version conflict'); this.name = 'SnapshotVersionConflictError'; }
 }
@@ -136,10 +139,12 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
         p_tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
       });
       if (error) {
-        // create_mcp_snapshot raises 40001 when p_version is not latest+1 (concurrent or stale caller);
-        // 23505 is the UNIQUE (endpoint_id, version) backstop.
+        // create_mcp_snapshot raises PT409 when p_version is not latest+1 (concurrent or stale caller) or the
+        // endpoint lock is busy (20261120000004). PT409 is deliberately NOT 40001: PostgREST re-runs 40001
+        // transactions with the same arguments, which looped until the bridge JWT expired (Agent 1, M4).
+        // 23505 is the UNIQUE (endpoint_id, version) backstop. Anything else is an internal error.
         const code = (error as { code?: string }).code;
-        if (code === '40001' || code === '23505') throw new SnapshotVersionConflictError();
+        if (code === SNAPSHOT_CONFLICT_SQLSTATE || code === '23505') throw new SnapshotVersionConflictError();
         throw new Error('failed to persist the tool snapshot');
       }
       if (typeof data !== 'string') throw new Error('failed to persist the tool snapshot');

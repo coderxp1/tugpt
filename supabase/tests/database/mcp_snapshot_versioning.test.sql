@@ -1,8 +1,10 @@
--- Agent 2 M4: create_mcp_snapshot versioning, atomicity and tenant isolation.
+-- Agent 2 M4 (+ 20261120000004): create_mcp_snapshot versioning, atomicity and tenant isolation.
 -- Real Postgres; calls the RPC as the authenticated role (SET LOCAL ROLE + JWT claims).
--- Concurrency (two sessions) is covered by agent2-env/m4-concurrency.sh, not here.
+-- Conflicts are SQLSTATE PT409 (HTTP 409 in PostgREST, never retried), not 40001 (retried by PostgREST
+-- with the same arguments: the M4 retry storm). Real concurrency through PostgREST is exercised by the
+-- agent2 harness (agent2-env/m6), not here: one pgTAP session cannot race itself.
 BEGIN;
-SELECT plan(25);
+SELECT plan(28);
 
 INSERT INTO auth.users (id, email) VALUES
   ('a4000000-0000-4000-8000-0000000000a1', 'a4-owner-a@example.test'),
@@ -40,11 +42,11 @@ RETURNS uuid LANGUAGE sql AS $f$
 SELECT lives_ok($$INSERT INTO r VALUES ('v1', pg_temp.snap(1))$$, 'V1: first snapshot is v1');
 SELECT lives_ok($$INSERT INTO r VALUES ('v2', pg_temp.snap(2))$$, 'V2: second snapshot is v2');
 SELECT lives_ok($$INSERT INTO r VALUES ('v3', pg_temp.snap(3))$$, 'V3: third snapshot is v3');
-SELECT throws_ok($$SELECT pg_temp.snap(3)$$, '40001', 'SNAPSHOT_VERSION_CONFLICT', 'V4: replaying v3 is a conflict');
-SELECT throws_ok($$SELECT pg_temp.snap(1)$$, '40001', 'SNAPSHOT_VERSION_CONFLICT', 'V5: stale v1 (the old hard-coded value) is a conflict');
-SELECT throws_ok($$SELECT pg_temp.snap(5)$$, '40001', 'SNAPSHOT_VERSION_CONFLICT', 'V6: skipping to v5 is a conflict');
-SELECT throws_ok($$SELECT pg_temp.snap(NULL)$$, '40001', 'SNAPSHOT_VERSION_CONFLICT', 'V7: NULL version is a conflict');
-SELECT throws_ok($$SELECT pg_temp.snap(0)$$, '40001', 'SNAPSHOT_VERSION_CONFLICT', 'V8: version 0 is a conflict');
+SELECT throws_ok($$SELECT pg_temp.snap(3)$$, 'PT409', 'SNAPSHOT_VERSION_CONFLICT', 'V4: replaying v3 is a conflict');
+SELECT throws_ok($$SELECT pg_temp.snap(1)$$, 'PT409', 'SNAPSHOT_VERSION_CONFLICT', 'V5: stale v1 (the old hard-coded value) is a conflict');
+SELECT throws_ok($$SELECT pg_temp.snap(5)$$, 'PT409', 'SNAPSHOT_VERSION_CONFLICT', 'V6: skipping to v5 is a conflict');
+SELECT throws_ok($$SELECT pg_temp.snap(NULL)$$, 'PT409', 'SNAPSHOT_VERSION_CONFLICT', 'V7: NULL version is a conflict');
+SELECT throws_ok($$SELECT pg_temp.snap(0)$$, 'PT409', 'SNAPSHOT_VERSION_CONFLICT', 'V8: version 0 is a conflict');
 SELECT is((SELECT array_agg(version ORDER BY version) FROM public.external_tool_snapshots
             WHERE endpoint_id = 'a4000000-0000-4000-8000-0000000e000a'), ARRAY[1,2,3], 'V9: versions are exactly 1,2,3');
 
@@ -84,6 +86,14 @@ SELECT is((SELECT count(*)::int FROM public.external_tool_snapshots WHERE endpoi
 SELECT ok((SELECT prosecdef FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure), 'C1: SECURITY DEFINER kept');
 SELECT ok(NOT has_function_privilege('anon', 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)', 'EXECUTE')
        AND has_function_privilege('authenticated', 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)', 'EXECUTE'), 'C2: anon cannot execute; authenticated can');
+
+SELECT ok((SELECT 'lock_timeout=5s' = ANY(proconfig) FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure),
+  'C3: the endpoint lock wait is bounded (lock_timeout=5s), so a loser cannot hang');
+SELECT is((SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+            WHERE n.nspname IN ('public','private','sso') AND p.prosrc ~* 'errcode\s*=\s*''(40001|40P01)'''), 0,
+  'C4: no function raises a PostgREST-retryable SQLSTATE (40001 / 40P01)');
+SELECT ok((SELECT position('lock_not_available' IN prosrc) > 0 FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure),
+  'C5: a lock timeout is reported as the PT409 conflict');
 
 SELECT * FROM finish();
 ROLLBACK;
