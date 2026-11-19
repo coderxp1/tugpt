@@ -114,7 +114,7 @@ describe('API clients never treat a failure as permission', () => {
   it('checkApproval: GET with query, boolean only', async () => {
     const f = vi.fn(() => res(200, { approved: true, id: 'id-1', expiresAt: '2026-11-16T18:00:00.000Z' }));
     expect(await checkApproval(base, f)).toEqual({ ok: true, value: { approved: true } });
-    expect(String((f.mock.calls[0] as unknown as [string])[0])).toBe(`/api/v1/chat/approvals/status?connectionId=${EP}&capability=external.create_ticket&argumentsSha256=${base.argumentsSha256}`);
+    expect(String((f.mock.calls[0] as unknown as [string])[0])).toBe(`/api/v1/chat/approvals/status?connectionId=${EP}&capability=external.create_ticket&argumentsSha256=${base.argumentsSha256}&threadId=${base.threadId}`);
     expect((await checkApproval(base, vi.fn(() => res(503, { error: 'x' })))).ok).toBe(false);
     expect((await checkApproval(base, vi.fn(() => res(200, { approved: 1 })))).ok).toBe(false);
   });

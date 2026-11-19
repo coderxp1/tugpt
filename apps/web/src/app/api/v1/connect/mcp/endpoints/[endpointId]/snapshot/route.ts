@@ -12,6 +12,7 @@ import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
+import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
 import { createHash } from 'node:crypto';
 import type { ApiError } from '@/lib/draft-api/types';
 
@@ -34,6 +35,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ end
     if (!tenant) return errorResponse(403, 'FORBIDDEN', 'No active organization found');
     if (tenant.role !== 'owner' && tenant.role !== 'admin') {
       return errorResponse(403, 'FORBIDDEN', 'Snapshotting an MCP endpoint requires the organization owner or admin role');
+    }
+    if (!customerMcpEnabled()) {
+      return errorResponse(403, 'FORBIDDEN', 'Customer MCP is not enabled');
     }
 
         const repo = createExternalMcpRepository(supabase);

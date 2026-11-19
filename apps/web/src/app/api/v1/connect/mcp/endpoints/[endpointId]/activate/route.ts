@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
+import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
 import { decideActivation, verifyEgressEnforced } from '@tugpt/connect-runtime';
 import type { ApiError } from '@/lib/draft-api/types';
 
@@ -33,8 +34,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ end
     const hint = request.headers.get('x-tenant-id') ?? new URL(request.url).searchParams.get('tenant');
     const tenant = await authService.resolveTenantContext(user.id, hint);
     if (!tenant) return errorResponse(403, 'FORBIDDEN', 'No active organization found');
+    if (tenant.role !== 'owner' && tenant.role !== 'admin') {
+      return errorResponse(403, 'FORBIDDEN', 'Activating an MCP endpoint requires the organization owner or admin role');
+    }
+    if (!customerMcpEnabled()) {
+      return errorResponse(403, 'FORBIDDEN', 'Customer MCP is not enabled');
+    }
 
-        const repo = createExternalMcpRepository(supabase);
+    const repo = createExternalMcpRepository(supabase);
 
     const endpoint = await repo.getEndpoint(tenant.organizationId, endpointId);
     if (!endpoint) return errorResponse(404, 'NOT_FOUND', 'MCP endpoint not found');

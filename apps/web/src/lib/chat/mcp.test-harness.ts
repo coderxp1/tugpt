@@ -157,7 +157,7 @@ export async function deadPort(): Promise<number> {
 // ---------------------------------------------------------------- fake database
 
 type Row = Record<string, unknown>;
-export interface Approval { id: string; organization_id: string; connection_id: string; capability: string; arguments_sha256: string; expires_at: number; used_at: number | null; revoked_at: number | null }
+export interface Approval { id: string; organization_id: string; connection_id: string; capability: string; arguments_sha256: string; expires_at: number; used_at: number | null; revoked_at: number | null; requested_by?: string | null; thread_id?: string | null }
 
 export interface FakeState {
   members: Record<string, Record<string, 'owner' | 'admin' | 'manager' | 'member'>>; // org -> user -> role
@@ -241,7 +241,8 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
         if (!isMember(org)) return { data: false, error: null };
         const now = state.now();
         const a = state.approvals.filter((x) => x.organization_id === org && x.connection_id === args.p_connection_id && x.capability === args.p_capability
-          && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null)[0];
+          && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null
+          && (x.requested_by == null || x.requested_by === userId) && (x.thread_id == null || x.thread_id === args.p_thread_id))[0];
         if (!a) return { data: false, error: null };
         a.used_at = now;
         return { data: true, error: null };
@@ -250,7 +251,8 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
         if (!isMember(org)) return { data: false, error: null };
         const now = state.now();
         return { data: state.approvals.some((x) => x.organization_id === org && x.connection_id === args.p_connection_id && x.capability === args.p_capability
-          && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null), error: null };
+          && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null
+          && (x.requested_by == null || x.requested_by === userId) && (x.thread_id == null || x.thread_id === args.p_thread_id)), error: null };
       }
       if (fn === 'list_mcp_capabilities') {
         if (!isMember(org)) return { data: [], error: null };

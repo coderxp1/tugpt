@@ -192,7 +192,7 @@ export async function revokeApproval(approvalId: string, fetchFn: FetchFn = fetc
 
 /** is_tool_approved() through the chat status route: an unused, unexpired, unrevoked approval exists. */
 export async function checkApproval(p: PendingApproval, fetchFn: FetchFn = fetch): Promise<ApprovalResult<{ approved: boolean }>> {
-  const q = new URLSearchParams(target(p));
+  const q = new URLSearchParams({ ...target(p), threadId: p.threadId });
   return call(fetchFn, `${STATUS_URL}?${q.toString()}`, { method: 'GET' },
     (b) => (isPlainObject(b) && typeof b.approved === 'boolean' ? { approved: b.approved } : undefined));
 }

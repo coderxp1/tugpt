@@ -9,6 +9,7 @@ import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
+import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
 import type { ApiError } from '@/lib/draft-api/types';
 
 function errorResponse(status: number, code: string, message: string) {
@@ -45,6 +46,7 @@ export async function POST(request: Request) {
   try {
     const a = await authAdmin(request);
     if ('error' in a) return a.error;
+    if (!customerMcpEnabled()) return errorResponse(403, 'FORBIDDEN', 'Customer MCP is not enabled');
 
     const body = (await request.json().catch(() => null)) as { url?: unknown; displayName?: unknown } | null;
     const url = body?.url;
