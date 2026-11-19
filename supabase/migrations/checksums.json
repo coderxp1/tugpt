@@ -106,5 +106,6 @@
   "20261120100002_workspace_document_jobs.sql": "f43f1758a1a5e3fce255bcb4204561bcc631a17b8aba44dc9c52399f2b7f349b",
   "20261120100003_workspace_rate_limits.sql": "195812bfb54c2479fffdbe9d7cf6bf1668c92d8f1c20c649d9bfa021a1332efb",
   "20261120100004_workspace_custom_agents.sql": "f62be1bc1396469dcf9b40bf6bd556748bb56eccfb39f20ac117d25fbe6481a1",
-  "20261120100005_workspace_storage_maintenance.sql": "88ae9e3bcc145041863a699927251c345aac9326da140311f6f0761c87bee39f"
+  "20261120100005_workspace_storage_maintenance.sql": "88ae9e3bcc145041863a699927251c345aac9326da140311f6f0761c87bee39f",
+  "20261120100006_workspace_document_dedupe.sql": "fe9365bfead074bc8476aed7efb961b0b81bdec65deca23ab2c96ac5bce75a0d"
 }

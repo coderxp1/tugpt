@@ -21,6 +21,8 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { argumentsSha256 } from '@/lib/chat/approval.server';
 import { blobKey, FilesystemBlobStore, setBlobStoreForTests } from './storage';
 import { makeDocx } from './zip.test-harness';
+import { insertUploading, removeRow } from './files';
+import type { WorkspaceDb } from './db';
 import { EmbeddingsClient } from '@tugpt/workspace-core/embeddings';
 import { pdfExtractor } from '@tugpt/workspace-core/pdf';
 import { runKnowledgeBatch, type KnowledgeDeps } from '../../../../worker/src/knowledge-worker';
@@ -516,7 +518,10 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
       expect((await call('documents', 'POST', { params: { collectionId: privateCol }, body: { fileId: docx, title: 'Travel policy' } })).status).toBe(202);
       expect((await call('documents', 'POST', { params: { collectionId: privateCol }, body: { fileId: pdf } })).status).toBe(202);
       expect((await call('documents', 'POST', { params: { collectionId: privateCol }, body: { fileId: fake } })).status).toBe(202);
-      expect((await call('documents', 'POST', { params: { collectionId: privateCol }, body: { fileId: mdFile } })).status).toBe(409);
+      // Retrying the same file is idempotent: the existing document, no second row (Q-8).
+      const again = await call('documents', 'POST', { params: { collectionId: privateCol }, body: { fileId: mdFile } });
+      expect(again.status).toBe(200);
+      expect(again.json).toMatchObject({ created: false, document: { id: mdDoc, status: 'pending' } });
       // Nothing is searchable until the worker has processed the queue.
       expect((await call('search', 'GET', { query: 'q=quantum' })).json.hits).toEqual([]);
 
@@ -645,6 +650,143 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
       expect((await call('collection', 'GET', { params: { collectionId: 'not-a-uuid' } })).status).toBe(404);
       expect((await call('search', 'GET', { query: 'q=' })).status).toBe(400);
       expect((await call('search', 'GET', { query: 'q=x&collectionIds=../etc' })).status).toBe(400);
+    });
+
+    // ------------------------------------------------------------ Q-8: Library upload flow end to end
+    describe('Q-8 upload flow', () => {
+      const docsOf = async (collectionId: string) =>
+        (await call('collection', 'GET', { params: { collectionId } })).json.documents as Record<string, any>[]; // eslint-disable-line @typescript-eslint/no-explicit-any
+      const add = (collectionId: string, fileId: string, title?: string) =>
+        call('documents', 'POST', { params: { collectionId }, body: title === undefined ? { fileId } : { fileId, title } });
+      const newCollection = async (name: string) => (await call('collections', 'POST', { body: { name } })).json.collection.id as string;
+      const dropCollection = async (collectionId: string) => { expect((await call('collection', 'DELETE', { params: { collectionId } })).status).toBe(200); };
+
+      it('returns pending (202), the worker makes it ready, and only then is it searchable', async () => {
+        as(U.memberA);
+        const col = await newCollection('Q-8 flow');
+        try {
+          const f = await upload('hangar.md', '# Hangar\n\nThe zeppelin hangar checklist covers mooring masts.', 'text/markdown');
+          expect(f.status).toBe(201);
+          const a = await add(col, f.json.file.id);
+          expect(a.status).toBe(202);
+          expect(a.json).toMatchObject({ created: true, document: { status: 'pending', chunkCount: 0, indexedAt: null, errorCode: null } });
+          expect((await call('search', 'GET', { query: `q=zeppelin&collectionIds=${col}` })).json.hits).toEqual([]);
+
+          const bad = (await upload('broken.pdf', '%PDF-1.7\n%not really', 'application/pdf')).json.file.id;
+          expect((await add(col, bad)).status).toBe(202);
+
+          expect(await drain()).toBe(2);
+          const docs = new Map((await docsOf(col)).map((d) => [d.fileId as string, d]));
+          expect(docs.get(f.json.file.id)).toMatchObject({ status: 'ready', errorCode: null, processingAttempts: 1 });
+          expect(docs.get(f.json.file.id)!.chunkCount).toBeGreaterThan(0);
+          expect(docs.get(f.json.file.id)!.indexedAt).not.toBeNull();
+          expect(docs.get(bad)).toMatchObject({ status: 'failed', errorCode: 'EXTRACTION_FAILED', chunkCount: 0 });
+
+          const hits = (await call('search', 'GET', { query: `q=zeppelin hangar&collectionIds=${col}` })).json.hits;
+          expect(hits.map((h: { fileId: string }) => h.fileId)).toEqual([f.json.file.id]);
+          expect((await call('search', 'GET', { query: `q=really&collectionIds=${col}` })).json.hits).toEqual([]);
+        } finally { await dropCollection(col); }
+      });
+
+      it('retries and re-uploads never create a second document, even concurrently', async () => {
+        as(U.memberA);
+        const col = await newCollection('Q-8 retries');
+        try {
+          const bytes = '# Retry\n\nQuokka migration runbook for the warehouse.';
+          const f1 = (await upload('runbook.md', bytes, 'text/markdown')).json.file.id;
+          const first = await add(col, f1);
+          expect(first.status).toBe(202);
+          const docId = first.json.document.id;
+          // 1. Lost response: same file id again.
+          const r1 = await add(col, f1);
+          expect(r1.status).toBe(200);
+          expect(r1.json).toMatchObject({ created: false, document: { id: docId, title: 'runbook.md', status: 'pending' } });
+          // 2. The user drops the same file again: new file id, same bytes.
+          const f2 = (await upload('runbook (1).md', bytes, 'text/markdown')).json.file.id;
+          expect(f2).not.toBe(f1);
+          const r2 = await add(col, f2, 'Runbook copy');
+          expect(r2.status).toBe(200);
+          expect(r2.json).toMatchObject({ created: false, document: { id: docId, fileId: f1, title: 'runbook.md' } });
+          expect(await docsOf(col)).toHaveLength(1);
+          // 3. Concurrent adds of NEW content under two file ids: exactly one wins.
+          const other = '# Other\n\nNarwhal inventory list.';
+          const [g1, g2] = await Promise.all([upload('narwhal.md', other, 'text/markdown'), upload('narwhal copy.md', other, 'text/markdown')]);
+          const raced = await Promise.all([add(col, g1.json.file.id), add(col, g2.json.file.id)]);
+          expect(raced.map((r) => r.status).sort()).toEqual([200, 202]);
+          expect(raced[0].json.document.id).toBe(raced[1].json.document.id);
+          expect(raced.map((r) => r.json.created).sort()).toEqual([false, true]);
+          expect(await docsOf(col)).toHaveLength(2);
+          // Refused duplicates queued no extra work; a retry after indexing returns the ready document unchanged.
+          expect(await drain()).toBe(2);
+          const r3 = await add(col, f2);
+          expect(r3.status).toBe(200);
+          expect(r3.json.document).toMatchObject({ id: docId, status: 'ready', processingAttempts: 1 });
+          expect(await drain()).toBe(0);
+          expect((await call('search', 'GET', { query: `q=quokka&collectionIds=${col}` })).json.hits).toHaveLength(1);
+          // The same bytes in ANOTHER collection are a separate, legitimate document.
+          const col2 = await newCollection('Q-8 elsewhere');
+          try {
+            expect((await add(col2, f2)).status).toBe(202);
+            expect(await drain()).toBe(1);
+          } finally { await dropCollection(col2); }
+        } finally { await dropCollection(col); }
+      });
+
+      it('a storage failure leaves no file and no document; unready or missing files are refused', async () => {
+        as(U.memberA);
+        const col = await newCollection('Q-8 failures');
+        try {
+          const failing = Object.create(store) as FilesystemBlobStore;
+          failing.put = async () => { throw new Error('simulated disk full'); };
+          setBlobStoreForTests(failing);
+          let r: Awaited<ReturnType<typeof upload>>;
+          try { r = await upload('lost-q8.md', '# Lost\n\nKiwi.', 'text/markdown'); } finally { setBlobStoreForTests(store); }
+          expect(r.status).toBe(503);
+          expect(r.json).toEqual({ error: 'STORAGE_UNAVAILABLE' });
+          const leftover = await (svc as unknown as PostgrestClient).from('workspace_files').select('id').eq('organization_id', ORG_A).eq('filename', 'lost-q8.md');
+          expect(leftover.error).toBeNull();
+          expect(leftover.data).toEqual([]);
+
+          // A file whose upload never finished (row exists, still 'uploading').
+          const db = clients.get(U.memberA.id) as WorkspaceDb;
+          const stuck = await insertUploading(db, ORG_A, U.memberA.id, { filename: 'stuck.md', mediaType: 'text/markdown', sizeBytes: 5, visibility: 'private' });
+          try {
+            const s1 = await add(col, stuck);
+            expect(s1.status).toBe(409);
+            expect(s1.json).toEqual({ error: 'CONFLICT' });
+          } finally { await removeRow(db, ORG_A, stuck); }
+          expect((await add(col, MISSING)).status).toBe(404);
+          expect(await docsOf(col)).toEqual([]);
+          expect(await drain()).toBe(0);
+        } finally { await dropCollection(col); }
+      });
+
+      it('nobody can add to another user\'s or another tenant\'s collection, or add a file they cannot read', async () => {
+        as(U.ownerA);
+        const ownerPrivate = (await upload('owner-only.md', '# Owner\n\nPelican budget.', 'text/markdown')).json.file.id;
+        as(U.ownerB);
+        const bFile = (await upload('tenant-b.md', '# B\n\nTenant B secrets.', 'text/markdown')).json.file.id;
+        as(U.memberA);
+        const col = await newCollection('Q-8 isolation');
+        const mine = (await upload('mine.md', '# Mine\n\nOstrich notes.', 'text/markdown')).json.file.id;
+        try {
+          as(U.ownerB);
+          expect((await add(col, bFile)).status).toBe(404);  // other tenant, own file
+          as(U.ownerB, ORG_A);                                  // forged tenant: refused by the membership check
+          for (const f of [mine, bFile]) expect(await add(col, f)).toMatchObject({ status: 403, json: { error: 'FORBIDDEN' } });
+          as(U.ownerA);                                         // same org, not the collection owner
+          expect((await add(col, ownerPrivate)).status).toBe(404);
+          as(U.viewerA);
+          expect((await add(col, mine)).status).toBe(404);
+          as(U.memberA);                                        // own collection, someone else's private file
+          expect((await add(col, ownerPrivate)).status).toBe(404);
+          expect((await add(col, bFile)).status).toBe(404);
+          expect(await docsOf(col)).toEqual([]);
+          expect(await drain()).toBe(0);
+          expect((await add(col, mine)).status).toBe(202);      // the legitimate path still works
+          expect(await drain()).toBe(1);
+        } finally { as(U.memberA); await dropCollection(col); }
+      });
     });
 
     // ------------------------------------------------------------ agents (share the collections above)

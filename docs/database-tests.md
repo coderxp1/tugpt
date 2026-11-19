@@ -28,7 +28,7 @@ Original SQL regression files remain unchanged, including approval/enqueue, outb
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 62 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
+**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 63 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
 
 ## Why this document exists
 
@@ -156,6 +156,7 @@ is unavailable — there is no skip path. Current races:
 | `workspace_rate_limits.test.sql` | workspace rate limits (migration 20261120100003): counters and policies are private, budgets are per action, organization and user, the call over the limit is refused with a retry-after, unknown actions and non-members are rejected (so outsiders cannot exhaust a tenant's budget), windows reset, and pruning is service_role only |
 | `workspace_custom_agents.test.sql` | custom agents (migration 20261120100004): RLS forced, identity and version not client-writable, private agents owner-only (the org owner too), only owner/admin publish to the organization, viewers cannot create, members cannot edit agents they do not own, tool selection holds only `{capability, provider}` keys without duplicates, starters/instructions/names bounded, the version moves only on real changes, knowledge links need write access to the agent and read access to the collection (never across tenants), conversations can start only from a readable agent and survive its deletion, and agent operations are audited |
 | `workspace_storage_maintenance.test.sql` | storage maintenance (migration 20261120100005): maintenance functions are service_role only, deleting a file queues its blob, stale uploads expire after a grace period with a 15 minute floor, deletions are leased and failed ones back off, the orphan check reports surviving file ids, the organization purge refuses live organizations and the grace period (7 day floor), deletes only that organization's workspace data, queues one prefix deletion, is audited once without per-row noise and is idempotent |
+| `workspace_document_dedupe.test.sql` | one document per content per collection (migration 20261120100006, Q-8): the content hash is set by the database and cannot be supplied or changed by users, the in-request chunk writer stays closed to users, new documents start pending, a retry with the same file and a re-upload of the same bytes under a new file id are refused in the same collection, the same bytes in another collection or another tenant are independent, refused duplicates enqueue no processing jobs |
 
 ## Writing a test
 

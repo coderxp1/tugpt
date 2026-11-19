@@ -108,7 +108,7 @@ or log. The blob key is derived on the server as `org/<orgId>/files/<fileId>`, a
 | `GET /api/v1/library/collections/{id}` | none | `200 {collection, documents}` | readers |
 | `PATCH /api/v1/library/collections/{id}` | `{name?, description?, visibility?}` (changing to `organization` needs admin) | `200 {collection}` | writers |
 | `DELETE /api/v1/library/collections/{id}` | none | `200 {deleted:true}`. Readable but not writable returns 403 | writers |
-| `POST /api/v1/library/collections/{id}/documents` | `{fileId, title?}` | **`202 {document}`** with `status: 'pending'`; the worker indexes it | writers; the file must be readable. The same file twice returns 409 |
+| `POST /api/v1/library/collections/{id}/documents` | `{fileId, title?}` | **`202 {document, created: true}`** with `status: 'pending'`; the worker indexes it. **`200 {document, created: false}`** when this file *or the same content* (SHA-256) is already in the collection: the existing document is returned unchanged, so retries never create duplicates | writers; the file must be `ready` and readable (`409 CONFLICT` otherwise). Never indexes in the request |
 | `POST /api/v1/library/collections/{id}/documents/{docId}` | `{action: 'reindex'}` | **`202 {document}`** (`pending`, attempts reset) | writers (readers of a foreign private collection get 404) |
 | `DELETE /api/v1/library/collections/{id}/documents/{docId}` | none | `200 {deleted:true}` (the file is kept) | writers |
 | `GET /api/v1/library/search` | `q` (required, ≤200), `collectionIds=a,b` (optional), `limit` ≤50 | `200 {hits: SearchHit[], semantic: boolean}` | readers |
@@ -147,6 +147,21 @@ or log. The blob key is derived on the server as `org/<orgId>/files/<fileId>`, a
   migration, e.g. `CREATE INDEX … USING hnsw ((embedding::vector(1024)) vector_cosine_ops) WHERE dims = 1024`.
 - **No similarity threshold:** semantic search returns the nearest neighbours even when they are not close.
   Treat low `semanticScore` hits accordingly in the UI.
+
+### Upload flow and failure semantics (Q-8)
+
+A Library upload is `POST /api/v1/files` followed by `POST …/documents`. Each step either succeeds or leaves nothing misleading behind:
+
+| Failure | Response | What remains |
+|---|---|---|
+| Storage write fails | `503 STORAGE_UNAVAILABLE` from `/files` | No file row (removed again), no document |
+| Storage not configured | `503 STORAGE_NOT_CONFIGURED` | Nothing |
+| File not `ready` (upload still running, or crashed) | `409 CONFLICT` from `…/documents` | No document; stale `uploading` rows are purged by maintenance (§5c) |
+| Response of `…/documents` lost, client retries | `200 {created: false}` | One document |
+| User drops the same file again (new file id, same bytes) | `200 {created: false}`, existing document | One document; the second *file* stays in the user's files (it is a real upload) |
+| No write access | `403 FORBIDDEN` (collection readable) / `404 NOT_FOUND` (not readable, other tenant, forged tenant) | Nothing |
+
+The response never claims more than is true: a new document is `pending`, and it is neither `ready` nor searchable until the worker has stored its chunks. The web role cannot write chunks at all (`replace_document_chunks` is not executable by `authenticated` since `20261120100002`).
 
 ## 5a. Custom agents
 
@@ -252,7 +267,7 @@ Details hold IDs, hashes and classes only: no arguments, file content, filenames
 `20261119100001_workspace_conversations` · `…100002_workspace_approval_requests` · `…100003_workspace_files` ·
 `…100004_workspace_library` (frozen), then `20261120100001_workspace_knowledge_vectors` ·
 `…100002_workspace_document_jobs` · `…100003_workspace_rate_limits` · `…100004_workspace_custom_agents` ·
-`…100005_workspace_storage_maintenance`. All are registered in `supabase/migrations/checksums.json`. Any
+`…100005_workspace_storage_maintenance` · `…100006_workspace_document_dedupe` (one document per content per collection). All are registered in `supabase/migrations/checksums.json`. Any
 further change needs a **new** migration ID.
 
 ## 10. Tests

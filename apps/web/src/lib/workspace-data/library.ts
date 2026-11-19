@@ -81,12 +81,23 @@ export async function deleteCollection(db: WorkspaceDb, organizationId: string, 
 }
 
 /**
- * Adds an uploaded (ready, readable) file to a writable collection. The insert
- * trigger (20261120100002) enqueues a processing job; the knowledge worker
- * extracts, chunks and embeds asynchronously. The returned document is
- * `pending`; clients poll the collection for status/errorCode/attempts.
+ * Adds an uploaded (ready, readable) file to a writable collection.
+ *
+ * Never indexes in the request (Q-8): the insert trigger (20261120100002)
+ * enqueues a job and the knowledge worker extracts, chunks and embeds. A new
+ * document is therefore always returned as `pending` with `created: true`;
+ * clients poll the collection until it is `ready` / `failed` / `unsupported`.
+ *
+ * Idempotent for retries. The database allows one document per file and one
+ * per content hash in a collection (20261120100006). When either key already
+ * exists, the existing document is returned unchanged with `created: false`:
+ * retrying a lost response, or re-uploading the same bytes under a new file
+ * id, never produces a second document. A unique violation implies the row
+ * passed the documents_insert policy (RLS WITH CHECK runs before index
+ * checks), i.e. the caller may write, and so read, this collection.
  */
-export async function addDocument(db: WorkspaceDb, organizationId: string, userId: string, collectionId: string, input: { fileId: string; title?: string | null }): Promise<LibraryDocument> {
+export async function addDocument(db: WorkspaceDb, organizationId: string, userId: string, collectionId: string,
+  input: { fileId: string; title?: string | null }): Promise<{ document: LibraryDocument; created: boolean }> {
   const fileRow = check(await db.from('workspace_files').select(FILE_COLS).eq('id', input.fileId).eq('organization_id', organizationId).maybeSingle());
   if (!fileRow) throw new WorkspaceError(404, 'NOT_FOUND');
   const file = toFile(fileRow, userId);
@@ -99,8 +110,23 @@ export async function addDocument(db: WorkspaceDb, organizationId: string, userI
     const visible = check(await db.from('knowledge_collections').select('id').eq('id', collectionId).eq('organization_id', organizationId).maybeSingle());
     throw new WorkspaceError(visible ? 403 : 404, visible ? 'FORBIDDEN' : 'NOT_FOUND');
   }
-  if (inserted.error?.code === '23505') throw new WorkspaceError(409, 'ALREADY_EXISTS');
-  return toDocument(check(inserted));
+  if (inserted.error?.code === '23505') {
+    const existing = await existingDocument(db, organizationId, collectionId, file.id, (fileRow as { sha256?: unknown }).sha256);
+    if (!existing) throw new WorkspaceError(409, 'ALREADY_EXISTS');
+    return { document: existing, created: false };
+  }
+  return { document: toDocument(check(inserted)), created: true };
+}
+
+const SHA256_HEX = /^[0-9a-f]{64}$/;
+/** The document that blocked an insert: same file first, else same content (the two unique keys). */
+async function existingDocument(db: WorkspaceDb, organizationId: string, collectionId: string, fileId: string, sha: unknown): Promise<LibraryDocument | null> {
+  const inCollection = () => db.from('knowledge_documents').select(DOCUMENT_COLS).eq('organization_id', organizationId).eq('collection_id', collectionId);
+  const byFile = check(await inCollection().eq('file_id', fileId).maybeSingle());
+  if (byFile) return toDocument(byFile);
+  if (typeof sha !== 'string' || !SHA256_HEX.test(sha)) return null;
+  const byContent = check(await inCollection().eq('content_sha256', sha).maybeSingle());
+  return byContent ? toDocument(byContent) : null;
 }
 
 /** Re-queues processing (resets attempts). Writable collections only; enforced by request_document_reindex. */

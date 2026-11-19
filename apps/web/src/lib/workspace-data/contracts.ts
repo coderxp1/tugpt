@@ -258,7 +258,7 @@ export function createWorkspaceClient(fetchFn: FetchFn = (i, init) => fetch(i, i
     getCollection: (id: string) => call<CollectionDetail>('GET', WORKSPACE_API.collection(id)),
     updateCollection: (id: string, patch: { name?: string; description?: string | null; visibility?: FileVisibility }) => call<{ collection: Collection }>('PATCH', WORKSPACE_API.collection(id), patch),
     deleteCollection: (id: string) => call<{ deleted: true }>('DELETE', WORKSPACE_API.collection(id)),
-    addDocument: (collectionId: string, fileId: string, title?: string) => call<{ document: LibraryDocument }>('POST', WORKSPACE_API.documents(collectionId), { fileId, title }),
+    addDocument: (collectionId: string, fileId: string, title?: string) => call<{ document: LibraryDocument; created?: boolean }>('POST', WORKSPACE_API.documents(collectionId), { fileId, title }),
     reindexDocument: (collectionId: string, documentId: string) => call<{ document: LibraryDocument }>('POST', WORKSPACE_API.document(collectionId, documentId), { action: 'reindex' }),
     removeDocument: (collectionId: string, documentId: string) => call<{ deleted: true }>('DELETE', WORKSPACE_API.document(collectionId, documentId)),
     search: (q: string, opts: { collectionIds?: readonly string[]; limit?: number } = {}) =>

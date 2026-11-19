@@ -36,3 +36,37 @@ organization and in another one.
 
 The cookie file and the private key are secrets: keep them `0600` outside the
 repository, and never log them.
+
+# Library upload over real HTTP (Q-8)
+
+`library-upload-http.e2e.mjs` uses the same `next start`, cookies and bridge,
+plus the **real knowledge worker** (`apps/worker/dist/knowledge-index.js`).
+It checks that:
+
+- adding an uploaded file returns `202` with a `pending` document (no inline
+  indexing, no `403`), and the document is not searchable while pending;
+- a retry with the same file, or a re-upload of the same bytes under a new file
+  id, returns `200` with `created:false` and the existing document (no
+  duplicates);
+- another tenant gets `404`, a forged tenant hint gets `403`, a viewer or
+  another user in the same organization gets `404`, and no session gets `401`;
+- the worker moves the document `pending → ready`, after which search finds
+  it; a file it cannot extract ends `failed` / `EXTRACTION_FAILED`.
+
+The runner spawns the worker only after the pending checks, so they cannot
+race. It passes its own environment to the worker.
+
+Additional setup:
+
+7. `next start` and the runner both need `TUGPT_FILE_STORAGE=fs` and the same
+   absolute `TUGPT_FILE_STORAGE_DIR` (use a temporary directory).
+8. The worker needs `SUPABASE_SERVICE_ROLE_KEY` (a short-lived HS256
+   `role=service_role` token for a PostgREST **without** `sso.pre_request`) and
+   `NEXT_PUBLIC_SUPABASE_URL`, which must serve PostgREST under `/rest/v1/` like
+   Supabase. A small path-rewriting proxy is enough locally.
+9. `E2E_WORKER_ENTRY=<abs path to knowledge-index.js> … node tests/workspace-e2e/library-upload-http.e2e.mjs`
+
+The service-role token is a secret: keep it in process memory only.
+
+A storage write failure (`503 STORAGE_UNAVAILABLE`, no file row) is covered by
+the route integration test, not over HTTP.

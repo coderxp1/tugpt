@@ -20,7 +20,9 @@ INSERT INTO public.workspace_files (id, organization_id, owner_user_id, filename
  ('e8f00000-0000-4000-8000-000000000001','e8a00000-0000-4000-8000-00000000000a','e8222222-2222-4222-8222-222222222222','policy.txt','text/plain',100),
  ('e8f00000-0000-4000-8000-000000000002','e8a00000-0000-4000-8000-00000000000a','e8222222-2222-4222-8222-222222222222','bad.pdf','application/pdf',100),
  ('e8f00000-0000-4000-8000-000000000003','e8a00000-0000-4000-8000-00000000000a','e8222222-2222-4222-8222-222222222222','slow.docx','application/vnd.openxmlformats-officedocument.wordprocessingml.document',100);
-UPDATE public.workspace_files SET status='ready', sha256=repeat('b',64) WHERE organization_id='e8a00000-0000-4000-8000-00000000000a';
+-- Distinct contents: one document per content per collection (20261120100006).
+UPDATE public.workspace_files SET status='ready', sha256=CASE id WHEN 'e8f00000-0000-4000-8000-000000000001' THEN repeat('b',64)
+  WHEN 'e8f00000-0000-4000-8000-000000000002' THEN repeat('c',64) ELSE repeat('d',64) END WHERE organization_id='e8a00000-0000-4000-8000-00000000000a';
 INSERT INTO public.knowledge_collections (id, organization_id, owner_user_id, name) VALUES
  ('e8c00000-0000-4000-8000-000000000001','e8a00000-0000-4000-8000-00000000000a','e8222222-2222-4222-8222-222222222222','Member private');
 -- Keep other suites' queued jobs out of this test's claims (rolled back at the end).
