@@ -95,6 +95,8 @@ export async function deleteCollection(db: WorkspaceDb, organizationId: string, 
  * id, never produces a second document. A unique violation implies the row
  * passed the documents_insert policy (RLS WITH CHECK runs before index
  * checks), i.e. the caller may write, and so read, this collection.
+ * Dedupe keys are per collection, and a collection belongs to exactly one
+ * tenant: identical bytes in another collection or tenant are a new document.
  */
 export async function addDocument(db: WorkspaceDb, organizationId: string, userId: string, collectionId: string,
   input: { fileId: string; title?: string | null }): Promise<{ document: LibraryDocument; created: boolean }> {
@@ -102,21 +104,26 @@ export async function addDocument(db: WorkspaceDb, organizationId: string, userI
   if (!fileRow) throw new WorkspaceError(404, 'NOT_FOUND');
   const file = toFile(fileRow, userId);
   if (file.status !== 'ready') throw new WorkspaceError(409, 'CONFLICT');
-  const inserted = await db.from('knowledge_documents').insert({
-    organization_id: organizationId, collection_id: collectionId, file_id: file.id, added_by: userId, title: input.title || file.filename,
-  }).select(DOCUMENT_COLS).single();
-  if (inserted.error?.code === '42501') {
-    // Readable but not writable => 403; not even readable => indistinguishable from missing.
-    const visible = check(await db.from('knowledge_collections').select('id').eq('id', collectionId).eq('organization_id', organizationId).maybeSingle());
-    throw new WorkspaceError(visible ? 403 : 404, visible ? 'FORBIDDEN' : 'NOT_FOUND');
-  }
-  if (inserted.error?.code === '23505') {
+  // Two attempts: a unique violation whose winner is deleted before we can read it
+  // (concurrent remove) leaves the slot free again, so the second insert succeeds.
+  for (let attempt = 0; attempt < ADD_DOCUMENT_ATTEMPTS; attempt++) {
+    const inserted = await db.from('knowledge_documents').insert({
+      organization_id: organizationId, collection_id: collectionId, file_id: file.id, added_by: userId, title: input.title || file.filename,
+    }).select(DOCUMENT_COLS).single();
+    if (inserted.error?.code === '42501') {
+      // Readable but not writable => 403; not even readable => indistinguishable from missing.
+      const visible = check(await db.from('knowledge_collections').select('id').eq('id', collectionId).eq('organization_id', organizationId).maybeSingle());
+      throw new WorkspaceError(visible ? 403 : 404, visible ? 'FORBIDDEN' : 'NOT_FOUND');
+    }
+    if (inserted.error?.code !== '23505') return { document: toDocument(check(inserted)), created: true };
     const existing = await existingDocument(db, organizationId, collectionId, file.id, (fileRow as { sha256?: unknown }).sha256);
-    if (!existing) throw new WorkspaceError(409, 'ALREADY_EXISTS');
-    return { document: existing, created: false };
+    if (existing) return { document: existing, created: false };
   }
-  return { document: toDocument(check(inserted)), created: true };
+  // Only reachable if the conflicting row keeps disappearing between insert and read.
+  throw new WorkspaceError(409, 'ALREADY_EXISTS');
 }
+
+export const ADD_DOCUMENT_ATTEMPTS = 2;
 
 const SHA256_HEX = /^[0-9a-f]{64}$/;
 /** The document that blocked an insert: same file first, else same content (the two unique keys). */

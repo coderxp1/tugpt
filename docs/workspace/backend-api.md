@@ -158,10 +158,14 @@ A Library upload is `POST /api/v1/files` followed by `POST …/documents`. Each 
 | Storage not configured | `503 STORAGE_NOT_CONFIGURED` | Nothing |
 | File not `ready` (upload still running, or crashed) | `409 CONFLICT` from `…/documents` | No document; stale `uploading` rows are purged by maintenance (§5c) |
 | Response of `…/documents` lost, client retries | `200 {created: false}` | One document |
+| Several retries race (parallel requests, same file) | Exactly one `202 {created: true}`, the rest `200 {created: false}`; every response carries the same complete document | One document |
+| Same file added again after its document was removed | `202 {created: true}` with a **new** id | One document (the removed one is gone) |
+| Document removed while a duplicate add is in flight | The add retries once and returns `202`; `409 ALREADY_EXISTS` only if the slot is taken and freed twice in a row | One document |
+| Same bytes in another collection or another tenant | `202 {created: true}`: dedupe is per collection, and a collection belongs to one tenant | One document per collection |
 | User drops the same file again (new file id, same bytes) | `200 {created: false}`, existing document | One document; the second *file* stays in the user's files (it is a real upload) |
 | No write access | `403 FORBIDDEN` (collection readable) / `404 NOT_FOUND` (not readable, other tenant, forged tenant) | Nothing |
 
-The response never claims more than is true: a new document is `pending`, and it is neither `ready` nor searchable until the worker has stored its chunks. The web role cannot write chunks at all (`replace_document_chunks` is not executable by `authenticated` since `20261120100002`).
+On `200` the document is returned exactly as stored (id, title, status, counters); a different `title` on a retry does not rename it. The response never claims more than is true: a new document is `pending`, and it is neither `ready` nor searchable until the worker has stored its chunks. The web role cannot write chunks at all (`replace_document_chunks` is not executable by `authenticated` since `20261120100002`).
 
 ## 5a. Custom agents
 
