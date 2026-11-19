@@ -3,6 +3,7 @@ import { cookies, headers as requestHeaders } from 'next/headers';
 import { createSupabaseClient, type TypedSupabaseClient } from '@tugpt/database';
 import { loadSession, bridgeToken, dbUrl, SsoError } from '@/lib/sso/core';
 import { scopedFeatureAdapter } from '@/lib/sso/feature-adapter';
+import { POSTGREST_REQUEST_TIMEOUT_MS } from './timeouts';
 
 async function sessionForRequest() {
   // Raw headers retain duplicate cookies for the frozen parser to reject.
@@ -35,7 +36,7 @@ export async function createAuthenticatedServerClient(): Promise<TypedSupabaseCl
       headers.delete('apikey');
       const outgoing = new Request(base + '/' + url.pathname.slice('/rest/v1/'.length) + url.search, incoming);
       return fetch(outgoing, {
-        headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000),
+        headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(POSTGREST_REQUEST_TIMEOUT_MS),
       });
     } },
   });
@@ -75,7 +76,7 @@ export async function createSsoControlClient(): Promise<TypedSupabaseClient> {
       headers.set('Authorization', 'Bearer ' + bridgeToken('sso_control'));
       headers.delete('apikey');
       const outgoing = new Request(base + '/' + url.pathname.slice('/rest/v1/'.length) + url.search, incoming);
-      return fetch(outgoing, { headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(5000) });
+      return fetch(outgoing, { headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(POSTGREST_REQUEST_TIMEOUT_MS) });
     } },
   });
   return client;

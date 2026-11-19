@@ -16,6 +16,12 @@
  * the same rule under a row lock (create_mcp_snapshot), so concurrent
  * snapshots cannot share or skip a version (409 SNAPSHOT_VERSION_CONFLICT).
  *
+ * Database waits (M7): create_mcp_snapshot waits at most lock_timeout 2 s for the endpoint row
+ * (409 SNAPSHOT_VERSION_CONFLICT) and for any other lock (503 SNAPSHOT_STORE_BUSY, Retry-After: 2), well inside
+ * the 5 s app request timeout (POSTGREST_REQUEST_TIMEOUT_MS). If the app still gives up first, the answer is
+ * 503 DATABASE_TIMEOUT: the outcome is unknown, so the client must reload the snapshots before retrying.
+ * None of these is a 500.
+ *
  * All-or-nothing: discovery completes and validates before any write, and the
  * snapshot + tools are written by one RPC (one transaction). A failed
  * discovery writes nothing.
@@ -27,14 +33,30 @@ import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { listExternalMcpTools, McpDiscoveryError } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch, EGRESS_PROXY_ENV, EgressError, parseEgressProxy } from '@/lib/chat/mcp-egress';
-import { createExternalMcpRepository, SnapshotVersionConflictError } from '@/lib/connect/external-mcp-repo';
+import {
+  createExternalMcpRepository, DatabaseTimeoutError, SnapshotStoreBusyError, SnapshotVersionConflictError,
+} from '@/lib/connect/external-mcp-repo';
 import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
 import { createHash } from 'node:crypto';
 import type { ApiError } from '@/lib/draft-api/types';
 
-function errorResponse(status: number, code: string, message: string) {
+function errorResponse(status: number, code: string, message: string, extraHeaders: Record<string, string> = {}) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status, headers: { 'cache-control': 'no-store' } });
+  return NextResponse.json(body, { status, headers: { 'cache-control': 'no-store', ...extraHeaders } });
+}
+
+/** Database outcomes the client can act on; null for anything else (-> 500). */
+function persistFailure(err: unknown): Response | null {
+  if (err instanceof SnapshotVersionConflictError) {
+    return errorResponse(409, 'SNAPSHOT_VERSION_CONFLICT', 'Another snapshot was created concurrently; retry');
+  }
+  if (err instanceof SnapshotStoreBusyError) {
+    return errorResponse(503, 'SNAPSHOT_STORE_BUSY', 'The snapshot store is busy; retry shortly', { 'retry-after': '2' });
+  }
+  if (err instanceof DatabaseTimeoutError) {
+    return errorResponse(503, 'DATABASE_TIMEOUT', 'The database did not answer in time; reload the snapshots before retrying');
+  }
+  return null;
 }
 
 /** Map a discovery failure to a response. Never echoes upstream bodies or credentials. */
@@ -113,14 +135,16 @@ export async function POST(request: Request, { params }: { params: Promise<{ end
     try {
       snapshotId = await repo.createSnapshot(tenant.organizationId, endpointId, version, contentSha256, tools);
     } catch (err) {
-      if (err instanceof SnapshotVersionConflictError) {
-        return errorResponse(409, 'SNAPSHOT_VERSION_CONFLICT', 'Another snapshot was created concurrently; retry');
-      }
+      const mapped = persistFailure(err);
+      if (mapped) return mapped;
       throw err;
     }
 
     return NextResponse.json({ snapshotId, version, toolCount: tools.length }, { status: 201, headers: { 'cache-control': 'no-store' } });
-  } catch {
+  } catch (err) {
+    // The latest-version read can time out too (DatabaseTimeoutError) -> 503, not 500.
+    const mapped = persistFailure(err);
+    if (mapped) return mapped;
     return errorResponse(500, 'INTERNAL', 'Failed to snapshot the MCP endpoint');
   }
 }

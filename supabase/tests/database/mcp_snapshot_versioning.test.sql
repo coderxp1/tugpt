@@ -4,7 +4,7 @@
 -- with the same arguments: the M4 retry storm). Real concurrency through PostgREST is exercised by the
 -- agent2 harness (agent2-env/m6), not here: one pgTAP session cannot race itself.
 BEGIN;
-SELECT plan(28);
+SELECT plan(30);
 
 INSERT INTO auth.users (id, email) VALUES
   ('a4000000-0000-4000-8000-0000000000a1', 'a4-owner-a@example.test'),
@@ -87,13 +87,20 @@ SELECT ok((SELECT prosecdef FROM pg_proc WHERE oid = 'public.create_mcp_snapshot
 SELECT ok(NOT has_function_privilege('anon', 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)', 'EXECUTE')
        AND has_function_privilege('authenticated', 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)', 'EXECUTE'), 'C2: anon cannot execute; authenticated can');
 
-SELECT ok((SELECT 'lock_timeout=5s' = ANY(proconfig) FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure),
-  'C3: the endpoint lock wait is bounded (lock_timeout=5s), so a loser cannot hang');
+SELECT ok((SELECT 'lock_timeout=2s' = ANY(proconfig) FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure),
+  'C3: the endpoint lock wait is bounded at lock_timeout=2s (20261120000005), below the 5 s app request timeout');
 SELECT is((SELECT count(*)::int FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
             WHERE n.nspname IN ('public','private','sso') AND p.prosrc ~* 'errcode\s*=\s*''(40001|40P01)'''), 0,
   'C4: no function raises a PostgREST-retryable SQLSTATE (40001 / 40P01)');
 SELECT ok((SELECT position('lock_not_available' IN prosrc) > 0 FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure),
   'C5: a lock timeout is reported as the PT409 conflict');
+SELECT ok((SELECT position('PT503' IN prosrc) > 0 AND position('SNAPSHOT_STORE_BUSY' IN prosrc) > 0
+             FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure),
+  'C6: a lock timeout on anything other than the endpoint row (e.g. DDL on external_tools) is PT503 SNAPSHOT_STORE_BUSY, never a raw 55P03');
+SELECT ok((SELECT substring(c FROM 'lock_timeout=(.*)')::interval <= interval '3 seconds'
+             FROM pg_proc, unnest(proconfig) c
+            WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure AND c LIKE 'lock_timeout=%'),
+  'C7: lock_timeout leaves at least 2 s of the 5 s app request budget (POSTGREST_REQUEST_TIMEOUT_MS)');
 
 SELECT * FROM finish();
 ROLLBACK;

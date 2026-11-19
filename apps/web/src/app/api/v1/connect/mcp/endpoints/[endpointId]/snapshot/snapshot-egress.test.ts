@@ -35,7 +35,8 @@ const T = vi.hoisted(() => ({ ca: '' as string, timeoutMs: 3000, injectCa: true,
 
 // ---- in-memory repository (MOCKED; mirrors create_mcp_snapshot's rule) ----
 type Snap = { id: string; version: number; sha: string; tools: { name: string }[] };
-const db = vi.hoisted(() => ({ snaps: [] as Snap[], writes: 0, latestReads: 0, failLatest: false, forceConflict: false }));
+const db = vi.hoisted(() => ({ snaps: [] as Snap[], writes: 0, latestReads: 0, failLatest: false, forceConflict: false,
+  createFails: null as null | 'busy' | 'timeout', latestTimeout: false }));
 vi.mock('@/lib/connect/external-mcp-repo', async (orig) => {
   const real = await orig<typeof import('@/lib/connect/external-mcp-repo')>();
   return {
@@ -44,11 +45,14 @@ vi.mock('@/lib/connect/external-mcp-repo', async (orig) => {
       getEndpointUrl: async (org: string, id: string) => (org === ORG && id === EP ? `https://${HOST}/mcp` : null),
       getLatestSnapshotVersion: async () => {
         db.latestReads++;
+        if (db.latestTimeout) throw new real.DatabaseTimeoutError();
         if (db.failLatest) throw new Error('read failed');
         return db.snaps.reduce((m, s) => Math.max(m, s.version), 0);
       },
       createSnapshot: async (_o: string, _e: string, version: number, sha: string, tools: { name: string }[]) => {
         const latest = db.snaps.reduce((m, s) => Math.max(m, s.version), 0);
+        if (db.createFails === 'busy') throw new real.SnapshotStoreBusyError();
+        if (db.createFails === 'timeout') throw new real.DatabaseTimeoutError();
         if (db.forceConflict || version !== latest + 1) throw new real.SnapshotVersionConflictError();
         db.writes++;
         const id = `snap-${version}`;
@@ -184,6 +188,15 @@ async function snapshot() {
   const res = await POST(req, { params: Promise.resolve({ endpointId: EP }) });
   return { status: res.status, body: await res.json() as { error?: { code: string }; version?: number; snapshotId?: string; toolCount?: number } };
 }
+/** Like snapshot(), plus the response headers and error message (M7 503 cases). */
+async function snapshotWithHeaders() {
+  const req = new Request(`${ORIGIN}/api/v1/connect/mcp/endpoints/${EP}/snapshot`, {
+    method: 'POST', body: '{}',
+    headers: { origin: ORIGIN, 'x-tugpt-csrf': '1', 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', 'x-tenant-id': ORG },
+  });
+  const res = await POST(req, { params: Promise.resolve({ endpointId: EP }) });
+  return { status: res.status, headers: res.headers, body: await res.json() as { error?: { code: string; message?: string } } };
+}
 /** Every socket that reached the MCP server came through a proxy tunnel; no global fetch. */
 function expectProxyOnly() {
   expect(mcpConnections).toBe(tunnels);
@@ -242,6 +255,28 @@ describe('proxy success: versions are sequential and computed, never hard-coded'
     db.failLatest = true;
     const r = await snapshot();
     expect(r.status).toBe(500); expect(db.writes).toBe(0);
+  });
+});
+
+describe('database busy or timed out -> documented 503, never 500, nothing written (M7)', () => {
+  beforeEach(() => { db.createFails = null; db.latestTimeout = false; });
+  afterEach(() => { db.createFails = null; db.latestTimeout = false; });
+  it('create_mcp_snapshot PT503 (a lock other than the endpoint row) -> 503 SNAPSHOT_STORE_BUSY with Retry-After', async () => {
+    db.createFails = 'busy';
+    const r = await snapshotWithHeaders();
+    expect(r.status).toBe(503); expect(r.body.error?.code).toBe('SNAPSHOT_STORE_BUSY');
+    expect(r.headers.get('retry-after')).toBe('2'); expect(db.writes).toBe(0);
+  });
+  it('the app gave up on the create RPC (transport timeout) -> 503 DATABASE_TIMEOUT, outcome unknown', async () => {
+    db.createFails = 'timeout';
+    const r = await snapshotWithHeaders();
+    expect(r.status).toBe(503); expect(r.body.error?.code).toBe('DATABASE_TIMEOUT');
+    expect(r.body.error?.message).toMatch(/reload/i); expect(db.writes).toBe(0);
+  });
+  it('the app gave up on the latest-version read -> 503 DATABASE_TIMEOUT, no create attempted', async () => {
+    db.latestTimeout = true;
+    const r = await snapshotWithHeaders();
+    expect(r.status).toBe(503); expect(r.body.error?.code).toBe('DATABASE_TIMEOUT'); expect(db.writes).toBe(0);
   });
 });
 
