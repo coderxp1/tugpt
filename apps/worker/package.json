@@ -27,7 +27,8 @@
     "@tugpt/feature-flags": "workspace:*",
     "@tugpt/jobs": "workspace:*",
     "@tugpt/observability": "workspace:*",
-    "@tugpt/security": "workspace:*"
+    "@tugpt/security": "workspace:*",
+    "@tugpt/workspace-core": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20",

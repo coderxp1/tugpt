@@ -24,6 +24,7 @@
     "@tugpt/jobs": "workspace:*",
     "@tugpt/observability": "workspace:*",
     "@tugpt/security": "workspace:*",
+    "@tugpt/workspace-core": "workspace:*",
     "jose": "6.2.3",
     "next": "^16.2.10",
     "react": "^19.2.7",

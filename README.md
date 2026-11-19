@@ -43,7 +43,8 @@ tugpt-nextjs-recovered/
 │   ├── feature-flags/          # Feature flag architecture
 │   ├── jobs/                   # Background job abstraction
 │   ├── observability/          # Structured logger, metrics collector, audit logging
-│   └── security/               # Config validation, secret sanitization
+│   ├── security/               # Config validation, secret sanitization
+│   └── workspace-core/         # Workspace blob storage (fs/S3), document extraction (text/DOCX/XLSX/PDF), embeddings client
 ├── supabase/
 │   ├── migrations/             # SQL migrations (RLS, triggers, audit tables)
 │   └── tests/database/         # pgTAP tests

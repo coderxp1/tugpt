@@ -1,0 +1,47 @@
+{
+  "name": "@tugpt/workspace-core",
+  "version": "0.1.0",
+  "private": true,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./storage": {
+      "types": "./dist/storage.d.ts",
+      "default": "./dist/storage.js"
+    },
+    "./extract": {
+      "types": "./dist/extract.d.ts",
+      "default": "./dist/extract.js"
+    },
+    "./zip": {
+      "types": "./dist/zip.d.ts",
+      "default": "./dist/zip.js"
+    },
+    "./embeddings": {
+      "types": "./dist/embeddings.d.ts",
+      "default": "./dist/embeddings.js"
+    },
+    "./pdf": {
+      "types": "./dist/pdf.d.ts",
+      "default": "./dist/pdf.js"
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "pdfjs-dist": "6.5.438"
+  },
+  "devDependencies": {
+    "@types/node": "^20",
+    "typescript": "^5",
+    "vitest": "^4.1.10"
+  }
+}
