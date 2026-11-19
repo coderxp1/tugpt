@@ -1,6 +1,6 @@
 /**
  * Library: knowledge collections, documents, indexing and search
- * (20261119100004). Authorization lives in RLS and the SECURITY DEFINER
+ * (20261119100004; async processing 20261120100002; hybrid search 20261120100001). Authorization lives in RLS and the SECURITY DEFINER
  * helpers can_read_collection / can_write_collection; this module only shapes
  * requests and responses. Search is evaluated per chunk under the caller's
  * RLS at query time, so access changes apply to the very next query.
@@ -8,13 +8,11 @@
 import type { Collection, CollectionDetail, FileVisibility, LibraryDocument, SearchHit } from './contracts';
 import { check, num, oneOf, optStr, rows, str, type WorkspaceDb } from './db';
 import { WorkspaceError } from './errors';
-import { chunkText, extractText, MAX_CHUNKS } from './extract';
-import { FILE_COLS, sha256Hex, toFile } from './files';
+import { FILE_COLS, toFile } from './files';
 import { cleanName, isUuid, optionalText } from './http';
-import { blobKey, type BlobStore } from './storage';
 
 const COLLECTION_COLS = 'id,owner_user_id,name,description,visibility,created_at,updated_at';
-const DOCUMENT_COLS = 'id,collection_id,file_id,title,status,error_code,chunk_count,indexed_at,created_at';
+const DOCUMENT_COLS = 'id,collection_id,file_id,title,status,error_code,chunk_count,indexed_at,created_at,processing_attempts,next_attempt_at';
 
 export function toCollection(row: unknown, userId: string): Collection {
   const r = row as Record<string, unknown>;
@@ -29,6 +27,7 @@ export function toDocument(row: unknown): LibraryDocument {
     id: str(r.id), collectionId: str(r.collection_id), fileId: str(r.file_id), title: str(r.title),
     status: oneOf(r.status, ['pending', 'indexing', 'ready', 'failed', 'unsupported'] as const), errorCode: optStr(r.error_code),
     chunkCount: num(r.chunk_count), indexedAt: optStr(r.indexed_at), createdAt: str(r.created_at),
+    processingAttempts: r.processing_attempts === undefined ? 0 : num(r.processing_attempts), nextAttemptAt: optStr(r.next_attempt_at),
   };
 }
 
@@ -81,51 +80,35 @@ export async function deleteCollection(db: WorkspaceDb, organizationId: string, 
   throw visible ? new WorkspaceError(403, 'FORBIDDEN') : new WorkspaceError(404, 'NOT_FOUND');
 }
 
-/** Extract, chunk and store; records the outcome on the document. Never throws for content problems. */
-export async function indexDocument(db: WorkspaceDb, store: BlobStore, organizationId: string, userId: string, documentId: string, fileId: string): Promise<LibraryDocument> {
-  const fileRow = check(await db.from('workspace_files').select(FILE_COLS).eq('id', fileId).eq('organization_id', organizationId).maybeSingle());
-  if (!fileRow) throw new WorkspaceError(404, 'NOT_FOUND');
-  const file = toFile(fileRow, userId);
-  const write = async (status: string, chunks: string[], code: string | null) => {
-    check(await db.rpc('replace_document_chunks', { p_organization_id: organizationId, p_document_id: documentId, p_status: status, p_chunks: chunks, p_error_code: code }));
-  };
-  const bytes = await store.get(blobKey(organizationId, fileId)).catch(() => { throw new WorkspaceError(503, 'STORAGE_UNAVAILABLE'); });
-  if (!bytes || (file.sha256 && sha256Hex(bytes) !== file.sha256)) {
-    await write('failed', [], 'INTEGRITY_CHECK_FAILED');
-  } else {
-    const extracted = extractText(bytes, file.mediaType);
-    if (extracted.kind === 'text') {
-      const chunks = chunkText(extracted.text);
-      if (chunks.length > MAX_CHUNKS) await write('failed', [], 'DOCUMENT_TOO_LARGE');
-      else await write('ready', chunks, null);
-    } else await write(extracted.kind === 'unsupported' ? 'unsupported' : 'failed', [], extracted.code);
-  }
-  const doc = check(await db.from('knowledge_documents').select(DOCUMENT_COLS).eq('id', documentId).eq('organization_id', organizationId).single());
-  return toDocument(doc);
-}
-
-export async function addDocument(db: WorkspaceDb, store: BlobStore, organizationId: string, userId: string, collectionId: string, input: { fileId: string; title?: string | null }): Promise<LibraryDocument> {
+/**
+ * Adds an uploaded (ready, readable) file to a writable collection. The insert
+ * trigger (20261120100002) enqueues a processing job; the knowledge worker
+ * extracts, chunks and embeds asynchronously. The returned document is
+ * `pending`; clients poll the collection for status/errorCode/attempts.
+ */
+export async function addDocument(db: WorkspaceDb, organizationId: string, userId: string, collectionId: string, input: { fileId: string; title?: string | null }): Promise<LibraryDocument> {
   const fileRow = check(await db.from('workspace_files').select(FILE_COLS).eq('id', input.fileId).eq('organization_id', organizationId).maybeSingle());
   if (!fileRow) throw new WorkspaceError(404, 'NOT_FOUND');
   const file = toFile(fileRow, userId);
   if (file.status !== 'ready') throw new WorkspaceError(409, 'CONFLICT');
   const inserted = await db.from('knowledge_documents').insert({
     organization_id: organizationId, collection_id: collectionId, file_id: file.id, added_by: userId, title: input.title || file.filename,
-  }).select('id').single();
+  }).select(DOCUMENT_COLS).single();
   if (inserted.error?.code === '42501') {
     // Readable but not writable => 403; not even readable => indistinguishable from missing.
     const visible = check(await db.from('knowledge_collections').select('id').eq('id', collectionId).eq('organization_id', organizationId).maybeSingle());
     throw new WorkspaceError(visible ? 403 : 404, visible ? 'FORBIDDEN' : 'NOT_FOUND');
   }
   if (inserted.error?.code === '23505') throw new WorkspaceError(409, 'ALREADY_EXISTS');
-  const created = check(inserted) as Record<string, unknown> | null;
-  return indexDocument(db, store, organizationId, userId, str(created?.id), file.id);
+  return toDocument(check(inserted));
 }
 
-export async function reindexDocument(db: WorkspaceDb, store: BlobStore, organizationId: string, userId: string, collectionId: string, documentId: string): Promise<LibraryDocument> {
-  const doc = check(await db.from('knowledge_documents').select(DOCUMENT_COLS).eq('id', documentId).eq('collection_id', collectionId).eq('organization_id', organizationId).maybeSingle());
+/** Re-queues processing (resets attempts). Writable collections only; enforced by request_document_reindex. */
+export async function reindexDocument(db: WorkspaceDb, organizationId: string, collectionId: string, documentId: string): Promise<LibraryDocument> {
+  const doc = check(await db.from('knowledge_documents').select('id').eq('id', documentId).eq('collection_id', collectionId).eq('organization_id', organizationId).maybeSingle());
   if (!doc) throw new WorkspaceError(404, 'NOT_FOUND');
-  return indexDocument(db, store, organizationId, userId, documentId, toDocument(doc).fileId);
+  check(await db.rpc('request_document_reindex', { p_organization_id: organizationId, p_document_id: documentId }));
+  return toDocument(check(await db.from('knowledge_documents').select(DOCUMENT_COLS).eq('id', documentId).eq('organization_id', organizationId).single()));
 }
 
 export async function removeDocument(db: WorkspaceDb, organizationId: string, collectionId: string, documentId: string): Promise<void> {
@@ -140,18 +123,42 @@ export function parseCollectionIds(v: string | null): string[] | null {
   return [...new Set(ids.map((i) => i.toLowerCase()))];
 }
 
-export async function searchLibrary(db: WorkspaceDb, organizationId: string, q: string, collectionIds: string[] | null, limit: number): Promise<SearchHit[]> {
+export interface QueryEmbedder { readonly model: string; embed(inputs: readonly string[], signal?: AbortSignal): Promise<number[][]> }
+
+function toHit(row: unknown): SearchHit {
+  const r = row as Record<string, unknown>;
+  const real = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : null);
+  return {
+    chunkId: str(r.chunk_id), documentId: str(r.document_id), collectionId: str(r.collection_id), fileId: str(r.file_id),
+    title: str(r.title), ordinal: num(r.ordinal), snippet: str(r.snippet), rank: real(r.rank) ?? 0,
+    match: oneOf(r.match, ['keyword', 'semantic', 'hybrid'] as const), keywordScore: real(r.fts_score), semanticScore: real(r.semantic_score),
+  };
+}
+
+/**
+ * Hybrid retrieval (search_knowledge_hybrid, SECURITY INVOKER: chunk and
+ * embedding RLS decide per row at query time). When an embedder is configured
+ * the query is embedded and fused with full-text ranking (RRF); if embedding
+ * fails, search degrades to keyword-only instead of failing, and `semantic`
+ * in the result says which mode ran.
+ */
+export async function searchLibrary(db: WorkspaceDb, organizationId: string, q: string, collectionIds: string[] | null, limit: number,
+  embedder: QueryEmbedder | null = null, signal?: AbortSignal, embedText?: string): Promise<{ hits: SearchHit[]; semantic: boolean }> {
   const query = q.trim();
   if (!query) throw new WorkspaceError(400, 'QUERY_REQUIRED');
   if (Array.from(query).length > 200) throw new WorkspaceError(400, 'QUERY_TOO_LONG');
-  return rows(await db.rpc('search_knowledge', { p_organization_id: organizationId, p_query: query, p_collection_ids: collectionIds, p_limit: limit }))
-    .map((row) => {
-      const r = row as Record<string, unknown>;
-      return {
-        chunkId: str(r.chunk_id), documentId: str(r.document_id), collectionId: str(r.collection_id), fileId: str(r.file_id),
-        title: str(r.title), ordinal: num(r.ordinal), snippet: str(r.snippet), rank: typeof r.rank === 'number' ? r.rank : 0,
-      };
-    });
+  let vector: string | null = null;
+  if (embedder) {
+    try {
+      const [v] = await embedder.embed([embedText?.trim() || query], signal);
+      if (v && v.length > 0) vector = `[${v.map((x) => (Number.isFinite(x) ? String(x) : '0')).join(',')}]`;
+    } catch { vector = null; /* embeddings unavailable: keyword-only */ }
+  }
+  const hits = rows(await db.rpc('search_knowledge_hybrid', {
+    p_organization_id: organizationId, p_query: query, p_query_embedding: vector, p_embedding_model: vector ? embedder!.model : null,
+    p_collection_ids: collectionIds, p_limit: limit,
+  })).map(toHit);
+  return { hits, semantic: vector !== null };
 }
 
 // ---------------------------------------------------------------- conversation links

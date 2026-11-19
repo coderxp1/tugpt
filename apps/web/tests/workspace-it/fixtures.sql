@@ -44,4 +44,6 @@ INSERT INTO public.external_tools (organization_id, snapshot_id, name, descripti
  ('a4b00000-0000-4000-8000-00000000000b','a4500000-0000-4000-8000-00000000000b','send_invoice','Send an invoice','{}','write');
 UPDATE public.external_tool_snapshots SET approved_by='a4111111-1111-4111-8111-111111111111', approved_at=now() WHERE id='a4500000-0000-4000-8000-00000000000a';
 UPDATE public.external_tool_snapshots SET approved_by='a4333333-3333-4333-8333-333333333333', approved_at=now() WHERE id='a4500000-0000-4000-8000-00000000000b';
+-- Rate-limit windows are per user; repeated runs within an hour must not hit file.upload etc.
+DELETE FROM private.workspace_rate_limits WHERE bucket LIKE '%:a4a00000-0000-4000-8000-00000000000a:%' OR bucket LIKE '%:a4b00000-0000-4000-8000-00000000000b:%';
 COMMIT;

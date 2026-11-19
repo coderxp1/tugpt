@@ -6,8 +6,11 @@ export type WorkspaceErrorCode =
   | 'QUERY_TOO_LONG' | 'QUERY_REQUIRED' | 'INVALID_THREAD' | 'INVALID_ENDPOINT' | 'INVALID_CAPABILITY' | 'INVALID_ARGUMENTS_HASH'
   | 'INVALID_PREVIEW' | 'INVALID_REASON' | 'INVALID_DECISION' | 'INVALID_NOTE' | 'INVALID_TTL' | 'INVALID_SCOPE' | 'INVALID_STATUS'
   | 'ALREADY_DECIDED' | 'REQUEST_EXPIRED' | 'TOO_MANY_PENDING' | 'TOO_MANY_CHUNKS' | 'TOO_MANY_COLLECTIONS'
-  | 'INVALID_STATUS_TRANSITION' | 'FILE_CONTENT_IMMUTABLE' | 'INVALID_REQUESTER' | 'ARGUMENTS_TOO_LARGE';
+  | 'INVALID_STATUS_TRANSITION' | 'FILE_CONTENT_IMMUTABLE' | 'INVALID_REQUESTER' | 'ARGUMENTS_TOO_LARGE'
+  | 'RATE_LIMITED' | 'INVALID_EMBEDDING' | 'INVALID_ACTION' | 'MESSAGE_INVALID' | 'UNKNOWN_MODEL'
+  | 'AGENT_MODEL_UNAVAILABLE' | 'AGENT_TOOL_CONFLICT' | 'THREAD_AGENT_MISMATCH';
 
 export class WorkspaceError extends Error {
-  constructor(readonly status: number, readonly code: WorkspaceErrorCode) { super(code); this.name = 'WorkspaceError'; }
+  /** retryAfterSeconds is only set for 429 RATE_LIMITED and becomes the Retry-After header. */
+  constructor(readonly status: number, readonly code: WorkspaceErrorCode, readonly retryAfterSeconds?: number) { super(code); this.name = 'WorkspaceError'; }
 }

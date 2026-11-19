@@ -2,7 +2,7 @@
  * Workspace persistence goes through the caller's own RLS-bound Supabase
  * client, exactly like lib/chat/store.ts. There is no service-role path in
  * this module: what a user can read or change is what the policies in
- * 20261119100001..04 allow. This interface is the subset of PostgREST the
+ * 20261119100001..04 and 20261120100001..05 allow. This interface is the subset of PostgREST the
  * Workspace code uses (a superset of ChatDb: it adds delete and range filters).
  */
 import { WorkspaceError, type WorkspaceErrorCode } from './errors';
@@ -37,6 +37,7 @@ const PUBLIC_DB_CODES: ReadonlySet<string> = new Set<WorkspaceErrorCode>([
   'INVALID_ARGUMENTS_HASH', 'INVALID_PREVIEW', 'INVALID_REASON', 'INVALID_DECISION', 'INVALID_NOTE', 'INVALID_TTL',
   'INVALID_SCOPE', 'INVALID_STATUS', 'ALREADY_DECIDED', 'REQUEST_EXPIRED', 'TOO_MANY_PENDING', 'TOO_MANY_CHUNKS',
   'TOO_MANY_COLLECTIONS', 'INVALID_STATUS_TRANSITION', 'FILE_CONTENT_IMMUTABLE', 'INVALID_REQUESTER',
+  'INVALID_EMBEDDING', 'INVALID_ACTION',
 ]);
 
 /** Map a PostgREST/Postgres error to a client-safe error. Never forwards raw DB text. */

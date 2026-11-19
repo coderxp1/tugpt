@@ -560,13 +560,43 @@ const ROUTES: RouteExpectation[] = [
     path: '/api/v1/library/collections/[collectionId]/documents/[documentId]',
     kind: 'api',
     type: 'protected',
-    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); writable collection only (RLS + replace_document_chunks check); same-origin on POST/DELETE.',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); writable collection only (RLS; request_document_reindex re-checks can_write_collection); same-origin on POST/DELETE; reindex rate limited per user.',
   },
   {
     path: '/api/v1/library/search',
     kind: 'api',
     type: 'protected',
-    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); search_knowledge is SECURITY INVOKER: chunk RLS (can_read_collection) applies at query time.',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); search_knowledge_hybrid is SECURITY INVOKER: chunk and embedding RLS (can_read_collection) apply at query time; rate limited per user.',
+  },
+  {
+    path: '/api/v1/agents',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); custom_agents RLS (own private, org-visible readable by members; org agents need owner/admin to create); same-origin JSON on POST; agent.write rate limit.',
+  },
+  {
+    path: '/api/v1/agents/[agentId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); can_read_agent/can_write_agent in RLS (403 readers, 404 others); instructions only returned to editors; same-origin on PATCH/DELETE.',
+  },
+  {
+    path: '/api/v1/agents/[agentId]/collections',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); links need can_write_agent AND can_read_collection (RLS); unreadable collections are omitted on read; same-origin JSON on POST.',
+  },
+  {
+    path: '/api/v1/agents/[agentId]/collections/[collectionId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); unlink needs can_write_agent (RLS); same-origin check on DELETE.',
+  },
+  {
+    path: '/api/v1/agents/[agentId]/run',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); agent must be readable (RLS); tools are the agent config intersected with the caller\'s own connected capabilities; knowledge searched under the caller\'s RLS; thread insert checked by RLS; same-origin JSON; agent.run rate limit.',
   },
 ];
 

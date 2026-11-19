@@ -1,14 +1,16 @@
 import { NextResponse } from 'next/server';
 import { errorResponse, isUuid, ok, optionalText, readMutation, toErrorResponse, workspaceContext } from '@/lib/workspace-data/http';
 import { addDocument } from '@/lib/workspace-data/library';
-import { configuredBlobStore } from '@/lib/workspace-data/storage';
+import { consumeRateLimit } from '@/lib/workspace-data/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
 /**
- * Body: { fileId, title? }. Adds an uploaded (ready, readable) file and indexes
- * it in-request. The response reports the outcome: ready, unsupported (e.g.
- * PDF_EXTRACTION_UNAVAILABLE) or failed with a machine-readable errorCode.
+ * Body: { fileId, title? }. Adds an uploaded (ready, readable) file to a
+ * writable collection and queues it for processing (202). The knowledge worker
+ * extracts, chunks and embeds; poll GET /library/collections/{id} for
+ * status (pending -> indexing -> ready | failed | unsupported), errorCode,
+ * processingAttempts and nextAttemptAt. Counts against document.reindex.
  */
 export async function POST(request: Request, { params }: { params: Promise<{ collectionId: string }> }) {
   const { collectionId } = await params;
@@ -20,8 +22,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ col
   try { title = optionalText(body.title, 255); } catch (e) { return toErrorResponse(e); }
   const ctx = await workspaceContext(request);
   if (ctx instanceof NextResponse) return ctx;
-  const store = configuredBlobStore();
-  if (!store) return errorResponse(503, 'STORAGE_NOT_CONFIGURED');
-  try { return ok({ document: await addDocument(ctx.db, store, ctx.organizationId, ctx.userId, collectionId, { fileId: body.fileId, title }) }, 201); }
-  catch (e) { return toErrorResponse(e); }
+  try {
+    await consumeRateLimit(ctx.db, ctx.organizationId, 'document.reindex');
+    return ok({ document: await addDocument(ctx.db, ctx.organizationId, ctx.userId, collectionId, { fileId: body.fileId, title }) }, 202);
+  } catch (e) { return toErrorResponse(e); }
 }

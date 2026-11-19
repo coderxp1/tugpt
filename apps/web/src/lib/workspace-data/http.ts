@@ -26,13 +26,15 @@ export async function workspaceContext(request: Request): Promise<WorkspaceConte
   return { db: asWorkspaceDb(ctx.db), userId: ctx.userId, organizationId: ctx.tenant.organizationId, tenant: ctx.tenant };
 }
 
-export function errorResponse(status: number, code: WorkspaceErrorCode): NextResponse {
-  return NextResponse.json({ error: code }, { status, headers: PRIVATE_HEADERS });
+export function errorResponse(status: number, code: WorkspaceErrorCode, retryAfterSeconds?: number): NextResponse {
+  const headers: Record<string, string> = { ...PRIVATE_HEADERS };
+  if (status === 429 && retryAfterSeconds !== undefined) headers['Retry-After'] = String(Math.max(1, Math.ceil(retryAfterSeconds)));
+  return NextResponse.json(retryAfterSeconds !== undefined ? { error: code, retryAfterSeconds } : { error: code }, { status, headers });
 }
 
 /** Map any thrown value to a response. Unknown errors become 503 without detail. */
 export function toErrorResponse(e: unknown): NextResponse {
-  if (e instanceof WorkspaceError) return errorResponse(e.status, e.code);
+  if (e instanceof WorkspaceError) return errorResponse(e.status, e.code, e.retryAfterSeconds);
   return errorResponse(503, 'STORE_UNAVAILABLE');
 }
 

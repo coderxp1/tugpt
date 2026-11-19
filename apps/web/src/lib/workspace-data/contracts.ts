@@ -9,6 +9,8 @@
  * request/history layer; granting/claiming stays in Agent 2's functions.
  */
 import type { WorkspaceErrorCode } from './errors';
+import type { AgentInput, CustomAgent } from './agents';
+export type { AgentInput, AgentTool, Citation, CustomAgent } from './agents';
 export type { WorkspaceErrorCode } from './errors';
 
 export const WORKSPACE_API = {
@@ -30,6 +32,12 @@ export const WORKSPACE_API = {
   documents: (id: string) => `/api/v1/library/collections/${encodeURIComponent(id)}/documents`,
   document: (id: string, documentId: string) => `/api/v1/library/collections/${encodeURIComponent(id)}/documents/${encodeURIComponent(documentId)}`,
   search: '/api/v1/library/search',
+  agents: '/api/v1/agents',
+  agent: (id: string) => `/api/v1/agents/${encodeURIComponent(id)}`,
+  agentCollections: (id: string) => `/api/v1/agents/${encodeURIComponent(id)}/collections`,
+  agentCollection: (id: string, collectionId: string) => `/api/v1/agents/${encodeURIComponent(id)}/collections/${encodeURIComponent(collectionId)}`,
+  /** POST, streams NDJSON (not used through the JSON client). */
+  agentRun: (id: string) => `/api/v1/agents/${encodeURIComponent(id)}/run`,
 } as const;
 
 // ---------------------------------------------------------------- conversations
@@ -155,6 +163,10 @@ export interface LibraryDocument {
   readonly chunkCount: number;
   readonly indexedAt: string | null;
   readonly createdAt: string;
+  /** Processing attempts so far (failed attempts are retried with backoff, max 5). */
+  readonly processingAttempts: number;
+  /** When a retry is scheduled after a transient failure; null otherwise. */
+  readonly nextAttemptAt: string | null;
 }
 export interface CollectionDetail { readonly collection: Collection; readonly documents: readonly LibraryDocument[] }
 export interface SearchHit {
@@ -166,8 +178,14 @@ export interface SearchHit {
   readonly ordinal: number;
   /** Plain text, no markup. */
   readonly snippet: string;
+  /** Fused rank (Reciprocal Rank Fusion); higher is better. */
   readonly rank: number;
+  /** Which retriever(s) found this chunk. */
+  readonly match: 'keyword' | 'semantic' | 'hybrid';
+  readonly keywordScore: number | null;
+  readonly semanticScore: number | null;
 }
+export interface SearchResult { readonly hits: readonly SearchHit[]; readonly semantic: boolean }
 
 // ---------------------------------------------------------------- typed client
 export type WorkspaceResult<T> =
@@ -244,7 +262,16 @@ export function createWorkspaceClient(fetchFn: FetchFn = (i, init) => fetch(i, i
     reindexDocument: (collectionId: string, documentId: string) => call<{ document: LibraryDocument }>('POST', WORKSPACE_API.document(collectionId, documentId), { action: 'reindex' }),
     removeDocument: (collectionId: string, documentId: string) => call<{ deleted: true }>('DELETE', WORKSPACE_API.document(collectionId, documentId)),
     search: (q: string, opts: { collectionIds?: readonly string[]; limit?: number } = {}) =>
-      call<{ hits: readonly SearchHit[] }>('GET', WORKSPACE_API.search + query({ q, collectionIds: opts.collectionIds, limit: opts.limit })),
+      call<SearchResult>('GET', WORKSPACE_API.search + query({ q, collectionIds: opts.collectionIds, limit: opts.limit })),
+
+    listAgents: () => call<{ agents: readonly CustomAgent[] }>('GET', WORKSPACE_API.agents),
+    createAgent: (input: AgentInput & { name: string }) => call<{ agent: CustomAgent }>('POST', WORKSPACE_API.agents, input),
+    getAgent: (id: string) => call<{ agent: CustomAgent & { collectionIds: readonly string[] } }>('GET', WORKSPACE_API.agent(id)),
+    updateAgent: (id: string, patch: AgentInput) => call<{ agent: CustomAgent }>('PATCH', WORKSPACE_API.agent(id), patch),
+    deleteAgent: (id: string) => call<{ deleted: true }>('DELETE', WORKSPACE_API.agent(id)),
+    listAgentCollections: (id: string) => call<{ collections: readonly Collection[] }>('GET', WORKSPACE_API.agentCollections(id)),
+    linkAgentCollection: (id: string, collectionId: string) => call<{ linked: true }>('POST', WORKSPACE_API.agentCollections(id), { collectionId }),
+    unlinkAgentCollection: (id: string, collectionId: string) => call<{ deleted: true }>('DELETE', WORKSPACE_API.agentCollection(id, collectionId)),
   };
 }
 export type WorkspaceClient = ReturnType<typeof createWorkspaceClient>;

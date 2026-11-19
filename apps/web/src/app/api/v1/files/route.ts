@@ -5,12 +5,14 @@
  * The storage key is derived from (organization, file id) on the server and is
  * never returned. Bytes are written only after the metadata row exists under
  * the caller's RLS, and the row is removed again if storage fails.
+ * Rate limited per user (file.upload): 429 + Retry-After.
  */
 import { NextResponse } from 'next/server';
 import { errorResponse, isSameOriginRequest, ok, parseCursor, parseLimit, toErrorResponse, workspaceContext } from '@/lib/workspace-data/http';
 import { insertUploading, listFiles, markReady, parseVisibility, readCappedBody, removeRow, sanitizeFilename, sha256Hex, validateUpload } from '@/lib/workspace-data/files';
 import { blobKey, configuredBlobStore, maxUploadBytes } from '@/lib/workspace-data/storage';
 import { WorkspaceError } from '@/lib/workspace-data/errors';
+import { consumeRateLimit } from '@/lib/workspace-data/rate-limit';
 
 export const dynamic = 'force-dynamic';
 
@@ -39,6 +41,8 @@ export async function POST(request: Request) {
   if (ctx instanceof NextResponse) return ctx;
   const store = configuredBlobStore();
   if (!store) return errorResponse(503, 'STORAGE_NOT_CONFIGURED');
+  // Counted before the body is read, so a client over its budget cannot make us buffer uploads.
+  try { await consumeRateLimit(ctx.db, ctx.organizationId, 'file.upload'); } catch (e) { return toErrorResponse(e); }
   let bytes: Uint8Array; let mediaType: string;
   try {
     bytes = await readCappedBody(request, max);
