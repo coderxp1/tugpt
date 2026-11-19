@@ -41,7 +41,7 @@ ALTER TABLE public.mcp_tool_calls
   DROP CONSTRAINT IF EXISTS mcp_tool_calls_outcome_check,
   ADD CONSTRAINT mcp_tool_calls_outcome_check CHECK (
     outcome IN ('ok','UNKNOWN_TOOL','POLICY_DISABLED','CONNECTION_NOT_FOUND','PROVIDER_MISMATCH','CONNECTION_NOT_ACTIVE','REAUTHORIZATION_REQUIRED','SCOPE_MISSING','NOT_GRANTED','APPROVAL_REQUIRED','INVALID_ARGUMENTS','PROVIDER_UNAVAILABLE','OUTPUT_TOO_LARGE','CALL_BUDGET_EXCEEDED','INTERNAL')
-  );
+  ) NOT VALID;
 
 -- 4. record_mcp_tool_call: validate outcome + existing endpoint/capability/newest rules.
 DROP FUNCTION IF EXISTS public.record_mcp_tool_call(UUID,UUID,UUID,TEXT,TEXT,TEXT,INTEGER,TEXT);

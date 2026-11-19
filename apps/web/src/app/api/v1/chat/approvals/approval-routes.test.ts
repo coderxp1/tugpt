@@ -90,7 +90,7 @@ beforeEach(() => {
 afterEach(() => { vi.unstubAllEnvs(); });
 
 describe('GET /api/v1/chat/approvals/status', () => {
-  const q = { connectionId: EP, capability: 'external.create_ticket', argumentsSha256: HASH };
+  const q = { connectionId: EP, capability: 'external.create_ticket', argumentsSha256: HASH, threadId: THREAD };
   it('validates its parameters', async () => {
     for (const bad of [{ ...q, connectionId: 'x' }, { ...q, capability: 'calendar.find' }, { ...q, argumentsSha256: 'abc' }]) {
       expect((await statusReq(bad)).status).toBe(400);

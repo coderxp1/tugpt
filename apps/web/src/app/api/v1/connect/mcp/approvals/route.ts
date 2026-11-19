@@ -12,6 +12,7 @@ import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { isSameOriginMutation } from '@/lib/http/mutations';
 import { createExternalMcpRepository, RepoError } from '@/lib/connect/external-mcp-repo';
+import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
 import type { ApiError } from '@/lib/draft-api/types';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
@@ -35,6 +36,9 @@ export async function POST(request: Request) {
     if (!tenant) return errorResponse(403, 'FORBIDDEN', 'No active organization found');
     if (tenant.role !== 'owner' && tenant.role !== 'admin') {
       return errorResponse(403, 'FORBIDDEN', 'Approving an action requires the organization owner or admin role');
+    }
+    if (!customerMcpEnabled()) {
+      return errorResponse(403, 'FORBIDDEN', 'Customer MCP is not enabled');
     }
 
     const body = (await request.json().catch(() => null)) as Record<string, unknown> | null;
@@ -65,8 +69,9 @@ export async function POST(request: Request) {
     return NextResponse.json({ approved: true, id, expiresAt });
   } catch (e) {
     if (e instanceof RepoError) {
-      if (e.pgCode === '42501') return errorResponse(403, 'FORBIDDEN', 'Not authorized to record this approval');
-      return errorResponse(400, 'INVALID_REQUEST', e.message);
+      if (e.pgCode === '42501') return errorResponse(403, 'FORBIDDEN', 'Not authorized');
+      if (e.pgCode === '22023' || e.pgCode === '22P02' || e.pgCode === 'P0001') return errorResponse(400, 'INVALID_REQUEST', 'Invalid request');
+      return errorResponse(500, 'INTERNAL', 'Service unavailable');
     }
     return errorResponse(500, 'INTERNAL', 'Failed to record the approval');
   }

@@ -20,12 +20,13 @@ export async function GET(request: Request) {
   const connectionId = q.get('connectionId');
   const capability = q.get('capability');
   const hash = q.get('argumentsSha256');
-  if (!isUuid(connectionId) || !capability || !CAPABILITY.test(capability) || !hash || !SHA256.test(hash)) return jsonError(400, 'Invalid request');
+  const threadId = q.get('threadId');
+  if (!isUuid(connectionId) || !capability || !CAPABILITY.test(capability) || !hash || !SHA256.test(hash) || !isUuid(threadId)) return jsonError(400, 'Invalid request');
   const ctx = await chatContext(request);
   if (ctx instanceof NextResponse) return ctx;
   try {
     const r = await ctx.db.rpc('is_tool_approved', {
-      p_organization_id: ctx.tenant.organizationId, p_connection_id: connectionId, p_capability: capability, p_arguments_sha256: hash,
+      p_organization_id: ctx.tenant.organizationId, p_connection_id: connectionId, p_capability: capability, p_arguments_sha256: hash, p_thread_id: threadId,
     });
     if (r.error || typeof r.data !== 'boolean') return jsonError(503, 'Service unavailable');
     return NextResponse.json({ approved: r.data }, { headers: PRIVATE_HEADERS });
