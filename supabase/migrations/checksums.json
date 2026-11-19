@@ -108,5 +108,7 @@
   "20261120100004_workspace_custom_agents.sql": "f62be1bc1396469dcf9b40bf6bd556748bb56eccfb39f20ac117d25fbe6481a1",
   "20261120100005_workspace_storage_maintenance.sql": "88ae9e3bcc145041863a699927251c345aac9326da140311f6f0761c87bee39f",
   "20261120100006_workspace_document_dedupe.sql": "fe9365bfead074bc8476aed7efb961b0b81bdec65deca23ab2c96ac5bce75a0d",
-  "20261120100007_workspace_conversation_cursor.sql": "fab72fa01648000c9b8bf56598284d2022e6a42641b6a910e44420feaecb6ad2"
+  "20261120100007_workspace_conversation_cursor.sql": "fab72fa01648000c9b8bf56598284d2022e6a42641b6a910e44420feaecb6ad2",
+  "20261120100008_workspace_agent_save.sql": "e5cf39853dae6363b18acbb51dfaed0dbc8fce4bc177a95fdc2338a2b90a94db",
+  "20261120100009_workspace_agent_owner_edit.sql": "0c11296cb370ff4b33acb56a0d457fdd4c86fc8581967d54704589fe2f9239dd"
 }

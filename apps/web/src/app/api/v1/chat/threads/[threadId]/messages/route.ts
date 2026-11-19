@@ -7,6 +7,11 @@
  *
  * @-mentions are re-validated against list_chat_capabilities() for this
  * user and organization; the browser never chooses a connection.
+ *
+ * Threads started with a custom agent (chat_threads.agent_id, C-1) run the
+ * agent's turn instead (lib/workspace-data/agent-turn.ts): its instructions,
+ * model (which wins over modelKey), tools and knowledge apply, checked
+ * against the caller's own access; it adds 'agent' and 'citations' events.
  */
 import { NextResponse } from 'next/server';
 import { createSsoControlClient } from '@/lib/supabase/server';
@@ -21,6 +26,8 @@ import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegis
 import {
   appendMessage, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
+import { runAgentTurn, threadAgentId } from '@/lib/workspace-data/agent-turn';
+import { asWorkspaceDb } from '@/lib/workspace-data/db';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -45,6 +52,15 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   const ctx = await chatContext(request);
   if (ctx instanceof NextResponse) return ctx;
   const orgId = ctx.tenant.organizationId;
+
+  let agentId: string | null;
+  try { agentId = await threadAgentId(asWorkspaceDb(ctx.db), orgId, threadId); } catch { return jsonError(503, 'Service unavailable'); }
+  if (agentId) {
+    return runAgentTurn({
+      request, ctx, agentId, threadId, content, modelKey: model.key, modelPrecedence: 'agent', timeZone: body.timeZone,
+      mentions: requested, unreadableAgent: 'unavailable', errorStyle: 'chat',
+    });
+  }
 
   let attached: CapabilityRow[];
   let registry: ChatToolRegistry = builtinRegistry();

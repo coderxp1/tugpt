@@ -269,9 +269,10 @@ export function createWorkspaceClient(fetchFn: FetchFn = (i, init) => fetch(i, i
       call<SearchResult>('GET', WORKSPACE_API.search + query({ q, collectionIds: opts.collectionIds, limit: opts.limit })),
 
     listAgents: () => call<{ agents: readonly CustomAgent[] }>('GET', WORKSPACE_API.agents),
-    createAgent: (input: AgentInput & { name: string }) => call<{ agent: CustomAgent }>('POST', WORKSPACE_API.agents, input),
-    getAgent: (id: string) => call<{ agent: CustomAgent & { collectionIds: readonly string[] } }>('GET', WORKSPACE_API.agent(id)),
-    updateAgent: (id: string, patch: AgentInput) => call<{ agent: CustomAgent }>('PATCH', WORKSPACE_API.agent(id), patch),
+    createAgent: (input: AgentInput & { name: string; instructions: string }) => call<{ agent: CustomAgent }>('POST', WORKSPACE_API.agents, input),
+    getAgent: (id: string) => call<{ agent: CustomAgent }>('GET', WORKSPACE_API.agent(id)),
+    /** Partial update. The whole agent as returned may be sent back: read-only fields are ignored. */
+    updateAgent: (id: string, patch: AgentInput | (AgentInput & Partial<CustomAgent>)) => call<{ agent: CustomAgent }>('PATCH', WORKSPACE_API.agent(id), patch),
     deleteAgent: (id: string) => call<{ deleted: true }>('DELETE', WORKSPACE_API.agent(id)),
     listAgentCollections: (id: string) => call<{ collections: readonly Collection[] }>('GET', WORKSPACE_API.agentCollections(id)),
     linkAgentCollection: (id: string, collectionId: string) => call<{ linked: true }>('POST', WORKSPACE_API.agentCollections(id), { collectionId }),
