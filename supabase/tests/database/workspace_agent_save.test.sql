@@ -88,13 +88,24 @@ SELECT set_config('t.o', public.save_custom_agent('eba00000-0000-4000-8000-00000
   '{"name":"Company bot","instructions":"Company policy.","visibility":"organization"}',
   ARRAY['ebc00000-0000-4000-8000-000000000002','ebc00000-0000-4000-8000-000000000003']::uuid[])::text, true);
 
--- Org admin: can read the org agent, cannot save it; links a private collection (RLS allows it).
+-- Org admin: can read the org agent, cannot save it, and (since 20261120100009) cannot link to it either.
 SELECT set_config('request.jwt.claims','{"sub":"eb555555-5555-4555-8555-555555555555","role":"authenticated"}',true);
 SELECT throws_ok(format($$SELECT public.save_custom_agent('eba00000-0000-4000-8000-00000000000a', %L, '{"name":"Admin edit"}')$$, current_setting('t.o')),
   'P0002', 'NOT_FOUND', 'org admin cannot edit someone else''s organization agent (C-1 owner-only)'); -- 22
-SELECT lives_ok(format($$INSERT INTO public.custom_agent_collections (agent_id, collection_id, organization_id, linked_by)
+SELECT throws_ok(format($$INSERT INTO public.custom_agent_collections (agent_id, collection_id, organization_id, linked_by)
   VALUES (%L, 'ebc00000-0000-4000-8000-000000000005', 'eba00000-0000-4000-8000-00000000000a', 'eb555555-5555-4555-8555-555555555555')$$, current_setting('t.o')),
-  'admin links a collection the owner cannot read'); -- 23
+  '42501', NULL, 'org admin cannot link a collection to someone else''s agent'); -- 23
+
+-- How a link becomes hidden in practice: the owner links the admin's collection
+-- while it is shared with the organization, then the admin makes it private.
+RESET ROLE;
+UPDATE public.knowledge_collections SET visibility = 'organization' WHERE id = 'ebc00000-0000-4000-8000-000000000005';
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"eb111111-1111-4111-8111-111111111111","role":"authenticated"}',true);
+SELECT public.link_custom_agent_collection('eba00000-0000-4000-8000-00000000000a', current_setting('t.o')::uuid, 'ebc00000-0000-4000-8000-000000000005');
+RESET ROLE;
+UPDATE public.knowledge_collections SET visibility = 'private' WHERE id = 'ebc00000-0000-4000-8000-000000000005';
+SET LOCAL ROLE authenticated;
 
 -- Owner saves again: the admin's hidden link survives, unwanted visible links go.
 SELECT set_config('request.jwt.claims','{"sub":"eb111111-1111-4111-8111-111111111111","role":"authenticated"}',true);
@@ -108,7 +119,9 @@ RESET ROLE;
 SELECT results_eq(format($$SELECT collection_id FROM public.custom_agent_collections WHERE agent_id = %L$$, current_setting('t.o')),
   $$VALUES ('ebc00000-0000-4000-8000-000000000005'::uuid)$$, 'an empty list clears only the visible links'); -- 25
 
--- Atomicity: 18 more hidden links (19 total); adding two visible ones hits the 20-link trigger cap.
+-- Atomicity: 18 more hidden links (19 total), inserted directly as legacy rows (before 20261120100009 an
+-- admin could add them; a migration does not remove existing links); adding two visible ones hits the
+-- 20-link trigger cap.
 INSERT INTO public.custom_agent_collections (agent_id, collection_id, organization_id, linked_by)
   SELECT current_setting('t.o')::uuid, ('ebe00000-0000-4000-8000-0000000000' || lpad(i::text, 2, '0'))::uuid,
          'eba00000-0000-4000-8000-00000000000a', 'eb555555-5555-4555-8555-555555555555' FROM generate_series(1, 18) i;

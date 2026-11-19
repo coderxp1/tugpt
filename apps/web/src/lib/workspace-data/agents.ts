@@ -265,22 +265,28 @@ async function assertEditable(db: WorkspaceDb, tenant: TenantContext, userId: st
   return canEditAgent(str(row.owner_user_id), userId, tenant.role);
 }
 
-/** Single-link variant of collectionIds. Same rules: owner only, readable collection, at most 10 visible links. */
-export async function linkAgentCollection(db: WorkspaceDb, tenant: TenantContext, userId: string, agentId: string, collectionId: string): Promise<void> {
+/**
+ * Single-link variant of collectionIds. Same rules: owner only, readable collection, at most 10 visible links.
+ * Count and insert run in link_custom_agent_collection (20261120100009) under the agent row lock, so parallel
+ * requests cannot exceed the limit. Returns false when the link already existed (idempotent).
+ */
+export async function linkAgentCollection(db: WorkspaceDb, tenant: TenantContext, userId: string, agentId: string, collectionId: string): Promise<boolean> {
   if (!isUuid(collectionId)) throw new WorkspaceError(400, 'INVALID_REQUEST');
   if (!(await assertEditable(db, tenant, userId, agentId))) throw new WorkspaceError(403, 'FORBIDDEN');
-  const visible = (await visibleLinks(db, tenant.organizationId, [agentId])).get(agentId) ?? [];
-  if (visible.includes(collectionId.toLowerCase())) return; // idempotent
-  if (visible.length >= AGENT_LIMITS.collections) throw bad('LIMIT_EXCEEDED');
-  const r = await db.from('custom_agent_collections').insert({ agent_id: agentId, collection_id: collectionId, organization_id: tenant.organizationId, linked_by: userId });
-  if (r.error?.code === '23505') return;
+  const r = await db.rpc('link_custom_agent_collection', { p_organization_id: tenant.organizationId, p_agent_id: agentId, p_collection_id: collectionId });
   if (r.error?.message === 'TOO_MANY_COLLECTIONS') throw bad('LIMIT_EXCEEDED');
-  if (r.error?.code === '42501' || r.error?.code === '23503') throw new WorkspaceError(404, 'NOT_FOUND'); // missing or unreadable collection (no enumeration)
-  check(r);
+  // Missing or unreadable collection, or the agent vanished since the check above: no enumeration.
+  if (r.error?.message === 'COLLECTION_NOT_FOUND' || r.error?.message === 'AGENT_NOT_FOUND') throw new WorkspaceError(404, 'NOT_FOUND');
+  if (r.error?.code === '42501') throw new WorkspaceError(403, 'FORBIDDEN');
+  return check(r) === true;
 }
 
 export async function unlinkAgentCollection(db: WorkspaceDb, tenant: TenantContext, userId: string, agentId: string, collectionId: string): Promise<void> {
   if (!(await assertEditable(db, tenant, userId, agentId))) throw new WorkspaceError(403, 'FORBIDDEN');
+  if (!isUuid(collectionId)) throw new WorkspaceError(404, 'NOT_FOUND');
+  // Like save_custom_agent: links to collections the caller cannot read are invisible to them and stay.
+  const readable = check(await db.from('knowledge_collections').select('id').eq('id', collectionId).eq('organization_id', tenant.organizationId).maybeSingle());
+  if (!readable) throw new WorkspaceError(404, 'NOT_FOUND');
   const deleted = rows(await db.from('custom_agent_collections').delete().eq('agent_id', agentId).eq('collection_id', collectionId).eq('organization_id', tenant.organizationId).select('agent_id'));
   if (deleted.length > 0) return;
   throw new WorkspaceError(404, 'NOT_FOUND');

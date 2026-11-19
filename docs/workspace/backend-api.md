@@ -172,8 +172,8 @@ The response never claims more than is true: a new document is `pending`, and it
 | `GET /api/v1/agents/{id}` | none | `200 {agent}` | readers |
 | `PATCH /api/v1/agents/{id}` | any subset of the POST fields; the whole `CustomAgent` may be echoed back (read-only `id`, `ownedByMe`, `canEdit`, `canDelete`, `version`, `createdAt`, `updatedAt` are ignored; an echoed `id` must match the path) | `200 {agent}` | **owner only** (C-1). Everyone else, org admins included, gets `404` |
 | `DELETE /api/v1/agents/{id}` | none | `200 {deleted:true}`; threads stay, with `agent_id` set to NULL | owner, or org owner/admin for organization agents (`canDelete`). Readers 403 |
-| `GET\|POST /api/v1/agents/{id}/collections` | POST `{collectionId}` | `200 {collections}` / `201 {linked:true}` | GET: readers (readable collections only). POST: **owner only** (else 403); the collection must be readable (else 404); ≤10 visible links (`400 LIMIT_EXCEEDED`) |
-| `DELETE /api/v1/agents/{id}/collections/{collectionId}` | none | `200 {deleted:true}` | owner only |
+| `GET\|POST /api/v1/agents/{id}/collections` | POST `{collectionId}` | `200 {collections}` / `201 {linked:true}` | GET: readers (readable collections only). POST: **owner only** (else 403); the collection must be readable (else 404); ≤10 visible links (`400 LIMIT_EXCEEDED`), enforced under a row lock (`link_custom_agent_collection`, `20261120100009`) so parallel requests cannot exceed it; linking an already linked collection is a `201` no-op |
+| `DELETE /api/v1/agents/{id}/collections/{collectionId}` | none | `200 {deleted:true}` | owner only (else 403); a link to a collection the owner cannot read is invisible to them: `404`, and it stays |
 | `POST /api/v1/agents/{id}/run` | `{content ≤8000, threadId?, modelKey?, timeZone?}` | `200` NDJSON stream (below) | readers of the agent |
 | `POST /api/v1/chat/threads` | `{modelKey?, agentId?}` | `201 {thread:{id, title, modelKey, updatedAt, agentId}}` | with `agentId`: readers of the agent (`404 "Agent not found"` otherwise) |
 
@@ -183,12 +183,17 @@ additive to C-1. `conversationStarters` was renamed to `starters` (the old name 
 
 - **Saving is one atomic statement** (`save_custom_agent`, migration `20261120100008`, SECURITY INVOKER): fields and
   `collectionIds` change together or not at all. `collectionIds` *replaces* the links the caller can see; links to
-  collections the caller cannot read (e.g. added by an admin) are invisible to them and kept. Every id must be readable
+  collections the caller cannot read (the owner linked a shared collection that was later made private) are invisible
+  to them and kept. Every id must be readable
   by the caller (`400 INVALID_COLLECTION` otherwise: unknown, foreign or unreadable all look the same). The database
   still caps an agent at 20 links in total, hidden ones included (`400 LIMIT_EXCEEDED`).
 - **Errors:** `400 INVALID_REQUEST` (shape, length, unknown keys), `400 LIMIT_EXCEEDED` (>4 starters, >10
   collections), `400 INVALID_COLLECTION`, `400 INVALID_MODEL` (bad key or not in the catalogue; an unchanged stored
   key that has since left the catalogue is accepted so the builder can still save), `403`/`404` as above.
+- **Editing is owner-only in the database too** (`20261120100009`): before it, RLS let org owners/admins update any
+  organization agent and add or remove its links when calling PostgREST directly, although the API never allowed it.
+  Now `custom_agents` UPDATE and link INSERT/DELETE require `private.can_edit_agent` (owner, org member, not a viewer).
+  DELETE of an agent stays owner-or-admin (moderation). Links an admin added before this migration are kept.
 - **`version`** counts changes to the agent's own fields (trigger from `20261120100004`). A save that only changes
   `collectionIds` does not bump it.
 - **Instructions are returned to the owner only**; everyone else gets `instructions: ""` (a string, so typed clients
@@ -289,7 +294,8 @@ Details hold IDs, hashes and classes only: no arguments, file content, filenames
 `20261119100001_workspace_conversations` · `…100002_workspace_approval_requests` · `…100003_workspace_files` ·
 `…100004_workspace_library` (frozen), then `20261120100001_workspace_knowledge_vectors` ·
 `…100002_workspace_document_jobs` · `…100003_workspace_rate_limits` · `…100004_workspace_custom_agents` ·
-`…100005_workspace_storage_maintenance` · `…100006_workspace_document_dedupe` (one document per content per collection). All are registered in `supabase/migrations/checksums.json`. Any
+`…100005_workspace_storage_maintenance` · `…100006_workspace_document_dedupe` (one document per content per collection) ·
+`…100008_workspace_agent_save` (atomic agent save) · `…100009_workspace_agent_owner_edit` (owner-only editing in the database, atomic single link). All are registered in `supabase/migrations/checksums.json`. Any
 further change needs a **new** migration ID.
 
 ## 10. Tests

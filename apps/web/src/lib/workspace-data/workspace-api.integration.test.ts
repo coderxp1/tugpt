@@ -1011,16 +1011,49 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
       });
 
       it('a save keeps links to collections the owner cannot read, and replaces only the visible ones', async () => {
-        // Simulates a link someone else added (e.g. an org admin) to a collection the agent owner cannot read.
-        expect((await sv().from('custom_agent_collections').insert({ agent_id: echo, collection_id: ownerOnlyCol, organization_id: ORG_A, linked_by: U.ownerA.id })).error).toBeNull();
+        // How a link becomes hidden: the agent owner links a collection the org owner shares, then it is made private.
+        as(U.ownerA);
+        const shared = (await call('collections', 'POST', { body: { name: 'Shared for a while', visibility: 'organization' } })).json.collection.id as string;
+        try {
+          as(U.memberA);
+          expect((await call('agentCollections', 'POST', { params: { agentId: echo }, body: { collectionId: shared } })).status).toBe(201);
+          as(U.ownerA);
+          expect((await call('collection', 'PATCH', { params: { collectionId: shared }, body: { visibility: 'private' } })).status).toBe(200);
+          as(U.memberA);
+          expect((await call('agent', 'GET', { params: { agentId: echo } })).json.agent.collectionIds).toEqual([privateCol]);
+          expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { collectionIds: [orgCol] } })).json.agent.collectionIds).toEqual([orgCol]);
+          expect(await linksOf(echo)).toEqual([orgCol, shared].sort());
+          expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { collectionIds: [] } })).json.agent.collectionIds).toEqual([]);
+          expect(await linksOf(echo)).toEqual([shared]);
+          // The owner cannot remove what they cannot see (no enumeration either).
+          expect((await call('agentCollection', 'DELETE', { params: { agentId: echo, collectionId: shared } })).status).toBe(404);
+        } finally {
+          as(U.ownerA);
+          expect((await call('collection', 'DELETE', { params: { collectionId: shared } })).status).toBe(200);
+        }
+        expect(await linksOf(echo)).toEqual([]);
         as(U.memberA);
-        expect((await call('agent', 'GET', { params: { agentId: echo } })).json.agent.collectionIds).toEqual([privateCol]);
-        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { collectionIds: [orgCol] } })).json.agent.collectionIds).toEqual([orgCol]);
-        expect(await linksOf(echo)).toEqual([orgCol, ownerOnlyCol].sort());
-        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { collectionIds: [] } })).json.agent.collectionIds).toEqual([]);
-        expect(await linksOf(echo)).toEqual([ownerOnlyCol]);
-        await sv().from('custom_agent_collections').delete().eq('agent_id', echo).eq('collection_id', ownerOnlyCol);
         expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { collectionIds: [privateCol] } })).status).toBe(200);
+      });
+
+      it('parallel link requests cannot exceed the 10-collection limit (serialised in the database)', async () => {
+        as(U.ownerB);
+        const agent = (await call('agents', 'POST', { body: { name: 'Parallel links', instructions: 'Answer briefly.' } })).json.agent.id as string;
+        const cols: string[] = [];
+        try {
+          for (let i = 0; i < 12; i++) cols.push((await call('collections', 'POST', { body: { name: `Parallel ${i}` } })).json.collection.id);
+          const rs = await Promise.all(cols.map((collectionId) => call('agentCollections', 'POST', { params: { agentId: agent }, body: { collectionId } })));
+          expect(rs.filter((r) => r.status === 201)).toHaveLength(10);
+          expect(rs.filter((r) => r.status === 400).map((r) => r.json.error)).toEqual(['LIMIT_EXCEEDED', 'LIMIT_EXCEEDED']);
+          expect(await linksOf(agent)).toHaveLength(10);
+          expect((await call('agent', 'GET', { params: { agentId: agent } })).json.agent.collectionIds).toHaveLength(10);
+          // Re-linking one that is already linked stays a no-op at the limit.
+          const linked = rs.findIndex((r) => r.status === 201);
+          expect((await call('agentCollections', 'POST', { params: { agentId: agent }, body: { collectionId: cols[linked] } })).status).toBe(201);
+        } finally {
+          expect((await call('agent', 'DELETE', { params: { agentId: agent } })).status).toBe(200);
+          for (const collectionId of cols) await call('collection', 'DELETE', { params: { collectionId } });
+        }
       });
 
       it('chat threads started with an agent (POST /chat/threads agentId) run that agent on every message', async () => {
