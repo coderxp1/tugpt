@@ -15,13 +15,18 @@
  *      from chat is a separate decision from managing endpoints in Connect)
  *   3. CONNECT_EGRESS_PROXY is a valid CONNECT proxy (no proxy, no network)
  *   4. an audit sink that can record MCP calls. Production wires Agent 2's
- *      createMcpAuditSink() (record_mcp_tool_call) through the caller's RLS
- *      client; it throws when the row cannot be written, and ./connect.ts then
- *      withholds the result.
+ *      createMcpAuditSink() (record_mcp_tool_call) on the TRUSTED server-side
+ *      client (deps.serviceDb = createSsoControlClient()): since
+ *      20261115000013 the function takes the actor as a parameter and only
+ *      sso_control/service_role may execute it; the member client gets 42501.
+ *      The actor is the server-resolved session user, never request input.
+ *      No trusted client means no sink (gate closed). The sink throws when the
+ *      row cannot be written, and ./connect.ts then withholds the result.
  *   5. the endpoint is active, its NEWEST snapshot is approved and not
  *      revoked (a newer, unreviewed snapshot blocks the endpoint), and it needs
- *      no stored credential (auth_connection_id is null; resolving endpoint
- *      credentials through the broker does not exist yet)
+ *      no stored credential (auth_connection_id is null, checked by the
+ *      trusted resolve_mcp_execution(); members cannot read that column;
+ *      resolving endpoint credentials through the broker does not exist yet)
  *   6. the tool is in listActiveMcpTools for this org, its stored permission
  *      class matches the capability row, and its schema is a JSON object.
  * Items 5 and 6 are checked again on every call, so a turn-off, revoke or new
@@ -114,7 +119,7 @@ export function builtinRegistry(tools: readonly ConnectTool<never>[] = createBui
 
 export interface McpDeps {
   readonly env?: Env;
-  /** Defaults to Agent 2's createMcpAuditSink on the caller's client; null means "no sink" (gate closed). */
+  /** Defaults to Agent 2's createMcpAuditSink on serviceDb (trusted client); no serviceDb or null means "no sink" (gate closed). */
   readonly audit?: McpAuditSink | null;
   /** Defaults to the proxy-only fetch built from CONNECT_EGRESS_PROXY. */
   readonly fetchFn?: ExternalMcpFetch;
@@ -127,14 +132,21 @@ export interface McpDeps {
 const asSupabase = (db: ChatDb): SupabaseClient => db as unknown as SupabaseClient;
 
 /**
- * Endpoints that may run in chat right now: same organization, active, no
- * stored credential, and the newest snapshot approved and not revoked.
- * Any read error means "none".
+ * Endpoints that may run in chat right now, as far as the member can see:
+ * same organization, active, and the newest snapshot approved and not
+ * revoked. Any read error means "none".
+ *
+ * Reads ONLY columns the `authenticated` role is granted
+ * (20261115000012_mcp_security.sql hides url and auth_connection_id from
+ * members). "No stored credential" is enforced on the trusted path instead:
+ * resolve_mcp_execution() returns nothing for an endpoint with an
+ * auth_connection_id (20261120000003), and loadChatToolRegistry drops any
+ * endpoint it cannot resolve.
  */
 export async function runnableEndpoints(db: ChatDb, orgId: string): Promise<Set<string>> {
   const out = new Set<string>();
   try {
-    const eps = await db.from('external_tool_endpoints').select('id, organization_id, status, auth_connection_id').eq('organization_id', orgId);
+    const eps = await db.from('external_tool_endpoints').select('id, organization_id, status').eq('organization_id', orgId);
     if (eps.error || !Array.isArray(eps.data)) return out;
     const snaps = await db.from('external_tool_snapshots').select('id, organization_id, endpoint_id, version, approved_at, revoked_at')
       .eq('organization_id', orgId).order('version', { ascending: false });
@@ -147,7 +159,7 @@ export async function runnableEndpoints(db: ChatDb, orgId: string): Promise<Set<
       if (!seen || Number(s.version) > Number(seen.version)) newest.set(id, s);
     }
     for (const e of eps.data as Record<string, unknown>[]) {
-      if (e.organization_id !== orgId || e.status !== 'active' || e.auth_connection_id != null) continue;
+      if (e.organization_id !== orgId || e.status !== 'active') continue;
       const s = newest.get(String(e.id));
       if (s && s.approved_at != null && s.revoked_at == null) out.add(String(e.id));
     }
@@ -184,7 +196,7 @@ export async function verifyMcpTool(db: ChatDb, orgId: string, entry: Pick<McpTo
 export async function loadChatToolRegistry(db: ChatDb, orgId: string, deps: McpDeps = {}): Promise<ChatToolRegistry> {
   const env = deps.env ?? process.env;
   const builtins = createBuiltInCalendarTools();
-  const audit = deps.audit === undefined ? createMcpAuditSink(asSupabase(db)) : deps.audit;
+  const audit = deps.audit === undefined ? (deps.serviceDb ? createMcpAuditSink(deps.serviceDb) : null) : deps.audit;
   const gate = mcpGate(env, audit);
   if (!gate.open || !audit) return makeRegistry(builtins, [], gate);
 

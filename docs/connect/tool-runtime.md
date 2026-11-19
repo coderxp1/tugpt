@@ -91,3 +91,19 @@ Each chat tool call opens a fresh session. Tests: `external-mcp-session.test.ts`
 double implementing the server side strictly) and `apps/web/src/lib/chat/mcp-chat.test.ts` ("MCP
 session contract over real sockets": real TLS, the real CONNECT egress path through the proxy double,
 and the harness server that enforces the contract).
+
+### Which database identity does what (chat MCP path)
+
+Found by the M5 real-PostgREST chat run (`agent2-takeover/evidence/m5/http-chat-run1-before-fixes.txt`):
+with the unit-test fake, both of these passed; against the real database every customer MCP tool was
+unusable.
+
+| Step | Client | Why |
+| --- | --- | --- |
+| Runnable endpoints (`runnableEndpoints`) | member (`authenticated`) | reads only `id, organization_id, status`; `url` and `auth_connection_id` are hidden from members (20261115000012) and selecting them is a 42501 for the whole query |
+| Endpoint URL + tool list (`resolve_mcp_execution`) | trusted (`sso_control`) | SECURITY DEFINER; since 20261120000003 it also requires `auth_connection_id IS NULL` (no stored credential), so that rule lives on the trusted path, not in a member read |
+| Audit (`record_mcp_tool_call`) | trusted (`sso_control`) | the actor is a parameter (20261115000013+), so only the trusted identity may execute it; the actor is the server-resolved session user. No trusted client means no sink and the gate stays closed (`AUDIT_UNAVAILABLE`) |
+| Approvals (`record_tool_approval`, `claim_tool_approval`) and capabilities | member | `auth.uid()` decides; owner/admin only for recording |
+
+The test fake (`mcp.test-harness.ts`) mirrors these grants (`AUTHENTICATED_COLUMN_GRANTS`, trusted-only
+RPCs, `fakeTrustedDb`) so a regression fails in unit tests, not only against a real database.

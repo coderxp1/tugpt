@@ -251,12 +251,29 @@ export function emptyState(): FakeState {
 }
 
 const RLS_ADMIN_ONLY = new Set(['external_tool_endpoints', 'external_tool_snapshots', 'external_tools']);
+/**
+ * Column grants of the `authenticated` role, mirroring the real database
+ * (20261115000012_mcp_security.sql: table SELECT revoked, safe columns
+ * granted; url and auth_connection_id are hidden from members). Reading or
+ * filtering on any other column through the user client is a 42501 error,
+ * as in Postgres. Found by the M5 real-PostgREST chat run.
+ */
+export const AUTHENTICATED_COLUMN_GRANTS: Readonly<Record<string, ReadonlySet<string>>> = {
+  external_tool_endpoints: new Set(['id', 'organization_id', 'kind', 'display_name', 'status', 'created_by', 'created_at']),
+};
 
 class Query implements DbQuery {
   private filters: [string, unknown][] = [];
   private sort: [string, boolean] | null = null;
   private max: number | null = null;
-  constructor(private readonly rows: () => Row[], private readonly cols: string) {}
+  constructor(private readonly rows: () => Row[], private readonly cols: string, private readonly granted?: ReadonlySet<string>) {}
+  /** Postgres needs SELECT on every selected AND filtered column; '*' needs table-level SELECT. */
+  private denied(): DbResult | null {
+    if (!this.granted) return null;
+    const granted = this.granted;
+    const used = [...this.cols.split(',').map((c) => c.trim()).filter(Boolean), ...this.filters.map(([k]) => k), ...(this.sort ? [this.sort[0]] : [])];
+    return used.some((c) => c === '*' || !granted.has(c)) ? { data: null, error: { code: '42501', message: 'permission denied for table' } } : null;
+  }
   select(): DbQuery { return this; }
   eq(column: string, value: unknown): DbQuery { this.filters.push([column, value]); return this; }
   is(column: string, value: null): DbQuery { this.filters.push([column, value]); return this; }
@@ -273,15 +290,30 @@ class Query implements DbQuery {
     const keys = this.cols.split(',').map((c) => c.trim()).filter(Boolean);
     return out.map((r) => Object.fromEntries(keys.map((k) => [k, r[k] ?? null])));
   }
-  single(): PromiseLike<DbResult> { const r = this.run(); return Promise.resolve(r.length === 1 ? { data: r[0], error: null } : { data: null, error: { code: 'PGRST116' } }); }
-  maybeSingle(): PromiseLike<DbResult> { const r = this.run(); return Promise.resolve(r.length <= 1 ? { data: r[0] ?? null, error: null } : { data: null, error: { code: 'PGRST116' } }); }
+  single(): PromiseLike<DbResult> { const d = this.denied(); if (d) return Promise.resolve(d); const r = this.run(); return Promise.resolve(r.length === 1 ? { data: r[0], error: null } : { data: null, error: { code: 'PGRST116' } }); }
+  maybeSingle(): PromiseLike<DbResult> { const d = this.denied(); if (d) return Promise.resolve(d); const r = this.run(); return Promise.resolve(r.length <= 1 ? { data: r[0] ?? null, error: null } : { data: null, error: { code: 'PGRST116' } }); }
   then<A = DbResult, B = never>(ok?: ((v: DbResult) => A | PromiseLike<A>) | null, bad?: ((e: unknown) => B | PromiseLike<B>) | null): PromiseLike<A | B> {
-    return Promise.resolve({ data: this.run(), error: null } as DbResult).then(ok, bad);
+    return Promise.resolve(this.denied() ?? ({ data: this.run(), error: null } as DbResult)).then(ok, bad);
   }
 }
 
 /** A user-scoped client: what auth.uid() = userId may see and do. */
-export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables: Set<string> } {
+/**
+ * EXECUTE grants as in the real database (proacl after 20261120000001):
+ * resolve_mcp_execution and record_mcp_tool_call are callable only by the
+ * trusted identity sso_control (service_role/postgres aside); the member
+ * (authenticated) client gets 42501. sso_control has no table grants on the
+ * external_tool_* tables and no EXECUTE on the member RPCs.
+ */
+const TRUSTED_ONLY_RPCS = new Set(['resolve_mcp_execution', 'record_mcp_tool_call']);
+export type FakeIdentity = 'member' | 'sso_control';
+
+/** The server-side sso_control client (createSsoControlClient in production). */
+export function fakeTrustedDb(state: FakeState): ChatDb & { failTables: Set<string> } {
+  return fakeDb(state, '', 'sso_control');
+}
+
+export function fakeDb(state: FakeState, userId: string, identity: FakeIdentity = 'member'): ChatDb & { failTables: Set<string> } {
   const role = (org: unknown) => state.members[String(org)]?.[userId];
   const isMember = (org: unknown) => role(org) !== undefined;
   const isAdmin = (org: unknown) => role(org) === 'owner' || role(org) === 'admin';
@@ -295,11 +327,14 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
     from(name: string) {
       const make = (cols: string): DbQuery => (failTables.has(name)
         ? Object.assign(new Query(() => [], cols), { then: (ok: (v: DbResult) => unknown) => Promise.resolve({ data: null, error: { message: 'down' } }).then(ok) }) as unknown as DbQuery
-        : new Query(() => table(name), cols));
+        : identity === 'sso_control' && name.startsWith('external_tool')
+          ? new Query(() => [], cols, new Set<string>())
+          : new Query(() => table(name), cols, AUTHENTICATED_COLUMN_GRANTS[name]));
       return { select: make, insert: () => make(''), update: () => make('') };
     },
     async rpc(fn: string, args: Row): Promise<DbResult> {
       state.rpcLog.push({ fn, args });
+      if ((identity === 'member') === TRUSTED_ONLY_RPCS.has(fn)) return { data: null, error: { code: '42501', message: 'permission denied for function' } };
       const org = args.p_organization_id;
       if (fn === 'list_chat_capabilities') {
         if (!isMember(org)) return { data: [], error: null };
@@ -342,8 +377,9 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
         return { data: out, error: null };
       }
       if (fn === 'resolve_mcp_execution') {
-        const e = state.endpoints.find((x) => x.id === args.p_endpoint_id && x.organization_id === org && x.status === 'active');
-        if (!e) return { data: null, error: { message: 'not found' } };
+        // Mirrors 20261120000003: the trusted path also requires no stored credential (auth_connection_id IS NULL).
+        const e = state.endpoints.find((x) => x.id === args.p_endpoint_id && x.organization_id === org && x.status === 'active' && x.auth_connection_id == null);
+        if (!e) return { data: null, error: null }; // the SQL function returns NULL (no row), not an error
         const snaps = state.snapshots.filter((s) => s.endpoint_id === e.id && s.organization_id === org).sort((a, b) => Number(b.version) - Number(a.version));
         const newest = snaps[0];
         if (!newest || newest.approved_at == null || newest.revoked_at != null) return { data: null, error: null };
@@ -351,9 +387,9 @@ export function fakeDb(state: FakeState, userId: string): ChatDb & { failTables:
         return { data: { endpointId: e.id, url: e.url, tools }, error: null };
       }
             if (fn === 'record_mcp_tool_call') {
-        // Mirrors 20261115000006: members of the organization may write; nothing else is validated there.
-        if (!isMember(org)) return { data: null, error: { code: '42501', message: 'FORBIDDEN' } };
-        state.mcpAudit.push({ ...args, actor: userId });
+        // Mirrors 20261115000013+ (trusted caller supplies the actor): the ACTOR must be a member of the organization.
+        if (state.members[String(org)]?.[String(args.p_actor_user_id)] === undefined) return { data: null, error: { code: '42501', message: 'FORBIDDEN' } };
+        state.mcpAudit.push({ ...args, actor: args.p_actor_user_id });
         return { data: null, error: null };
       }
       if (fn === 'record_connect_tool_call') {

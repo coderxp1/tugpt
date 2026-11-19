@@ -16,13 +16,13 @@ import type { ToolAuditEvent } from '@tugpt/connect-runtime';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from './connect';
 import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch } from './mcp-egress';
-import { loadChatToolRegistry, mcpUnavailableReason, type McpAuditSink, type McpDeps } from './mcp';
+import { loadChatToolRegistry, mcpUnavailableReason, runnableEndpoints, type McpAuditSink, type McpDeps } from './mcp';
 import { argumentsSha256 } from './approval.server';
 import { canonicalJson, runTurn, type TurnEvent } from './turn';
 import { listCapabilities, type CapabilityRow } from './store';
 import { toolLabel, toolProblem } from '../connect-ui/chat-errors';
 import {
-  approve, deadPort, emptyState, fakeDb, makeCertificate, MCP_HOST, opensslAvailable, startConnectProxy, startMcpServer,
+  approve, deadPort, emptyState, fakeDb, fakeTrustedDb, makeCertificate, MCP_HOST, opensslAvailable, startConnectProxy, startMcpServer,
   type ConnectProxy, type FakeState, type McpServer,
 } from './mcp.test-harness';
 
@@ -93,7 +93,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
 
   async function session(user: string, org = ORG_A, d: McpDeps = deps) {
     const db = fakeDb(state, user);
-    const registry = await loadChatToolRegistry(db, org, { ...d, serviceDb: db as never });
+    const registry = await loadChatToolRegistry(db, org, { ...d, serviceDb: fakeTrustedDb(state) as never });
     const rows = await listCapabilities(db, org);
     const pick = (endpoint: string, name: string) => rows.find((r) => r.connectionId === endpoint && r.capabilityKey === `external.${name}`) as CapabilityRow;
     const toolset = (attached: CapabilityRow[]) => buildChatToolset(db, { organizationId: org, userId: user, threadId: THREAD }, attached, { registry, mcp: d });
@@ -128,6 +128,28 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
 
     it('blocks endpoints that need a stored credential (not resolvable yet)', async () => {
       state.endpoints.find((e) => e.id === EP_A)!.auth_connection_id = 'f0000000-0000-4000-8000-000000000001';
+      const { registry, pick } = await session(OWNER_A);
+      expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(false);
+    });
+
+    it('decides runnability with member-granted columns only (url / auth_connection_id are hidden from members)', async () => {
+      // Regression (M5 real-PostgREST run): the member client is refused any query that touches a hidden column.
+      const db = fakeDb(state, OWNER_A);
+      const hidden = await db.from('external_tool_endpoints').select('id, auth_connection_id').eq('organization_id', ORG_A);
+      expect(hidden.error).toMatchObject({ code: '42501' });
+      expect((await db.from('external_tool_endpoints').select('id, status').eq('auth_connection_id', null)).error).toMatchObject({ code: '42501' });
+      expect([...(await runnableEndpoints(db, ORG_A))]).toContain(EP_A);
+      const { registry, pick } = await session(OWNER_A);
+      expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(true);
+    });
+
+    it('a stored credential is refused on the trusted path (resolve_mcp_execution), not by reading the hidden column', async () => {
+      state.endpoints.find((e) => e.id === EP_A)!.auth_connection_id = 'f0000000-0000-4000-8000-000000000001';
+      const db = fakeDb(state, OWNER_A);
+      expect([...(await runnableEndpoints(db, ORG_A))]).toContain(EP_A);
+      const resolved = await fakeTrustedDb(state).rpc('resolve_mcp_execution', { p_organization_id: ORG_A, p_endpoint_id: EP_A });
+      expect(resolved.error ?? null).toBeNull();
+      expect(resolved.data).toBeNull();
       const { registry, pick } = await session(OWNER_A);
       expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(false);
     });
@@ -494,7 +516,21 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(registry.mcpGate).toEqual({ open: false, reason: 'AUDIT_UNAVAILABLE' });
       expect(registry.mcp).toEqual([]);
     });
-    it('production default wires Agent 2\'s record_mcp_tool_call sink on the caller\'s client', async () => {
+    it('the member client cannot write the MCP audit or resolve endpoints (real EXECUTE grants)', async () => {
+      const member = fakeDb(state, OWNER_A);
+      const row = { p_organization_id: ORG_A, p_endpoint_id: EP_A, p_actor_user_id: OWNER_A, p_capability: 'external.search_docs', p_outcome: 'ok', p_error_code: null, p_duration_ms: 1, p_arguments_sha256: sha({}) };
+      expect((await member.rpc('record_mcp_tool_call', row)).error).toMatchObject({ code: '42501' });
+      expect((await member.rpc('resolve_mcp_execution', { p_organization_id: ORG_A, p_endpoint_id: EP_A })).error).toMatchObject({ code: '42501' });
+      expect((await fakeTrustedDb(state).rpc('record_mcp_tool_call', { ...row, p_actor_user_id: ADMIN_B })).error).toMatchObject({ code: '42501' });
+    });
+    it('without a trusted client the default audit sink is absent and the gate stays closed', async () => {
+      const { audit: _unused, ...withoutAudit } = deps;
+      void _unused;
+      const registry = await loadChatToolRegistry(fakeDb(state, OWNER_A), ORG_A, withoutAudit);
+      expect(registry.mcpGate).toEqual({ open: false, reason: 'AUDIT_UNAVAILABLE' });
+      expect(registry.mcp).toEqual([]);
+    });
+    it('production default wires Agent 2\'s record_mcp_tool_call sink on the trusted sso_control client', async () => {
       const { audit: _unused, ...withoutAudit } = deps;
       void _unused;
       const s = await session(OWNER_A, ORG_A, withoutAudit);
