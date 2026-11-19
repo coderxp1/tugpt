@@ -471,6 +471,103 @@ const ROUTES: RouteExpectation[] = [
     type: 'public',
     why: 'Handler authenticates and requires the owner/admin role; the organization comes from the session, and the outcome redirects only to the fixed settings path.',
   },
+  // ---- Workspace backend (Agent 4) ----
+  {
+    path: '/api/v1/chat/folders',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); RLS limits folders to their owner while an active member. Same-origin check on POST.',
+  },
+  {
+    path: '/api/v1/chat/folders/[folderId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); owner-only RLS; same-origin check on PATCH/DELETE; deleting un-files threads.',
+  },
+  {
+    path: '/api/v1/chat/threads/[threadId]/attachments',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); thread must be the caller\'s; files RLS decides readability; same-origin check on POST.',
+  },
+  {
+    path: '/api/v1/chat/threads/[threadId]/attachments/[fileId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); owner-only attachment RLS; same-origin check on DELETE.',
+  },
+  {
+    path: '/api/v1/chat/threads/[threadId]/collections',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); thread must be the caller\'s; collection must be readable (can_read_collection); same-origin on POST.',
+  },
+  {
+    path: '/api/v1/chat/threads/[threadId]/collections/[collectionId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); owner-only link RLS; same-origin check on DELETE.',
+  },
+  {
+    path: '/api/v1/approvals',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); history via list_approval_history (members: own; org scope owner/admin only); create via create_approval_request. Same-origin on POST.',
+  },
+  {
+    path: '/api/v1/approvals/[requestId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); decide/revoke owner/admin and cancel requester-only, enforced in SQL; delegates to Agent 2 record/revoke_tool_approval.',
+  },
+  {
+    path: '/api/v1/files',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); files RLS (owner, or ready org-visible); raw-body upload with origin + x-tugpt-csrf check, size cap and type allowlist.',
+  },
+  {
+    path: '/api/v1/files/[fileId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); RLS: read own/org-visible, delete own or owner/admin for org-visible; same-origin on PATCH/DELETE.',
+  },
+  {
+    path: '/api/v1/files/[fileId]/content',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); download only if the metadata row is readable under RLS; served as attachment with nosniff and sandbox CSP.',
+  },
+  {
+    path: '/api/v1/library/collections',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); collections RLS (own or organization-visible); publishing to the organization requires owner/admin. Same-origin on POST.',
+  },
+  {
+    path: '/api/v1/library/collections/[collectionId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); read via can_read_collection, write via can_write_collection; same-origin on PATCH/DELETE.',
+  },
+  {
+    path: '/api/v1/library/collections/[collectionId]/documents',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); collection must be writable and the file readable (RLS); same-origin on POST.',
+  },
+  {
+    path: '/api/v1/library/collections/[collectionId]/documents/[documentId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); writable collection only (RLS + replace_document_chunks check); same-origin on POST/DELETE.',
+  },
+  {
+    path: '/api/v1/library/search',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); search_knowledge is SECURITY INVOKER: chunk RLS (can_read_collection) applies at query time.',
+  },
 ];
 
 describe('proxy route classification coverage', () => {
