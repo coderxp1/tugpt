@@ -3,7 +3,7 @@
 -- no extra processing jobs for refused duplicates, isolation per collection
 -- and tenant, and the in-request chunk writer still closed to users.
 BEGIN;
-SELECT plan(16);
+SELECT plan(18);
 
 INSERT INTO auth.users (instance_id, id, aud, role, email, encrypted_password, email_confirmed_at, created_at, updated_at,
   raw_app_meta_data, raw_user_meta_data, is_super_admin, confirmation_token, recovery_token, email_change_token_new, email_change) VALUES
@@ -63,6 +63,16 @@ SELECT is((SELECT count(*)::int FROM public.knowledge_documents WHERE organizati
 RESET ROLE;
 SELECT is((SELECT count(*)::int FROM private.knowledge_document_jobs WHERE organization_id IN ('eda00000-0000-4000-8000-00000000000a','edb00000-0000-4000-8000-00000000000b')), 4,
   'refused duplicates enqueue no processing jobs'); -- 16
+
+-- Removing a document frees its dedupe slot: the same file can be added again (new id).
+DELETE FROM public.knowledge_documents WHERE id='edd00000-0000-4000-8000-000000000001';
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"ed222222-2222-4222-8222-222222222222","role":"authenticated"}',true);
+SELECT lives_ok($$INSERT INTO public.knowledge_documents (organization_id, collection_id, file_id, added_by, title) VALUES ('eda00000-0000-4000-8000-00000000000a','edc00000-0000-4000-8000-000000000001','edf00000-0000-4000-8000-000000000001','ed222222-2222-4222-8222-222222222222','Plan again')$$,
+  'after removal the same file can be added again'); -- 17
+SELECT is((SELECT count(*)::int FROM public.knowledge_documents WHERE collection_id='edc00000-0000-4000-8000-000000000001' AND content_sha256=repeat('e',64)), 1,
+  'still exactly one document per content in the collection'); -- 18
+RESET ROLE;
 
 SELECT * FROM finish();
 ROLLBACK;

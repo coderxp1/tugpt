@@ -732,6 +732,76 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         } finally { await dropCollection(col); }
       });
 
+      it('lost responses: parallel retries with the same file id give one document and the same full response', async () => {
+        as(U.ownerA);
+        const col = await newCollection('Q-8 parallel');
+        try {
+          const f = (await upload('parallel.md', '# Parallel\n\nOcelot shipping notes.', 'text/markdown')).json.file.id;
+          const rs = await Promise.all(Array.from({ length: 5 }, () => add(col, f)));
+          expect(rs.map((r) => r.status).sort()).toEqual([200, 200, 200, 200, 202]);
+          expect(rs.filter((r) => r.json.created === true)).toHaveLength(1);
+          expect(new Set(rs.map((r) => r.json.document.id)).size).toBe(1);
+          const listed = await docsOf(col);
+          expect(listed).toHaveLength(1);
+          // Every response carries the complete canonical document, identical to what the collection lists.
+          for (const r of rs) expect(r.json.document).toEqual(listed[0]);
+          expect(Object.keys(listed[0]).sort()).toEqual(['chunkCount', 'collectionId', 'createdAt', 'errorCode', 'fileId', 'id', 'indexedAt',
+            'nextAttemptAt', 'processingAttempts', 'status', 'title'].sort());
+          // A retry with another title does not rename the stored document.
+          const renamed = await add(col, f, 'Other title');
+          expect(renamed.status).toBe(200);
+          expect(renamed.json.document).toEqual(listed[0]);
+          expect(await drain()).toBe(1);
+        } finally { await dropCollection(col); }
+      });
+
+      it('after the document is removed, adding the same file again creates a new document', async () => {
+        as(U.ownerA);
+        const col = await newCollection('Q-8 re-add');
+        try {
+          const f = (await upload('readd.md', '# Re-add\n\nTapir loading dock rules.', 'text/markdown')).json.file.id;
+          const first = await add(col, f);
+          expect(first.status).toBe(202);
+          expect((await call('document', 'DELETE', { params: { collectionId: col, documentId: first.json.document.id } })).status).toBe(200);
+          const again = await add(col, f);
+          expect(again.status).toBe(202);
+          expect(again.json.created).toBe(true);
+          expect(again.json.document.id).not.toBe(first.json.document.id);
+          expect((await docsOf(col)).map((d) => d.id)).toEqual([again.json.document.id]);
+          await drain();
+          expect((await docsOf(col))[0]).toMatchObject({ id: again.json.document.id, status: 'ready' });
+        } finally { await dropCollection(col); }
+      });
+
+      it('dedupe is scoped to one collection of one tenant: identical bytes elsewhere are separate documents', async () => {
+        const bytes = '# Scope\n\nPangolin tariff table.';
+        as(U.ownerA);
+        const colA = await newCollection('Q-8 scope A');
+        const fA = (await upload('scope.md', bytes, 'text/markdown')).json.file.id;
+        const a = await add(colA, fA);
+        expect(a.status).toBe(202);
+        as(U.ownerB);
+        const colB = await newCollection('Q-8 scope B');
+        try {
+          const fB = (await upload('scope.md', bytes, 'text/markdown')).json.file.id;
+          const b = await add(colB, fB);
+          expect(b.status).toBe(202);
+          expect(b.json).toMatchObject({ created: true, document: { collectionId: colB, fileId: fB } });
+          expect(b.json.document.id).not.toBe(a.json.document.id);
+          expect((await add(colB, fB)).json).toMatchObject({ created: false, document: { id: b.json.document.id } });
+          // Tenant A's file and collection stay invisible to tenant B.
+          expect((await add(colB, fA)).status).toBe(404);
+          expect((await add(colA, fB)).status).toBe(404);
+          expect((await docsOf(colB)).map((d) => d.id)).toEqual([b.json.document.id]);
+          as(U.ownerA);
+          expect((await docsOf(colA)).map((d) => d.id)).toEqual([a.json.document.id]);
+          expect(await drain()).toBe(2);
+        } finally {
+          as(U.ownerB); await dropCollection(colB);
+          as(U.ownerA); await dropCollection(colA);
+        }
+      });
+
       it('a storage failure leaves no file and no document; unready or missing files are refused', async () => {
         as(U.memberA);
         const col = await newCollection('Q-8 failures');
