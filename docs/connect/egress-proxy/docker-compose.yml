@@ -9,6 +9,8 @@ networks:
 
 services:
   egress-proxy:
+    # UNPINNED - acceptance is invalid on :latest. Pin by digest (image@sha256:...) after an approved
+    # supply-chain review, then run egress-probe.cjs against exactly that digest.
     image: stripe/smokescreen:latest
     read_only: true
     cap_drop: [ALL]
@@ -19,17 +21,36 @@ services:
     networks:
       - mcp-int
       - mcp-egress
-    environment:
-      # Deny all non-public ranges + documentation + multicast (see README rule 3).
-      DENY_RANGES: |
-        0.0.0.0/8,10.0.0.0/8,100.64.0.0/10,127.0.0.0/8,169.254.0.0/16,
-        172.16.0.0/12,192.0.0.0/24,192.0.2.0/24,192.168.0.0/16,
-        198.18.0.0/15,198.51.100.0/24,203.0.113.0/24,224.0.0.0/4,
-        240.0.0.0/4,::/128,::1/128,64:ff9b::/96,100::/64,2001:db8::/32,
-        fc00::/7,fe80::/10,ff00::/8
-    command: ["--listen-ip", "0.0.0.0", "--listen-port", "3128"]
+    # Smokescreen reads its deny list ONLY from --deny-range (repeatable) or --config-file; it has no
+    # environment-variable source, so the former DENY_RANGES env block was silently ignored (verified
+    # against stripe/smokescreen cmd/smokescreen.go; re-verify against the pinned image).
+    command:
+      - "--listen-ip=0.0.0.0"
+      - "--listen-port=3128"
+      - "--deny-range=0.0.0.0/8"
+      - "--deny-range=10.0.0.0/8"
+      - "--deny-range=100.64.0.0/10"
+      - "--deny-range=127.0.0.0/8"
+      - "--deny-range=169.254.0.0/16"
+      - "--deny-range=172.16.0.0/12"
+      - "--deny-range=192.0.0.0/24"
+      - "--deny-range=192.0.2.0/24"
+      - "--deny-range=192.168.0.0/16"
+      - "--deny-range=198.18.0.0/15"
+      - "--deny-range=198.51.100.0/24"
+      - "--deny-range=203.0.113.0/24"
+      - "--deny-range=224.0.0.0/4"
+      - "--deny-range=240.0.0.0/4"
+      - "--deny-range=::/128"
+      - "--deny-range=::1/128"
+      - "--deny-range=64:ff9b::/96"
+      - "--deny-range=100::/64"
+      - "--deny-range=2001:db8::/32"
+      - "--deny-range=fc00::/7"
+      - "--deny-range=fe80::/10"
+      - "--deny-range=ff00::/8"
 
-  # Test-only probe (same internal network) â€” used by tests/egress-probe.cjs.
+  # Test-only probe (same internal network) â€” used by docs/connect/egress-proxy/egress-probe.cjs.
   probe:
     image: node:22-alpine
     profiles: ["test"]

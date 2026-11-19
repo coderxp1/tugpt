@@ -60,6 +60,11 @@ export interface ExternalMcpRepository {
   revokeApproval(orgId: string, approvalId: string): Promise<boolean>;
 }
 
+/** The requested snapshot version is no longer latest+1 (a concurrent snapshot won). */
+export class SnapshotVersionConflictError extends Error {
+  constructor() { super('snapshot version conflict'); this.name = 'SnapshotVersionConflictError'; }
+}
+
 /* eslint-disable @typescript-eslint/no-explicit-any -- single cast for not-yet-generated tables/RPCs */
 type Untyped = {
   from(table: string): any;
@@ -117,8 +122,12 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
         .order('version', { ascending: false })
         .limit(1)
         .maybeSingle();
-      if (error) return 0;
-      return (data?.version as number) ?? 0;
+      // Fail closed: a read error must not be mistaken for "no snapshots yet" (would retry v1).
+      if (error) throw new Error('failed to read the latest snapshot version');
+      const v = data?.version;
+      if (v === undefined || v === null) return 0;
+      if (!Number.isInteger(v) || (v as number) < 1) throw new Error('invalid snapshot version');
+      return v as number;
     },
 
     async createSnapshot(orgId, endpointId, version, contentSha256, tools) {
@@ -126,7 +135,14 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
         p_organization_id: orgId, p_endpoint_id: endpointId, p_version: version, p_content_sha256: contentSha256,
         p_tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
       });
-      if (error || typeof data !== 'string') throw new Error('failed to persist the tool snapshot');
+      if (error) {
+        // create_mcp_snapshot raises 40001 when p_version is not latest+1 (concurrent or stale caller);
+        // 23505 is the UNIQUE (endpoint_id, version) backstop.
+        const code = (error as { code?: string }).code;
+        if (code === '40001' || code === '23505') throw new SnapshotVersionConflictError();
+        throw new Error('failed to persist the tool snapshot');
+      }
+      if (typeof data !== 'string') throw new Error('failed to persist the tool snapshot');
       return data;
     },
 

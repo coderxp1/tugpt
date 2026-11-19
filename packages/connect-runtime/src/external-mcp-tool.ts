@@ -26,6 +26,8 @@ const MODEL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 export interface ExternalMcpFetchResponse {
   readonly status: number;
   text(): Promise<string>;
+  /** Response headers (lower-case lookup). Used for the MCP `Mcp-Session-Id` header. */
+  readonly headers?: { get(name: string): string | null };
 }
 export interface ExternalMcpFetch {
   (url: string, init: { method: string; headers: Record<string, string>; body: string; redirect: 'manual' | 'error' | 'follow' }): Promise<ExternalMcpFetchResponse>;
@@ -186,63 +188,131 @@ export async function assertPublicEndpoint(
   return url.toString();
 }
 
-function defaultFetch(): ExternalMcpFetch {
-  // Fail closed: customer MCP must never reach the network directly. The caller
-  // must inject a proxy-aware fetch that routes through CONNECT_EGRESS_PROXY
-  // (redirect: 'manual' so a 3xx cannot bypass address validation).
-  return async () => {
-    throw new Error('egress proxy required for customer MCP (B-8)');
-  };
-}
-
 export interface ExternalMcpToolListEntry {
   readonly name: string;
   readonly description: string;
   readonly inputSchema: JsonSchemaObject;
 }
 
+export type McpDiscoveryErrorCode =
+  | 'DISCOVERY_HTTP_STATUS'   // non-2xx reply (incl. 3xx: redirects are never followed)
+  | 'DISCOVERY_MALFORMED'     // not JSON / not JSON-RPC 2.0 / wrong id / missing result / bad tools shape
+  | 'DISCOVERY_RPC_ERROR'     // JSON-RPC error object
+  | 'DISCOVERY_INVALID_TOOL'  // a tool violates the snapshot contract (mirrors the DB CHECKs)
+  | 'DISCOVERY_TOO_LARGE';    // more tools/pages than a snapshot may hold
+
+/** Discovery failed; nothing from this discovery may be persisted. */
+export class McpDiscoveryError extends Error {
+  constructor(readonly code: McpDiscoveryErrorCode, message: string) {
+    super(message);
+    this.name = 'McpDiscoveryError';
+  }
+}
+
+/** Mirrors public.external_tools CHECKs, so invalid input fails here, before any DB write. */
+const TOOL_NAME_PATTERN = /^[A-Za-z0-9_.-]{1,64}$/;
+const MAX_DESCRIPTION_LENGTH = 2000;
+export const MAX_SNAPSHOT_TOOLS = 256;
+const MAX_TOOL_PAGES = 10;
+
+function isRecord(v: unknown): v is Record<string, unknown> {
+  return typeof v === 'object' && v !== null && !Array.isArray(v);
+}
+
+/** Parse one JSON-RPC reply (plain JSON or an SSE stream) and return the message for `id`. */
+function parseRpcReply(text: string, id: number): Record<string, unknown> {
+  const candidates: string[] = [];
+  const dataLines = text.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trimStart());
+  if (dataLines.length > 0) candidates.push(...dataLines); else candidates.push(text);
+  for (const c of candidates) {
+    let msg: unknown;
+    try { msg = JSON.parse(c); } catch { continue; }
+    if (!isRecord(msg) || msg.id !== id) continue;
+    if (msg.jsonrpc !== '2.0') throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'reply is not JSON-RPC 2.0');
+    if ('error' in msg && msg.error !== undefined) throw new McpDiscoveryError('DISCOVERY_RPC_ERROR', 'MCP endpoint returned a JSON-RPC error');
+    if (!isRecord(msg.result)) throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'JSON-RPC reply has no result object');
+    return msg.result;
+  }
+  throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'no JSON-RPC reply for the request');
+}
+
+function validateTool(raw: unknown): ExternalMcpToolListEntry {
+  if (!isRecord(raw)) throw new McpDiscoveryError('DISCOVERY_INVALID_TOOL', 'tool entry is not an object');
+  const { name, description, inputSchema } = raw;
+  if (typeof name !== 'string' || !TOOL_NAME_PATTERN.test(name)) {
+    throw new McpDiscoveryError('DISCOVERY_INVALID_TOOL', 'tool name is missing or invalid');
+  }
+  if (description !== undefined && (typeof description !== 'string' || description.length > MAX_DESCRIPTION_LENGTH)) {
+    throw new McpDiscoveryError('DISCOVERY_INVALID_TOOL', `tool ${name}: description is invalid`);
+  }
+  if (!isRecord(inputSchema) || inputSchema.type !== 'object') {
+    throw new McpDiscoveryError('DISCOVERY_INVALID_TOOL', `tool ${name}: inputSchema must be a JSON Schema object`);
+  }
+  return { name, description: typeof description === 'string' ? description : '', inputSchema: inputSchema as JsonSchemaObject };
+}
+
 /**
- * Fetch an endpoint's tool list (initialize + tools/list) for the approval
- * snapshot. Read-only: never calls a tool.
+ * Fetch an endpoint's tool list (initialize + tools/list, following
+ * pagination) for the approval snapshot. Read-only: never calls a tool.
+ *
+ * `fetchFn` is REQUIRED and is the only transport used: there is no fallback
+ * (not `endpoint.fetchFn`, not a global fetch). Callers pass the egress-proxy
+ * fetch. All-or-nothing: any invalid page or tool throws McpDiscoveryError,
+ * so a partial tool list is never returned.
  */
 export async function listExternalMcpTools(
   endpoint: ExternalMcpEndpoint,
-  fetchFn?: ExternalMcpFetch,
+  fetchFn: ExternalMcpFetch,
 ): Promise<ExternalMcpToolListEntry[]> {
+  if (typeof fetchFn !== 'function') throw new Error('egress proxy required for customer MCP (B-8)');
   await assertPublicEndpoint(endpoint.url, endpoint.resolveHostname);
-  const fn = fetchFn ?? endpoint.fetchFn ?? defaultFetch();
 
-  async function rpc(id: number, method: string, params: unknown, sessionId?: string): Promise<Record<string, unknown>> {
+  async function send(message: Record<string, unknown>, sessionId?: string) {
     const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json, text/event-stream' };
     if (endpoint.authHeader) headers.authorization = endpoint.authHeader;
     if (sessionId) headers['mcp-session-id'] = sessionId;
-    const res = await fn(endpoint.url, { method: 'POST', headers, redirect: 'manual', body: JSON.stringify({ jsonrpc: '2.0', id, method, params }) });
-    if (res.status !== 200) throw new Error(`MCP endpoint returned HTTP ${res.status}`);
-    const text = await res.text();
-    const dataLine = text
-      .split(/\r?\n/)
-      .filter((l) => l.startsWith('data:'))
-      .map((l) => l.slice(5).trimStart())
-      .join('\n');
-    return JSON.parse(dataLine || text) as Record<string, unknown>;
+    return fetchFn(endpoint.url, { method: 'POST', headers, redirect: 'manual', body: JSON.stringify({ jsonrpc: '2.0', ...message }) });
+  }
+  async function rpc(id: number, method: string, params: unknown, sessionId?: string) {
+    const res = await send({ id, method, params }, sessionId);
+    if (res.status !== 200) throw new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${res.status}`);
+    return { result: parseRpcReply(await res.text(), id), headers: res.headers };
   }
 
-  const init = (await rpc(1, 'initialize', {
+  const init = await rpc(1, 'initialize', {
     protocolVersion: '2025-06-18',
     capabilities: {},
     clientInfo: { name: 'tugpt', version: '1.0.0' },
-  })) as { result?: { sessionId?: string } };
-  const sessionId = init.result?.sessionId;
-  await rpc(2, 'notifications/initialized', undefined, sessionId).catch(() => undefined);
-  const list = (await rpc(3, 'tools/list', {}, sessionId)) as {
-    result?: { tools?: Array<{ name?: unknown; description?: unknown; inputSchema?: unknown }> };
-  };
-  const tools = list.result?.tools ?? [];
-  return tools.map((t) => ({
-    name: typeof t.name === 'string' ? t.name : '',
-    description: typeof t.description === 'string' ? t.description : '',
-    inputSchema: (t.inputSchema as JsonSchemaObject) ?? { type: 'object' },
-  }));
+  });
+  const headerSession = init.headers?.get('mcp-session-id') ?? null;
+  const sessionId = headerSession ?? (typeof init.result.sessionId === 'string' ? init.result.sessionId : undefined);
+
+  // A notification carries no id (JSON-RPC 2.0); servers answer 202/200/204.
+  const ack = await send({ method: 'notifications/initialized' }, sessionId);
+  if (ack.status < 200 || ack.status > 299) {
+    throw new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${ack.status} to initialized`);
+  }
+
+  const tools: ExternalMcpToolListEntry[] = [];
+  const seen = new Set<string>();
+  let cursor: string | undefined;
+  for (let page = 0; ; page++) {
+    if (page >= MAX_TOOL_PAGES) throw new McpDiscoveryError('DISCOVERY_TOO_LARGE', 'too many tools/list pages');
+    const { result } = await rpc(2 + page, 'tools/list', cursor ? { cursor } : {}, sessionId);
+    if (!Array.isArray(result.tools)) throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'tools/list result has no tools array');
+    for (const raw of result.tools) {
+      const tool = validateTool(raw);
+      if (seen.has(tool.name)) throw new McpDiscoveryError('DISCOVERY_INVALID_TOOL', `duplicate tool name ${tool.name}`);
+      seen.add(tool.name);
+      tools.push(tool);
+      if (tools.length > MAX_SNAPSHOT_TOOLS) throw new McpDiscoveryError('DISCOVERY_TOO_LARGE', 'too many tools for one snapshot');
+    }
+    const next = result.nextCursor;
+    if (next === undefined || next === null || next === '') break;
+    if (typeof next !== 'string') throw new McpDiscoveryError('DISCOVERY_MALFORMED', 'nextCursor is not a string');
+    cursor = next;
+  }
+  return tools;
 }
 
 function normalizeModelName(name: string): string {
