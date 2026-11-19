@@ -6,7 +6,7 @@
  * gate is reported as a stable unavailableReason code for the picker.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyState, fakeDb, type FakeState } from '@/lib/chat/mcp.test-harness';
+import { emptyState, fakeDb, fakeTrustedDb, type FakeState } from '@/lib/chat/mcp.test-harness';
 
 const ORG = 'a0000000-0000-4000-8000-000000000000';
 const OWNER = 'a0000000-0000-4000-8000-0000000000a1';
@@ -19,7 +19,8 @@ vi.mock('@/lib/chat/request', async (orig) => ({
 }));
 vi.mock('@/lib/supabase/server', async (orig) => ({
   ...(await orig<typeof import('@/lib/supabase/server')>()),
-  createSsoControlClient: async () => fakeDb(state, OWNER),
+  // In production this is the sso_control client: trusted RPCs only, no table grants.
+  createSsoControlClient: async () => fakeTrustedDb(state),
 }));
 
 const { GET } = await import('./route');

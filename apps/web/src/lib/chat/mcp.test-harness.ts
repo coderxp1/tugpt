@@ -301,7 +301,7 @@ class Query implements DbQuery {
 /**
  * EXECUTE grants as in the real database (proacl after 20261120000001):
  * resolve_mcp_execution and record_mcp_tool_call are callable only by the
- * trusted identity sso_control (service_role/postgres aside); the member
+ * trusted identity sso_control (platform superuser roles aside); the member
  * (authenticated) client gets 42501. sso_control has no table grants on the
  * external_tool_* tables and no EXECUTE on the member RPCs.
  */

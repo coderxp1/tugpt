@@ -17,8 +17,8 @@
  *   4. an audit sink that can record MCP calls. Production wires Agent 2's
  *      createMcpAuditSink() (record_mcp_tool_call) on the TRUSTED server-side
  *      client (deps.serviceDb = createSsoControlClient()): since
- *      20261115000013 the function takes the actor as a parameter and only
- *      sso_control/service_role may execute it; the member client gets 42501.
+ *      20261115000013 the function takes the actor as a parameter and
+ *      only the trusted sso_control identity may execute it; the member client gets 42501.
  *      The actor is the server-resolved session user, never request input.
  *      No trusted client means no sink (gate closed). The sink throws when the
  *      row cannot be written, and ./connect.ts then withholds the result.
