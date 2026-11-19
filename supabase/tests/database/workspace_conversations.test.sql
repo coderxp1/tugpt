@@ -28,7 +28,7 @@ INSERT INTO public.chat_folders (id, organization_id, owner_user_id, name) VALUE
 
 SELECT is((SELECT count(*)::int FROM pg_class c JOIN pg_namespace n ON n.oid=c.relnamespace
   WHERE n.nspname='public' AND c.relname='chat_folders' AND c.relrowsecurity AND c.relforcerowsecurity), 1, 'chat_folders has RLS enabled and forced'); -- 1
-SELECT ok(NOT has_table_privilege('anon','public.chat_folders','SELECT') AND NOT has_function_privilege('anon','public.search_chat_threads(uuid,text,boolean,uuid,boolean,integer,timestamptz)','EXECUTE'), 'anon has no access'); -- 2
+SELECT ok(NOT has_table_privilege('anon','public.chat_folders','SELECT') AND NOT has_function_privilege('anon','public.search_chat_threads(uuid,text,boolean,uuid,boolean,integer,timestamptz,uuid)','EXECUTE'), 'anon has no access'); -- 2
 SELECT ok(NOT has_function_privilege('authenticated','private.workspace_audit(uuid,text,text,jsonb)','EXECUTE'), 'API roles cannot write audit rows directly'); -- 3
 
 SET LOCAL ROLE authenticated;

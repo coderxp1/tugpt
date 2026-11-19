@@ -3,8 +3,8 @@ import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 import { chatContext, jsonError, PRIVATE_HEADERS, storeErrorResponse } from '@/lib/chat/request';
 import { configuredModels, findModel, publicModels } from '@/lib/chat/models';
 import { createThread, listThreads } from '@/lib/chat/store';
-import { searchConversations } from '@/lib/workspace-data/conversations';
-import { isUuid, parseBool, parseCursor, parseLimit, toErrorResponse, workspaceContext } from '@/lib/workspace-data/http';
+import { parseThreadCursor, searchConversations } from '@/lib/workspace-data/conversations';
+import { isUuid, parseBool, parseLimit, toErrorResponse, workspaceContext } from '@/lib/workspace-data/http';
 
 /** Query parameters that switch GET to the Workspace list/search contract (docs/workspace/backend-api.md). */
 const WORKSPACE_PARAMS = ['q', 'archived', 'folderId', 'unfiled', 'limit', 'before'] as const;
@@ -42,9 +42,10 @@ async function searchGET(request: Request, sp: URLSearchParams) {
   try {
     const folderId = sp.get('folderId');
     if (folderId !== null && !isUuid(folderId)) return NextResponse.json({ error: 'INVALID_REQUEST' }, { status: 400, headers: PRIVATE_HEADERS });
+    parseThreadCursor(sp.get('before')); // validate before auth; searchConversations parses it again
     query = {
       q: sp.get('q') ?? undefined, archived: parseBool(sp.get('archived')), unfiled: parseBool(sp.get('unfiled')),
-      folderId: folderId ?? undefined, limit: parseLimit(sp.get('limit'), 50, 100), before: parseCursor(sp.get('before')) ?? undefined,
+      folderId: folderId ?? undefined, limit: parseLimit(sp.get('limit'), 50, 100), before: sp.get('before') ?? undefined,
     };
   } catch (e) { return toErrorResponse(e); }
   const ctx = await workspaceContext(request);

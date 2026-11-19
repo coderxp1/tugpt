@@ -7,7 +7,7 @@
 import type { Conversation, ConversationList, ConversationPatch, ConversationQuery, Folder } from './contracts';
 import { check, oneOf, optStr, rows, str, type WorkspaceDb } from './db';
 import { WorkspaceError } from './errors';
-import { cleanName, isUuid } from './http';
+import { cleanName, isUuid, parseCursor } from './http';
 
 const THREAD_COLS = 'id,title,model_key,folder_id,archived_at,created_at,updated_at';
 const FOLDER_COLS = 'id,name,created_at,updated_at';
@@ -29,16 +29,62 @@ function toFolder(row: unknown): Folder {
   return { id: str(r.id), name: str(r.name), createdAt: str(r.created_at), updatedAt: str(r.updated_at) };
 }
 
+/**
+ * Conversation list cursor (Q-7). Opaque to clients: "c1." + base64url of
+ * "<updated_at as returned by Postgres>|<thread id>". Carrying the exact
+ * timestamp (microseconds) and the id lets search_chat_threads continue
+ * strictly after the last row in (updated_at DESC, id DESC) order, so rows
+ * sharing a timestamp are neither skipped nor repeated.
+ */
+const CURSOR_PREFIX = 'c1.';
+const CURSOR_MAX = 200;
+const CURSOR_TS = /^\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2}:\d{2}(\.\d{1,6})?(Z|[+-]\d{2}(:?\d{2})?)$/;
+export interface ThreadCursor { readonly updatedAt: string; readonly id: string | null }
+
+export function encodeThreadCursor(updatedAt: string, id: string): string {
+  return CURSOR_PREFIX + Buffer.from(`${updatedAt}|${id}`, 'utf8').toString('base64url');
+}
+
+/**
+ * Parses a `before` value. A "c1." cursor yields the exact timestamp and id.
+ * Anything else is treated as a legacy bare ISO timestamp (clients from
+ * before Q-7) with the old "updated strictly before" semantics, id null.
+ * Malformed input is 400 INVALID_REQUEST.
+ */
+export function parseThreadCursor(v: string | null | undefined): ThreadCursor | null {
+  if (v === null || v === undefined) return null;
+  const bad = () => new WorkspaceError(400, 'INVALID_REQUEST');
+  if (v.length > CURSOR_MAX) throw bad();
+  if (!v.startsWith(CURSOR_PREFIX)) {
+    const legacy = parseCursor(v);
+    if (legacy === null) throw bad();
+    return { updatedAt: legacy, id: null };
+  }
+  const body = v.slice(CURSOR_PREFIX.length);
+  if (!/^[A-Za-z0-9_-]+$/.test(body)) throw bad();
+  const parts = Buffer.from(body, 'base64url').toString('utf8').split('|');
+  if (parts.length !== 2) throw bad();
+  const [updatedAt, id] = parts;
+  if (!CURSOR_TS.test(updatedAt) || Number.isNaN(Date.parse(updatedAt)) || !isUuid(id)) throw bad();
+  return { updatedAt, id };
+}
+
 export async function searchConversations(db: WorkspaceDb, organizationId: string, q: ConversationQuery): Promise<ConversationList> {
-  const limit = q.limit ?? 50;
+  const limit = Math.min(Math.max(Math.trunc(q.limit ?? 50), 1), 100);
   const query = q.q?.trim() ?? '';
   if (Array.from(query).length > 200) throw new WorkspaceError(400, 'QUERY_TOO_LONG');
   if (q.folderId !== undefined && !isUuid(q.folderId)) throw new WorkspaceError(400, 'INVALID_REQUEST');
-  const threads = rows(await db.rpc('search_chat_threads', {
+  const cursor = parseThreadCursor(q.before);
+  // One row of lookahead: a cursor is only returned when another page exists,
+  // so a final page of exactly `limit` rows ends the listing.
+  const found = rows(await db.rpc('search_chat_threads', {
     p_organization_id: organizationId, p_query: query || null, p_archived: q.archived ?? false,
-    p_folder_id: q.folderId ?? null, p_unfiled: q.unfiled ?? false, p_limit: limit, p_before: q.before ?? null,
+    p_folder_id: q.folderId ?? null, p_unfiled: q.unfiled ?? false, p_limit: limit + 1,
+    p_before: cursor?.updatedAt ?? null, p_before_id: cursor?.id ?? null,
   })).map(toConversation);
-  return { threads, nextCursor: threads.length === limit ? threads[threads.length - 1].updatedAt : null };
+  const threads = found.slice(0, limit);
+  const last = threads[threads.length - 1];
+  return { threads, nextCursor: found.length > limit && last ? encodeThreadCursor(last.updatedAt, last.id) : null };
 }
 
 export function parsePatch(body: Record<string, unknown>): ConversationPatch {

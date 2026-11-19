@@ -10,8 +10,8 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { argumentsSha256 } from '@/lib/chat/approval.server';
 import { buildPreview, parseAction, parseCreate } from './approvals';
 import { createWorkspaceClient } from './contracts';
-import { parsePatch } from './conversations';
-import { dbError } from './db';
+import { encodeThreadCursor, parsePatch, parseThreadCursor, searchConversations } from './conversations';
+import { dbError, type WorkspaceDb } from './db';
 import { WorkspaceError } from './errors';
 import { chunkText, CHUNK_TARGET, decodeXmlEntities, docxXmlToText, extractText, readZipEntry } from './extract';
 import { contentDisposition, readCappedBody, sanitizeFilename, validateUpload } from './files';
@@ -249,6 +249,54 @@ describe('request helpers and error mapping', () => {
     expect(code(() => parsePatch({}))).toBe('400:INVALID_REQUEST');
     expect(code(() => parsePatch({ archived: 'yes' }))).toBe('400:INVALID_REQUEST');
     expect(code(() => parsePatch({ folderId: '../x' }))).toBe('400:INVALID_REQUEST');
+  });
+
+  describe('conversation cursor (Q-7)', () => {
+    const ID = '3f0c1a7e-9d2b-4c6a-8e1f-2b7d9c4a5e60';
+    it('round-trips the exact Postgres timestamp (microseconds) and id', () => {
+      const ts = '2026-11-19T10:00:00.123456+00:00';
+      const c = encodeThreadCursor(ts, ID);
+      expect(c.startsWith('c1.')).toBe(true);
+      expect(c).toMatch(/^c1\.[A-Za-z0-9_-]+$/);
+      expect(parseThreadCursor(c)).toEqual({ updatedAt: ts, id: ID });
+      // Same millisecond, different microsecond: must stay distinct (the old cursor rounded to ms).
+      expect(parseThreadCursor(encodeThreadCursor('2026-11-19T10:00:00.123001+00:00', ID))?.updatedAt).toBe('2026-11-19T10:00:00.123001+00:00');
+    });
+    it('keeps legacy bare ISO timestamps working with timestamp-only semantics', () => {
+      expect(parseThreadCursor('2026-11-19T10:00:00Z')).toEqual({ updatedAt: '2026-11-19T10:00:00.000Z', id: null });
+      expect(parseThreadCursor(null)).toBeNull();
+      expect(parseThreadCursor(undefined)).toBeNull();
+    });
+    it('rejects malformed cursors with 400 INVALID_REQUEST', () => {
+      const b64 = (v: string) => 'c1.' + Buffer.from(v, 'utf8').toString('base64url');
+      for (const bad of [
+        'yesterday', 'c1.', 'c1.!!!', 'c1.' + 'A'.repeat(300),
+        b64(`2026-11-19T10:00:00Z|not-a-uuid`), b64(`not-a-date|${ID}`), b64(`2026-13-45T99:00:00Z|${ID}`),
+        b64(`2026-11-19T10:00:00Z|${ID}|extra`), b64(`2026-11-19T10:00:00Z`), b64(`2026-11-19T10:00:00|${ID}`),
+      ]) expect(code(() => parseThreadCursor(bad)), bad).toBe('400:INVALID_REQUEST');
+    });
+    it('asks for one extra row and only returns a cursor when another page exists', async () => {
+      const calls: Record<string, unknown>[] = [];
+      const mk = (n: number) => Array.from({ length: n }, (_, i) => ({
+        id: `00000000-0000-4000-8000-${String(100 - i).padStart(12, '0')}`, title: 't', model_key: 'm', folder_id: null,
+        archived_at: null, created_at: '2026-11-19T10:00:00+00:00', updated_at: '2026-11-19T10:00:00.5+00:00', snippet: null, match_source: null,
+      }));
+      let data = mk(4);
+      const db = { rpc: async (_fn: string, args: Record<string, unknown>) => { calls.push(args); return { data, error: null }; } } as unknown as WorkspaceDb;
+      const more = await searchConversations(db, 'org', { limit: 3 });
+      expect(calls[0]).toMatchObject({ p_limit: 4, p_before: null, p_before_id: null });
+      expect(more.threads).toHaveLength(3);
+      expect(parseThreadCursor(more.nextCursor)).toEqual({ updatedAt: '2026-11-19T10:00:00.5+00:00', id: more.threads[2].id });
+      data = mk(3);
+      const exact = await searchConversations(db, 'org', { limit: 3, before: more.nextCursor! });
+      expect(calls[1]).toMatchObject({ p_limit: 4, p_before: '2026-11-19T10:00:00.5+00:00', p_before_id: more.threads[2].id });
+      expect(exact.nextCursor).toBeNull();
+      data = [];
+      expect(await searchConversations(db, 'org', { limit: 3 })).toEqual({ threads: [], nextCursor: null });
+      await searchConversations(db, 'org', { limit: 1000 });
+      expect(calls[3]).toMatchObject({ p_limit: 101 });
+      await expect(searchConversations(db, 'org', { before: 'c1.%%' })).rejects.toMatchObject({ status: 400, code: 'INVALID_REQUEST' });
+    });
   });
 });
 

@@ -287,6 +287,105 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
       expect((await call('thread', 'DELETE', { params: { threadId: T_MEMBER2 } })).status).toBe(404);
       expect((await call('threads', 'GET', { query: 'q=reconciliation' })).json.threads).toEqual([]);
     });
+
+    it('Q-7: paginates with a stable (updatedAt, id) cursor - no skips or duplicates across identical timestamps', async () => {
+      as(U.memberA);
+      const db = clients.get(U.memberA.id) as PostgrestClient;
+      const folder = await call('folders', 'POST', { body: { name: 'Q7 cursor' } });
+      expect(folder.status).toBe(201);
+      const folderId: string = folder.json.folder.id;
+      // Microseconds after 2026-11-01T10:00:00Z. Four identical, one 1 us earlier,
+      // one at the bare millisecond (where the old ms-rounded cursor landed), one older.
+      const seed = [
+        { n: 1, us: 123456, filed: true }, { n: 2, us: 123456, filed: false }, { n: 3, us: 123456, filed: true },
+        { n: 4, us: 123456, filed: false }, { n: 5, us: 123455, filed: true }, { n: 6, us: 123000, filed: false },
+        { n: 7, us: -3_600_000_000, filed: true },
+      ];
+      const iso = (us: number) => {
+        const ms = Date.UTC(2026, 10, 1, 10) + Math.floor(us / 1000);
+        return new Date(ms).toISOString().replace('Z', '') + String(((us % 1000) + 1000) % 1000).padStart(3, '0') + 'Z';
+      };
+      const rowsIn = seed.map((r) => ({
+        id: `a4710000-0000-4000-8000-${String(r.n).padStart(12, '0')}`, organization_id: ORG_A, owner_user_id: U.memberA.id,
+        title: `zq7cursor ${r.n}`, model_key: 'tugpt-scout', folder_id: r.filed ? folderId : null, updated_at: iso(r.us), us: r.us,
+      }));
+      // Independent expectation: updated_at DESC, then id DESC (uuid order = lowercase hex order).
+      const order = (rs: typeof rowsIn) => [...rs].sort((a, b) => b.us - a.us || (a.id < b.id ? 1 : a.id > b.id ? -1 : 0)).map((r) => r.id);
+      const ins = await db.from('chat_threads').insert(rowsIn.map((r) => ({
+        id: r.id, organization_id: r.organization_id, owner_user_id: r.owner_user_id, title: r.title,
+        model_key: r.model_key, folder_id: r.folder_id, updated_at: r.updated_at,
+      })));
+      expect(ins.error).toBeNull();
+      try {
+        const walk = async (base: string, limit: number) => {
+          const pages: string[][] = [];
+          let cursor: string | null = null;
+          for (let i = 0; i < 10; i++) {
+            const q = new URLSearchParams(base);
+            q.set('limit', String(limit));
+            if (cursor) q.set('before', cursor);
+            const r = await call('threads', 'GET', { query: q.toString() });
+            expect(r.status).toBe(200);
+            pages.push(r.json.threads.map((t: { id: string }) => t.id));
+            cursor = r.json.nextCursor;
+            if (cursor === null) return { pages, last: r.json.threads };
+            expect(cursor).toMatch(/^c1\.[A-Za-z0-9_-]+$/);
+          }
+          throw new Error('pagination did not terminate');
+        };
+        const all = order(rowsIn);
+        // limit 3 over 7 rows: the first boundary is inside the identical-timestamp group.
+        const byQ = await walk('q=zq7cursor', 3);
+        expect(byQ.pages.map((p) => p.length)).toEqual([3, 3, 1]);
+        expect(byQ.pages.flat()).toEqual(all);
+        expect(new Set(byQ.pages.flat()).size).toBe(all.length);
+        // limit 1 steps through every row, including the 1-microsecond gap.
+        expect((await walk('q=zq7cursor', 1)).pages.flat()).toEqual(all);
+        // Exact multiple: the final full page carries no cursor (no empty extra page).
+        const filed = rowsIn.filter((r) => r.folder_id);
+        const byFolder = await walk(`folderId=${folderId}`, 2);
+        expect(byFolder.pages).toEqual([order(filed).slice(0, 2), order(filed).slice(2, 4)]);
+        const exact = await call('threads', 'GET', { query: 'q=zq7cursor&limit=7' });
+        expect(exact.json.threads).toHaveLength(7);
+        expect(exact.json.nextCursor).toBeNull();
+        // A cursor taken from the last row returns an empty final page.
+        const p1 = await call('threads', 'GET', { query: 'q=zq7cursor&limit=6' });
+        const p2 = await call('threads', 'GET', { query: `q=zq7cursor&limit=6&before=${encodeURIComponent(p1.json.nextCursor)}` });
+        expect(p2.json.threads.map((t: { id: string }) => t.id)).toEqual([all[6]]);
+        expect(p2.json.nextCursor).toBeNull();
+        const lastCursor = (await call('threads', 'GET', { query: `q=zq7cursor&limit=5` })).json.nextCursor as string;
+        const tail = await call('threads', 'GET', { query: `q=zq7cursor&limit=1&before=${encodeURIComponent(lastCursor)}` });
+        const beyond = await call('threads', 'GET', { query: `q=zq7cursor&limit=1&before=${encodeURIComponent(tail.json.nextCursor)}` });
+        expect(beyond.json.threads.map((t: { id: string }) => t.id)).toEqual([all[6]]);
+        expect(beyond.json.nextCursor).toBeNull();
+        // Legacy bare timestamps still work (old semantics: strictly older than it).
+        const legacy = await call('threads', 'GET', { query: `q=zq7cursor&before=${encodeURIComponent('2026-11-01T10:00:00.123Z')}` });
+        expect(legacy.status).toBe(200);
+        expect(legacy.json.threads.map((t: { id: string }) => t.id)).toEqual([all[6]]);
+        // Malformed cursors are 400 and never reach the database.
+        for (const bad of ['c1.%%%', 'c1.' + Buffer.from('2026-11-01T10:00:00Z|nope').toString('base64url'), 'yesterday']) {
+          const r = await call('threads', 'GET', { query: `before=${encodeURIComponent(bad)}` });
+          expect(r.status, bad).toBe(400);
+          expect(r.json).toEqual({ error: 'INVALID_REQUEST' });
+        }
+        // A cursor is not a capability: other users get only their own rows.
+        const stolen = byQ.pages.length > 1 ? (await call('threads', 'GET', { query: 'q=zq7cursor&limit=3' })).json.nextCursor : null;
+        expect(stolen).toBeTruthy();
+        as(U.ownerA);
+        const own = await call('threads', 'GET', { query: `before=${encodeURIComponent(stolen)}&limit=100` });
+        expect(own.status).toBe(200);
+        expect(own.json.threads.map((t: { id: string }) => t.id).filter((id: string) => id.startsWith('a4710000'))).toEqual([]);
+        as(U.ownerB);
+        expect((await call('threads', 'GET', { query: `q=zq7cursor&before=${encodeURIComponent(stolen)}` })).json.threads).toEqual([]);
+        as(U.ownerB, ORG_A); // forged tenant
+        expect((await call('threads', 'GET', { query: `q=zq7cursor&before=${encodeURIComponent(stolen)}` })).json.threads ?? []).toEqual([]);
+      } finally {
+        as(U.memberA);
+        const del = await db.from('chat_threads').delete().like('title', 'zq7cursor %');
+        expect(del.error).toBeNull();
+        expect((await call('folder', 'DELETE', { params: { folderId } })).status).toBe(200);
+      }
+    });
   });
 
   // ------------------------------------------------------------ approvals
