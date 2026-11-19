@@ -94,8 +94,9 @@ proxies only.)
   (`cmd/smokescreen.go`, upstream `master`) — so that list was silently ignored. Smokescreen's built-in
   private-range default still applied, but the extra ranges (e.g. NAT64 `64:ff9b::/96`, documentation
   and benchmark ranges) were not enforced as written. `docker-compose.yml` now passes `--deny-range`.
-- The image is `stripe/smokescreen:latest`. Acceptance on `:latest` is invalid; pin by digest after an
-  approved supply-chain review and run the probe against exactly that digest.
+- **Superseded (M5):** the image was `stripe/smokescreen:latest`, a name with no official image (Docker Hub 404).
+  `docker-compose.yml` now holds a non-pullable placeholder. See `proxy-recommendation.md` for the
+  build-from-commit, digest-only plan and the bypass tests required before deployment.
 
 **Web-tier ordering (verified 2026-11-19 over real HTTP, isolated harness):** with no
 `CONNECT_EGRESS_PROXY` the snapshot route answers 503 `EGRESS_UNAVAILABLE` before any DNS or socket. With

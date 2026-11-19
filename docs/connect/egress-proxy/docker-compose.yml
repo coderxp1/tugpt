@@ -9,9 +9,12 @@ networks:
 
 services:
   egress-proxy:
-    # UNPINNED - acceptance is invalid on :latest. Pin by digest (image@sha256:...) after an approved
-    # supply-chain review, then run egress-probe.cjs against exactly that digest.
-    image: stripe/smokescreen:latest
+    # NOT APPROVED, NOT DEPLOYABLE. There is no official Smokescreen image: `stripe/smokescreen` on
+    # Docker Hub is 404 and ghcr.io/stripe/smokescreen is not publicly pullable (checked 2026-11-19),
+    # so the former `stripe/smokescreen:latest` could only resolve to an unofficial image. The
+    # placeholder below cannot pull, by design. See proxy-recommendation.md: build from commit
+    # 609eb8931420453daf5893509be0b25b21bd9edb, push to our registry, reference by digest only.
+    image: registry.invalid/tugpt/smokescreen@sha256:0000000000000000000000000000000000000000000000000000000000000000
     read_only: true
     cap_drop: [ALL]
     security_opt:
