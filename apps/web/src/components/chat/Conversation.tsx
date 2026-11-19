@@ -1,5 +1,6 @@
 'use client';
 
+import { useT } from '@/i18n/provider';
 import Link from 'next/link';
 import { Fragment, type RefObject } from 'react';
 import { ApprovalCard } from './ApprovalCard';
@@ -36,6 +37,7 @@ function UserText({ content, stopped }: { content: string; stopped: boolean }) {
 
 /** The message log of one chat: messages, tool steps, approval cards and the answer that is streaming. */
 export function Conversation({ messages, approvals, live, busy, canApprove, logRef, onRun }: ConversationProps) {
+  const t = useT();
   const card = (it: ApprovalItem) => (
     <ApprovalCard key={`${it.approval.threadId}:${it.approval.callId}`} approval={it.approval} canApprove={canApprove} busy={busy} onRun={onRun} />
   );
@@ -47,6 +49,8 @@ export function Conversation({ messages, approvals, live, busy, canApprove, logR
         : <article className={m.role === 'user' ? s.user : s.assistant} aria-label={m.role === 'user' ? 'You' : 'TuGPT'}>
             {m.mentions.length > 0 && <div className={s.mentions}>{m.mentions.map((x) => <span key={x.capability + x.provider} className={s.chip}>@{x.provider} {x.capability}</span>)}</div>}
             {m.role === 'assistant' && m.content ? <Markdown text={m.content} /> : <UserText content={m.content} stopped={m.status === 'stopped'} />}
+            {m.citations && m.citations.length > 0 && <details><summary>{t('workspace.agent.sources')}</summary><ol>{m.citations.map((c) => <li key={`${c.documentId}:${c.ordinal}:${c.n}`} value={c.n}><strong>{c.title}</strong><p>{c.snippet}</p></li>)}</ol></details>}
+            {m.knowledgeUnavailable && <p>{t('workspace.agent.knowledgeUnavailable')}</p>}
             {m.status !== 'complete' && <small className={s.status}>{m.status === 'stopped' ? 'Stopped' : 'Not completed'}</small>}
           </article>}
         {approvals.filter((a) => a.afterId === m.id).map(card)}</Fragment>)}

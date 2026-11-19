@@ -4,6 +4,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState } 
 import type { Thread } from '@/components/chat/types';
 import type { MessageKey } from '@/i18n/types';
 import type { Conversation, Folder } from '@/lib/workspace-data/contracts';
+import { conversationPages } from '@/lib/workspace/conversation-pages';
 import { hasArray, messageKeyFor, workspaceApi } from '@/lib/workspace/service';
 
 /** Whether a Workspace backend capability works on this server: probed once, never assumed. */
@@ -78,7 +79,7 @@ export function ThreadsProvider({ initialThreads = null, children }: { initialTh
       if (!live) return;
       if (!r.ok || !hasArray(r.value, 'folders')) { setManage('unavailable'); return; }
       setFolders([...r.value.folders].sort(byName));
-      const list = await api.listConversations({ archived: false, limit: 100 });
+      const list = await conversationPages(api, { archived: false, limit: 100 });
       if (!live) return;
       if (list.ok && isContractList(list.value)) {
         const fresh = list.value.threads.map(toThread);
@@ -168,13 +169,13 @@ export function ThreadsProvider({ initialThreads = null, children }: { initialTh
 
   const search = useCallback(async (query: string): Promise<SearchOutcome> => {
     if (manage !== 'available') return { mode: 'local' };
-    const r = await workspaceApi().listConversations({ q: query, limit: 30 });
+    const r = await conversationPages(workspaceApi(), { q: query, limit: 30 });
     if (!r.ok) return { mode: 'error', message: messageKeyFor(r) };
     return isContractList(r.value) ? { mode: 'server', results: r.value.threads } : { mode: 'local' };
   }, [manage]);
 
   const listArchived = useCallback(async () => {
-    const r = await workspaceApi().listConversations({ archived: true, limit: 100 });
+    const r = await conversationPages(workspaceApi(), { archived: true, limit: 100 });
     if (!r.ok) return { ok: false as const, message: messageKeyFor(r) };
     return isContractList(r.value) ? { ok: true as const, threads: r.value.threads } : { ok: false as const, message: 'workspace.err.unavailable' as MessageKey };
   }, []);

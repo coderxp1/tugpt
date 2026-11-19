@@ -14,7 +14,7 @@ import s from './chat.module.css';
  * itself); custom agents wait for the Agents API (lib/workspace/agents.ts, contract C-1).
  * The menu says that plainly instead of listing agents that cannot run.
  */
-export function AgentMenu({ disabled }: { readonly disabled: boolean }) {
+export function AgentMenu({ disabled, label }: { readonly disabled: boolean; readonly label?: string }) {
   const t = useT();
   const { agents, customAgentsAvailable } = agentCatalogue();
   const active = agents[0];
@@ -28,12 +28,12 @@ export function AgentMenu({ disabled }: { readonly disabled: boolean }) {
   return (
     <div className={s.menuRoot} ref={root}>
       <button ref={button} type="button" className={s.tool} disabled={disabled} aria-expanded={open} aria-controls={open ? id : undefined}
-        aria-label={t('workspace.agent.button', { agent: active.name })} onClick={() => setOpen((o) => !o)}>
-        <Icon name="agents" size={16} /><span className={`${s.toolText} ${s.hideNarrow}`}>{active.name}</span>
+        aria-label={t('workspace.agent.button', { agent: label ?? active.name })} onClick={() => setOpen((o) => !o)}>
+        <Icon name="agents" size={16} /><span className={`${s.toolText} ${s.hideNarrow}`}>{label ?? active.name}</span>
       </button>
       {open && (
         <div id={id} className={`${s.popover} ${s.agentPanel}`} role="group" aria-label={t('workspace.agent.choose')}>
-          <ul className={s.agentList}>
+          {!label && <ul className={s.agentList}>
             {agents.map((a) => (
               <li key={a.id} className={s.agentRow} aria-current="true">
                 <span className={s.agentAvatar} aria-hidden="true"><Icon name="sparkle" size={16} /></span>
@@ -41,7 +41,8 @@ export function AgentMenu({ disabled }: { readonly disabled: boolean }) {
                 <span className={s.modelCheck}><Icon name="check" size={16} /></span>
               </li>
             ))}
-          </ul>
+          </ul>}
+          {label && <p className={s.agentNote}>{label}</p>}
           {!customAgentsAvailable && <p className={s.agentNote}>{t('workspace.agent.customLater')}</p>}
           <Link href={WORKSPACE_AGENTS} prefetch={false} className={s.agentLink} onClick={() => setOpen(false)}>{t('workspace.agent.browse')}</Link>
         </div>

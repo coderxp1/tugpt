@@ -87,4 +87,3 @@ does not read uploaded documents yet.
 `GET /api/v1/approvals/summary?since=<iso>` → `200 { pendingForMe, pendingInOrg | null,
 decidedSince: { id, status, capability, endpointName, decidedAt }[] }`. Replaces the UI's
 45-second list polling (`useApprovalFeed.ts`) with a cheap counter; SSE later.
-

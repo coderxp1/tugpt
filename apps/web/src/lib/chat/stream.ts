@@ -17,6 +17,11 @@ export interface TurnStreamEvent {
   /** approval_required only; parse with parsePendingApproval (lib/chat/approval.ts). */
   approval?: unknown;
   callId?: string;
+  agent?: unknown;
+  thread?: unknown;
+  citations?: unknown;
+  knowledgeUnavailable?: unknown;
+  unavailableTools?: unknown;
 }
 
 export interface TurnStreamSummary { terminal: 'done' | 'error' | null; malformed: number }

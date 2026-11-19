@@ -10,24 +10,9 @@ import type { WorkspaceResult } from '@/lib/workspace-data/contracts';
 
 export type AgentVisibility = 'private' | 'organization';
 
-/** C-1 resource. */
-export interface CustomAgent {
-  readonly id: string;
-  readonly name: string;
-  readonly description: string | null;
-  /** System instructions. Server limit 8,000 characters. */
-  readonly instructions: string;
-  /** Chat model key from the catalogue; null = the person's choice in the composer. */
-  readonly modelKey: string | null;
-  /** Up to four conversation starters, each at most 200 characters. */
-  readonly starters: readonly string[];
-  /** Library collections searched for answers (Agent 4's Library API). */
-  readonly collectionIds: readonly string[];
-  readonly visibility: AgentVisibility;
-  readonly ownedByMe: boolean;
-  readonly createdAt: string;
-  readonly updatedAt: string;
-}
+/** Exact backend response type; do not maintain a competing resource shape. */
+export type { CustomAgent } from '@/lib/workspace-data/contracts';
+import type { CustomAgent } from '@/lib/workspace-data/contracts';
 
 export type AgentInput = Pick<CustomAgent, 'name' | 'description' | 'instructions' | 'modelKey' | 'starters' | 'collectionIds' | 'visibility'>;
 
@@ -65,6 +50,7 @@ export function createAgentsClient(fetchFn: FetchFn = (i, init) => fetch(i, init
     return { ok: true, value: json as T };
   }
   return {
+    getAgent: (id: string) => call<{ agent: CustomAgent }>('GET', AGENTS_API.agent(id)),
     listAgents: () => call<{ agents: readonly CustomAgent[] }>('GET', AGENTS_API.agents),
     createAgent: (input: AgentInput) => call<{ agent: CustomAgent }>('POST', AGENTS_API.agents, cleanAgent(input)),
     updateAgent: (id: string, patch: Partial<AgentInput>) => call<{ agent: CustomAgent }>('PATCH', AGENTS_API.agent(id), agentPatch(patch)),

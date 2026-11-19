@@ -6,10 +6,12 @@ import { useT } from '@/i18n/provider';
 import type { MessageKey } from '@/i18n/types';
 import type { PublicModel } from '@/components/chat/types';
 import type { Collection } from '@/lib/workspace-data/contracts';
-import { agentCatalogue } from '@/lib/workspace/agents';
+import { agentCatalogue, agentsApiAvailable } from '@/lib/workspace/agents';
 import { AGENT_LIMITS, agentsApi, cleanAgent, validateAgent, type AgentInput, type CustomAgent } from '@/lib/workspace/custom-agents';
 import { hasArray, messageKeyFor, workspaceApi } from '@/lib/workspace/service';
 import { WORKSPACE_HOME } from '@/lib/workspace/routes';
+import { agentPermissions } from '@/lib/workspace/agent-permissions';
+import { AgentCollectionsDialog } from './AgentCollectionsDialog';
 import { ActionMenu } from './ActionMenu';
 import { Dialog } from './Dialog';
 import { Icon } from './icons';
@@ -21,6 +23,7 @@ import u from './ui.module.css';
 
 export interface AgentsViewProps {
   readonly models?: readonly PublicModel[];
+  readonly role?: string;
 }
 
 type Editing = { mode: 'new' } | { mode: 'edit'; agent: CustomAgent } | null;
@@ -36,10 +39,11 @@ function isBuilderAgent(value: unknown): value is CustomAgent {
   const a = value as Partial<CustomAgent>;
   return typeof a.id === 'string' && typeof a.name === 'string' && typeof a.instructions === 'string'
     && Array.isArray(a.starters) && a.starters.every((v) => typeof v === 'string')
+    && typeof a.ownedByMe === 'boolean' && typeof a.canEdit === 'boolean' && typeof a.canDelete === 'boolean'
     && Array.isArray(a.collectionIds) && a.collectionIds.every((v) => typeof v === 'string');
 }
 
-export function AgentsView({ models = [] }: AgentsViewProps) {
+export function AgentsView({ models = [], role = 'viewer' }: AgentsViewProps) {
   const t = useT();
   const { agents: builtIn } = agentCatalogue();
   const { load, reload, update } = useLoad<{ agents: readonly CustomAgent[] }>('agents', () => agentsApi().listAgents(), (v) => hasArray(v, 'agents') && (v as { agents: unknown[] }).agents.every(isBuilderAgent));
@@ -49,7 +53,9 @@ export function AgentsView({ models = [] }: AgentsViewProps) {
   // A successful list request does not prove that the builder write contract is supported.
   // Agent 4's C-1 alignment is source-reviewed, not live-integrated here.
   // Keep writes off until the real API and end-to-end execution flow are verified.
-  const canWrite = false;
+  const canWrite = agentsApiAvailable && load.state === 'ready';
+  const permissions = agentPermissions(role);
+  const [knowledge, setKnowledge] = useState<CustomAgent | null>(null);
   const available = load.state === 'ready';
   const custom = available ? load.value.agents : [];
 
@@ -62,7 +68,7 @@ export function AgentsView({ models = [] }: AgentsViewProps) {
             <h1>{t('workspace.agents.title')}</h1>
             <p>{t('workspace.agents.intro')}</p>
           </div>
-          <button type="button" className={u.buttonPrimary} onClick={() => setEditing({ mode: 'new' })}><Icon name="plus" size={15} />{t('workspace.agents.create')}</button>
+          <button type="button" className={u.buttonPrimary} disabled={canWrite && !permissions.create} onClick={() => setEditing({ mode: 'new' })}><Icon name="plus" size={15} />{t(canWrite ? 'workspace.agents.createButton' : 'workspace.agents.create')}</button>
         </header>
 
         <div role="status" aria-live="polite" className={g.live}>{notice && <p className={g.toast}>{notice}</p>}</div>
@@ -91,14 +97,19 @@ export function AgentsView({ models = [] }: AgentsViewProps) {
                 <div className={s.cardHead}>
                   <span className={`${s.mark} ${s.markMuted}`} aria-hidden="true"><Icon name="agents" /></span>
                   <div className={g.cardText}><h3>{a.name}</h3>{a.description && <p>{a.description}</p>}</div>
-                  {canWrite && a.ownedByMe && <ActionMenu label={t('workspace.agents.options', { name: a.name })} actions={[
-                    { key: 'edit', label: t('workspace.agents.edit'), icon: 'pencil', onSelect: () => setEditing({ mode: 'edit', agent: a }) },
-                    { key: 'delete', label: t('workspace.agents.delete'), icon: 'trash', danger: true, separated: true, onSelect: () => setRemove(a) },
+                  {canWrite && (agentPermissions(role, a).edit || agentPermissions(role, a).delete) && <ActionMenu label={t('workspace.agents.options', { name: a.name })} actions={[
+                    ...(agentPermissions(role, a).edit ? [
+                      { key: 'edit', label: t('workspace.agents.edit'), icon: 'pencil' as const, onSelect: () => setEditing({ mode: 'edit', agent: a }) },
+                      { key: 'knowledge', label: t('workspace.agents.f.knowledge'), icon: 'library' as const, onSelect: () => setKnowledge(a) },
+                    ] : []),
+                    ...(agentPermissions(role, a).delete ? [{ key: 'delete', label: t('workspace.agents.delete'), icon: 'trash' as const, danger: true, separated: true, onSelect: () => setRemove(a) }] : []),
                   ]} />}
+
                 </div>
                 <div className={s.tags}>
                   <Badge tone={a.visibility === 'organization' ? 'info' : 'neutral'}>{t(a.visibility === 'organization' ? 'workspace.lib.visOrg' : 'workspace.lib.visPrivate')}</Badge>
                   {a.collectionIds.length > 0 && <span className={s.tag}>{t('workspace.agents.sources', { count: a.collectionIds.length })}</span>}
+                  {canWrite && <Link href={`${WORKSPACE_HOME}?agent=${encodeURIComponent(a.id)}`} prefetch={false} className={s.primary}>{t('workspace.agents.start')}</Link>}
                   <span className={g.updated}><When iso={a.updatedAt} prefix="workspace.lib.updated" /></span>
                 </div>
               </li>
@@ -115,21 +126,22 @@ export function AgentsView({ models = [] }: AgentsViewProps) {
       </div>
 
       {editing && (
-        <AgentBuilder editing={editing} models={models} canSave={canWrite} onClose={() => setEditing(null)}
+        <AgentBuilder editing={editing} models={models} canSave={canWrite && (editing.mode === 'new' ? permissions.create : agentPermissions(role, editing.agent).edit)} canShare={permissions.share} onClose={() => setEditing(null)}
           onSaved={(agent, created) => {
             update((v) => ({ agents: created ? [agent, ...v.agents] : v.agents.map((x) => (x.id === agent.id ? agent : x)) }));
             setEditing(null);
             setNotice(t(created ? 'workspace.agents.created' : 'workspace.agents.saved', { name: agent.name }));
           }} />
       )}
-      {remove && <DeleteAgent agent={remove} onClose={() => setRemove(null)} onDeleted={() => { update((v) => ({ agents: v.agents.filter((x) => x.id !== remove.id) })); setNotice(t('workspace.agents.deleted', { name: remove.name })); setRemove(null); }} />}
+      {knowledge && <AgentCollectionsDialog agent={knowledge} onClose={() => setKnowledge(null)} onChanged={reload} />}
+      {remove && canWrite && agentPermissions(role, remove).delete && <DeleteAgent agent={remove} onClose={() => setRemove(null)} onDeleted={() => { update((v) => ({ agents: v.agents.filter((x) => x.id !== remove.id) })); setNotice(t('workspace.agents.deleted', { name: remove.name })); setRemove(null); }} />}
     </div>
   );
 }
 
 const EMPTY: AgentInput = { name: '', description: null, instructions: '', modelKey: null, starters: [''], collectionIds: [], visibility: 'private' };
 
-function AgentBuilder({ editing, models, canSave, onClose, onSaved }: { editing: NonNullable<Editing>; models: readonly PublicModel[]; canSave: boolean; onClose(): void; onSaved(a: CustomAgent, created: boolean): void }) {
+function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: { editing: NonNullable<Editing>; models: readonly PublicModel[]; canSave: boolean; canShare: boolean; onClose(): void; onSaved(a: CustomAgent, created: boolean): void }) {
   const t = useT();
   const start = editing.mode === 'edit' ? editing.agent : null;
   const [form, setForm] = useState<AgentInput>(start ? { ...start, starters: start.starters.length ? [...start.starters] : [''] } : EMPTY);
@@ -144,7 +156,7 @@ function AgentBuilder({ editing, models, canSave, onClose, onSaved }: { editing:
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setTouched(true);
-    if (problem || !canSave) return;
+    if (problem || !canSave || (start && (!start.ownedByMe || !start.canEdit)) || (start?.visibility !== 'organization' && form.visibility === 'organization' && !canShare)) return;
     setSaving(true); setError(null);
     const body = cleanAgent(form);
     const r = start ? await agentsApi().updateAgent(start.id, body) : await agentsApi().createAgent(body);
@@ -207,7 +219,7 @@ function AgentBuilder({ editing, models, canSave, onClose, onSaved }: { editing:
           <legend>{t('workspace.agents.f.visibility')}</legend>
           <div className={g.twoUp}>
             <label className={u.choice}><input type="radio" name={`${id}-vis`} checked={form.visibility === 'private'} onChange={() => set('visibility', 'private')} /><span>{t('workspace.lib.visPrivate')}<small>{t('workspace.agents.f.visPrivateHelp')}</small></span></label>
-            <label className={u.choice}><input type="radio" name={`${id}-vis`} checked={form.visibility === 'organization'} onChange={() => set('visibility', 'organization')} /><span>{t('workspace.lib.visOrg')}<small>{t('workspace.agents.f.visOrgHelp')}</small></span></label>
+            <label className={u.choice}><input type="radio" name={`${id}-vis`} disabled={!canShare && start?.visibility !== 'organization'} checked={form.visibility === 'organization'} onChange={() => set('visibility', 'organization')} /><span>{t('workspace.lib.visOrg')}<small>{t('workspace.agents.f.visOrgHelp')}</small></span></label>
           </div>
         </fieldset>
 

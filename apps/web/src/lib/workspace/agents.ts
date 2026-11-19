@@ -39,7 +39,7 @@ export const BUILT_IN_AGENT: AgentSummary = {
   updatedAt: null,
 };
 
-/** Flip only when GET /api/v1/agents exists and is covered by tests (C-1). */
+/** Release gate: keep false until real CRUD, permissions, restoration and execution acceptance pass. */
 export const agentsApiAvailable = false;
 
 export interface AgentCatalogue { readonly agents: readonly AgentSummary[]; readonly customAgentsAvailable: boolean }

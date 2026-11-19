@@ -15,6 +15,7 @@ import type { PublicModel } from './types';
 import s from './chat.module.css';
 
 export interface ComposerProps {
+  readonly agentLabel?: string;
   readonly draft: string;
   readonly attached: Capability[];
   readonly matches: Capability[];
@@ -62,7 +63,7 @@ export function Composer({ inputRef, ...p }: ComposerProps) {
   const uploads = p.uploads ?? [];
   const uploading = uploads.some((x) => x.status === 'uploading');
   const docs = p.uploadCap !== 'unavailable';
-  const canSend = (p.draft.trim().length > 0 || p.files.length > 0) && !!p.model && !p.overLimit && !uploading;
+  const canSend = !p.disabled && (p.draft.trim().length > 0 || p.files.length > 0) && !!p.model && !p.overLimit && !uploading;
   const nearLimit = p.files.length > 0 || p.length > MESSAGE_LIMIT * 0.8;
 
   return (
@@ -105,7 +106,7 @@ export function Composer({ inputRef, ...p }: ComposerProps) {
             aria-label={docs ? t('workspace.upload.attach') : t('workspace.files.attach')} title={docs ? t('workspace.upload.attachHint') : t('workspace.files.attachHint')}><Icon name="clip" /></button>
           <button type="button" className={s.iconTool} onClick={p.onApps} disabled={p.disabled || p.busy}
             aria-label={t('workspace.composer.apps')} title={t('workspace.composer.apps')}><Icon name="at" /></button>
-          <AgentMenu disabled={p.disabled || p.busy} />
+          <AgentMenu label={p.agentLabel} disabled={p.disabled || p.busy} />
           <Link href={WORKSPACE_IMAGES} prefetch={false} className={`${s.iconTool} ${s.hideNarrow}`} aria-label={t('workspace.composer.image')} title={t('workspace.composer.image')}
             aria-disabled={p.busy ? 'true' : undefined} onClick={(e) => { if (p.busy) e.preventDefault(); }}><Icon name="images" /></Link>
           <span className={s.spacer} />

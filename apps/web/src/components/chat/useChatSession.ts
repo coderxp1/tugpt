@@ -10,6 +10,9 @@ import { parsePendingApproval, type PendingApproval } from '@/lib/chat/approval'
 import { threadHref, threadIdFromPath } from '@/lib/workspace/routes';
 import { useThreads } from '@/components/workspace/ThreadsProvider';
 import { useT } from '@/i18n/provider';
+import { agentsApiAvailable } from '@/lib/workspace/agents';
+import { createAgentsClient } from '@/lib/workspace/custom-agents';
+import { parseAgentIdentity, parseAgentCitations, type AgentCitation } from '@/lib/workspace/agent-events';
 import { findStarter } from '@/lib/workspace/starters';
 import {
   composeContent, MAX_FILES, MESSAGE_LIMIT, refusalFor, safeName, type AttachmentRefusal, type TextAttachment,
@@ -59,6 +62,12 @@ export interface UploadItem {
 export function useChatSession(models: PublicModel[]) {
   const { add, touch, setBusy } = useThreads();
   const t = useT();
+  const requestedAgent = useSearchParams()?.get('agent') ?? null;
+  const [selectedAgent, setSelectedAgent] = useState<{ id: string; name: string } | null>(null);
+  const [agentFailed, setAgentFailed] = useState<string | null>(null);
+  const [turnAgent, setTurnAgent] = useState<{ id: string; name: string } | null>(null);
+  const [toolsUnavailable, setToolsUnavailable] = useState(false);
+  const citationState = useRef<{ citations: AgentCitation[]; knowledgeUnavailable: boolean }>({ citations: [], knowledgeUnavailable: false });
   const promptKey = useSearchParams()?.get('prompt') ?? null;
   const [seenPrompt, setSeenPrompt] = useState<string | null>(null);
   const [files, setFiles] = useState<TextAttachment[]>([]);
@@ -96,7 +105,7 @@ export function useChatSession(models: PublicModel[]) {
   if (routeThread !== seenRoute) {
     setSeenRoute(routeThread);
     if (routeThread !== activeId) {
-      setActiveId(routeThread); setMessages([]); setApprovals([]); setError(null);
+      setActiveId(routeThread); setTurnAgent(null); setToolsUnavailable(false); setMessages([]); setApprovals([]); setError(null);
       if (routeThread === null) { setAttached([]); setFiles([]); setFileNotice(null); setUploads([]); }
     }
   }
@@ -108,6 +117,23 @@ export function useChatSession(models: PublicModel[]) {
     const starter = routeThread === null ? findStarter(promptKey) : null;
     if (starter) setDraft(t(starter.promptKey));
   }
+
+  // URL selection is only a request: resolve it through the authorized API before creating a thread.
+  useEffect(() => {
+    if (activeId || !requestedAgent || !agentsApiAvailable) return;
+    let current = true;
+    void createAgentsClient().getAgent(requestedAgent).then((r) => {
+      if (!current) return;
+      if (r.ok && r.value?.agent?.id === requestedAgent && typeof r.value.agent.name === 'string') {
+        setSelectedAgent({ id: requestedAgent, name: r.value.agent.name });
+        setAgentFailed(null);
+      } else setAgentFailed(requestedAgent);
+    });
+    return () => { current = false; };
+  }, [activeId, requestedAgent]);
+  const agentBlocked = !activeId && !!requestedAgent && (!agentsApiAvailable || selectedAgent?.id !== requestedAgent || agentFailed === requestedAgent);
+  const agentNotice = agentBlocked ? t(!agentsApiAvailable ? 'workspace.agent.unverified' : agentFailed === requestedAgent ? 'workspace.agent.unavailable' : 'workspace.agent.loading') : null;
+  const agentLabel = activeId ? turnAgent?.name ?? (agentsApiAvailable ? t('workspace.agent.saved') : undefined) : requestedAgent && selectedAgent?.id === requestedAgent ? selectedAgent.name : undefined;
 
   // Load the selected chat. Not for a chat this view just started: its messages arrive by stream.
   useEffect(() => {
@@ -268,7 +294,15 @@ export function useChatSession(models: PublicModel[]) {
   }
 
   function handleEvent(ev: TurnStreamEvent) {
-    const message = ev.message as Message | undefined;
+    const message = ev.message && typeof ev.message === 'object' && typeof (ev.message as Message).id === 'string' ? ev.message as Message : undefined;
+    if (ev.type === 'agent') {
+      const identity = parseAgentIdentity(ev.agent);
+      if (identity) setTurnAgent(identity);
+      setToolsUnavailable(Array.isArray(ev.unavailableTools) && ev.unavailableTools.length > 0);
+    } else if (ev.type === 'citations') {
+      citationState.current = { citations: parseAgentCitations(ev.citations), knowledgeUnavailable: ev.knowledgeUnavailable === true };
+    }
+
     if (ev.type === 'user' && message) setMessages((m) => [...m, message]);
     else if (ev.type === 'delta') setLive((l) => l && { ...l, text: l.text + (ev.text ?? '') });
     else if (ev.type === 'tool_start') setLive((l) => l && { ...l, tools: [...l.tools, { tool: ev.tool ?? '', provider: ev.provider }] });
@@ -277,12 +311,14 @@ export function useChatSession(models: PublicModel[]) {
       // Malformed payloads are dropped: a card is only shown for a well-formed, server-built request.
       const p = parsePendingApproval(ev.approval);
       if (p) pendingApprovals.current.push(p);
-    } else if ((ev.type === 'done' || ev.type === 'error') && message) { setMessages((m) => [...m, message]); flushApprovals(message.id); }
+    } else if ((ev.type === 'done' || ev.type === 'error') && message) { setMessages((m) => [...m, { ...message, ...citationState.current }]); flushApprovals(message.id); }
     if (ev.type === 'error') fail(turnProblem(ev.code));
   }
 
   function begin(): AbortController {
     const controller = new AbortController(); abort.current = controller;
+    citationState.current = { citations: [], knowledgeUnavailable: false };
+    setToolsUnavailable(false); setTurnAgent(null);
     setLive({ text: '', tools: [] }); setBusy(true);
     return controller;
   }
@@ -312,7 +348,7 @@ export function useChatSession(models: PublicModel[]) {
       }
       const summary = await readTurnStream(res.body, (ev) => {
         if (ev.type === 'tool_result') result = { ok: ev.ok === true, ...(ev.code ? { code: ev.code } : {}) };
-        handleEvent(ev);
+        if (!controller.signal.aborted) handleEvent(ev);
       });
       if (summary.terminal === null && !controller.signal.aborted) fail(turnProblem('INTERRUPTED'));
       return result;
@@ -324,14 +360,14 @@ export function useChatSession(models: PublicModel[]) {
 
   async function send() {
     const content = composeContent(draft, files);
-    if (!content || busy || !model || content.length > MESSAGE_LIMIT || uploads.some((u) => u.status === 'uploading')) return;
+    if (!content || agentBlocked || busy || !model || content.length > MESSAGE_LIMIT || uploads.some((u) => u.status === 'uploading')) return;
     const typed = draft; const sentFiles = files;
     setError(null);
     let id = activeId;
     try {
       if (!id) {
         const d = await json<{ thread: Thread }>(await fetch('/api/v1/chat/threads', {
-          method: 'POST', headers: MUTATION_HEADERS, body: JSON.stringify({ modelKey: model.key }),
+          method: 'POST', headers: MUTATION_HEADERS, body: JSON.stringify({ modelKey: model.key, ...(agentsApiAvailable && requestedAgent && selectedAgent?.id === requestedAgent ? { agentId: selectedAgent.id } : {}) }),
         }));
         id = d.thread.id; created.current = id; setActiveId(id); add(d.thread);
         // Address follows the new chat without a navigation, so the answer below keeps streaming.
@@ -351,7 +387,7 @@ export function useChatSession(models: PublicModel[]) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         setError(requestProblem(body.error)); setDraft(typed); setFiles(sentFiles); return;
       }
-      const summary = await readTurnStream(res.body, handleEvent);
+      const summary = await readTurnStream(res.body, (ev) => { if (!controller.signal.aborted) handleEvent(ev); });
       // A stream that ends without done/error was cut off; never present it as a finished answer.
       if (summary.terminal === null && !controller.signal.aborted) fail(turnProblem('INTERRUPTED'));
       setAttached([]);
@@ -367,6 +403,7 @@ export function useChatSession(models: PublicModel[]) {
   const length = composeContent(draft, files).length;
 
   return {
+    agentBlocked, agentNotice, agentLabel, toolsUnavailable,
     activeId, messages, approvals, live, error, busy, models, model, modelKey, setModelKey,
     draft, setDraft, attached, matches, picker, showPicker, activeOption, listId, input, log,
     files, fileNotice, length, overLimit: length > MESSAGE_LIMIT,

@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import type { Conversation, Folder } from '@/lib/workspace-data/contracts';
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/workspace', useSearchParams: () => new URLSearchParams() }));
@@ -120,4 +120,25 @@ describe('Recent chats with conversation management', () => {
     expect(screen.getByText('Searching your most recent chats.')).toBeTruthy();
     expect(api.calls.some((c) => c.search.includes('q='))).toBe(false);
   });
+});
+
+
+it('drains opaque pages through recent, search and archive provider paths', async () => {
+  const cursor = 'c1.exact+/=%opaque';
+  const api = setup({ 'GET /api/v1/chat/threads': ({ url }) => {
+    const next = url.searchParams.has('before');
+    return { body: { threads: [conv(next ? B : A, next ? 'Second' : 'First', null, { updatedAt: '2026-01-01T00:00:00Z' })], nextCursor: next ? null : cursor } };
+  } });
+  const { result } = renderHook(() => useThreads(), { wrapper: ({ children }) => <ThreadsProvider initialThreads={[]}>{children}</ThreadsProvider> });
+  await waitFor(() => expect(result.current.manage).toBe('available'));
+  expect(result.current.threads?.map((t) => t.id)).toEqual([A, B]);
+  const search = await result.current.search('keyword');
+  expect(search.mode === 'server' && search.results.map((t) => t.id)).toEqual([A, B]);
+  const archived = await result.current.listArchived();
+  expect(archived.ok && archived.threads.map((t) => t.id)).toEqual([A, B]);
+  const continued = api.calls.map((c) => new URLSearchParams(c.search)).filter((q) => q.has('before'));
+  expect(continued).toHaveLength(3);
+  expect(continued.every((q) => q.get('before') === cursor)).toBe(true);
+  expect(continued.some((q) => q.get('q') === 'keyword')).toBe(true);
+  expect(continued.some((q) => q.get('archived') === 'true')).toBe(true);
 });
