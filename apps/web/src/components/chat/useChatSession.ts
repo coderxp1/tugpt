@@ -66,6 +66,7 @@ export function useChatSession(models: PublicModel[]) {
   const [selectedAgent, setSelectedAgent] = useState<{ id: string; name: string } | null>(null);
   const [agentFailed, setAgentFailed] = useState<string | null>(null);
   const [turnAgent, setTurnAgent] = useState<{ id: string; name: string } | null>(null);
+  const [savedAgent, setSavedAgent] = useState<{ threadId: string; agentId: string | null | undefined; name?: string; unavailable?: boolean } | null>(null);
   const [toolsUnavailable, setToolsUnavailable] = useState(false);
   const citationState = useRef<{ citations: AgentCitation[]; knowledgeUnavailable: boolean }>({ citations: [], knowledgeUnavailable: false });
   const promptKey = useSearchParams()?.get('prompt') ?? null;
@@ -131,9 +132,13 @@ export function useChatSession(models: PublicModel[]) {
     });
     return () => { current = false; };
   }, [activeId, requestedAgent]);
-  const agentBlocked = !activeId && !!requestedAgent && (!agentsApiAvailable || selectedAgent?.id !== requestedAgent || agentFailed === requestedAgent);
-  const agentNotice = agentBlocked ? t(!agentsApiAvailable ? 'workspace.agent.unverified' : agentFailed === requestedAgent ? 'workspace.agent.unavailable' : 'workspace.agent.loading') : null;
-  const agentLabel = activeId ? turnAgent?.name ?? (agentsApiAvailable ? t('workspace.agent.saved') : undefined) : requestedAgent && selectedAgent?.id === requestedAgent ? selectedAgent.name : undefined;
+  const binding = savedAgent?.threadId === activeId ? savedAgent : null;
+  const savedAgentBlocked = !!activeId && typeof binding?.agentId === 'string' && (!agentsApiAvailable || binding.unavailable === true);
+  const agentBlocked = (!!activeId && !binding) || savedAgentBlocked || (!activeId && !!requestedAgent && (!agentsApiAvailable || selectedAgent?.id !== requestedAgent || agentFailed === requestedAgent));
+  const agentNotice = activeId && !binding ? t('workspace.agent.loading') : agentBlocked ? t(!agentsApiAvailable ? 'workspace.agent.unverified' : savedAgentBlocked || agentFailed === requestedAgent ? 'workspace.agent.unavailable' : 'workspace.agent.loading') : null;
+  const agentLabel = activeId
+    ? turnAgent?.name ?? binding?.name ?? (binding?.agentId === null ? undefined : binding?.unavailable ? t('workspace.agent.unavailable') : typeof binding?.agentId === 'string' ? t('workspace.agent.loading') : agentsApiAvailable ? t('workspace.agent.saved') : undefined)
+    : requestedAgent && selectedAgent?.id === requestedAgent ? selectedAgent.name : undefined;
 
   // Load the selected chat. Not for a chat this view just started: its messages arrive by stream.
   useEffect(() => {
@@ -141,9 +146,18 @@ export function useChatSession(models: PublicModel[]) {
     let current = true;
     fetch(`/api/v1/chat/threads/${encodeURIComponent(activeId)}`, { cache: 'no-store' })
       .then((r) => json<{ thread: Thread; messages: Message[] }>(r))
-      .then((d) => {
+      .then(async (d) => {
         if (!current) return;
-        setMessages(d.messages);
+        setMessages(d.messages.map((m) => ({ ...m, citations: parseAgentCitations(m.citations), knowledgeUnavailable: m.knowledgeUnavailable === true })));
+        const agentId = typeof d.thread.agentId === 'string' ? d.thread.agentId : d.thread.agentId === null ? null : undefined;
+        setSavedAgent({ threadId: activeId, agentId });
+        if (typeof agentId === 'string') {
+          const r = await createAgentsClient().getAgent(agentId);
+          if (!current) return;
+          setSavedAgent(r.ok && r.value?.agent?.id === agentId && typeof r.value.agent.name === 'string'
+            ? { threadId: activeId, agentId, name: r.value.agent.name }
+            : { threadId: activeId, agentId, unavailable: true });
+        }
         if (models.some((m) => m.key === d.thread.modelKey)) setModelKey(d.thread.modelKey);
       })
       .catch(() => { if (current) setError({ text: 'This chat could not be opened.', connect: false }); });
@@ -152,7 +166,7 @@ export function useChatSession(models: PublicModel[]) {
 
   // Leaving the chat while an answer streams (e.g. Back) stops that answer; it is not shown elsewhere.
   useEffect(() => {
-    if (routeThread === null || routeThread !== created.current) abort.current?.abort();
+    if (routeThread === null || routeThread !== created.current) { abort.current?.abort(); created.current = null; }
   }, [routeThread]);
 
   // A new chat puts the cursor in the message box (pointer devices only: no surprise keyboard on phones).
@@ -311,7 +325,7 @@ export function useChatSession(models: PublicModel[]) {
       // Malformed payloads are dropped: a card is only shown for a well-formed, server-built request.
       const p = parsePendingApproval(ev.approval);
       if (p) pendingApprovals.current.push(p);
-    } else if ((ev.type === 'done' || ev.type === 'error') && message) { setMessages((m) => [...m, { ...message, ...citationState.current }]); flushApprovals(message.id); }
+    } else if ((ev.type === 'done' || ev.type === 'error') && message) { setMessages((m) => [...m, { ...message, citations: parseAgentCitations(message.citations ?? citationState.current.citations), knowledgeUnavailable: message.knowledgeUnavailable ?? citationState.current.knowledgeUnavailable }]); flushApprovals(message.id); }
     if (ev.type === 'error') fail(turnProblem(ev.code));
   }
 
@@ -369,7 +383,7 @@ export function useChatSession(models: PublicModel[]) {
         const d = await json<{ thread: Thread }>(await fetch('/api/v1/chat/threads', {
           method: 'POST', headers: MUTATION_HEADERS, body: JSON.stringify({ modelKey: model.key, ...(agentsApiAvailable && requestedAgent && selectedAgent?.id === requestedAgent ? { agentId: selectedAgent.id } : {}) }),
         }));
-        id = d.thread.id; created.current = id; setActiveId(id); add(d.thread);
+        id = d.thread.id; setSavedAgent({ threadId: id, agentId: d.thread.agentId, ...(d.thread.agentId && selectedAgent?.id === d.thread.agentId ? { name: selectedAgent.name } : {}) }); created.current = id; setActiveId(id); add(d.thread);
         // Address follows the new chat without a navigation, so the answer below keeps streaming.
         window.history.replaceState(null, '', threadHref(id));
       }

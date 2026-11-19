@@ -14,17 +14,17 @@ const citation = { n: 1, documentId: 'd', collectionId: 'c', fileId: 'f', title:
 const approval = { callId: 'call_9', threadId: tid, endpointId: 'e0000000-0000-4000-8000-00000000000a', endpointName: 'Docs', endpointHost: 'mcp.test', capability: 'external.create_ticket', toolName: 'create_ticket', toolDescription: 'Create a ticket', permissionClass: 'write', arguments: { title: 'VPN' }, argumentsSha256: 'b'.repeat(64) };
 const json = (body: unknown, status = 200) => new Response(JSON.stringify(body), { status });
 let calls: { url: string; method: string; body: Record<string, unknown> | null }[];
-function setup(events: object[], denied = false) {
+function setup(events: object[], denied = false, restored: { agentId?: string | null; messages?: object[] } = {}) {
   vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ url, method: init?.method ?? 'GET', body: typeof init?.body === 'string' ? JSON.parse(init.body) : null });
     if (url === '/api/v1/agents/agent-a') return denied ? json({ error: 'NOT_FOUND' }, 404) : json({ agent });
     if (url.endsWith('/capabilities')) return json({ capabilities: [] });
     if (url === '/api/v1/chat/threads' && init?.method === 'POST') return json({ thread: { ...thread, agentId: agent.id } }, 201);
-    if (url === `/api/v1/chat/threads/${tid}`) return json({ thread, messages: [] });
+    if (url === `/api/v1/chat/threads/${tid}`) return json({ thread: { ...thread, ...restored }, messages: restored.messages ?? [] });
     if (url.endsWith('/messages')) return new Response(events.map((e) => JSON.stringify(e)).join('\n') + '\n');
     return json({ threads: [], nextCursor: null });
   }));
-  render(<ThreadsProvider initialThreads={[]}><ChatView models={[{ key: 'scout', label: 'Scout', description: '', private: true, toolCalling: true }]} canApprove /></ThreadsProvider>);
+  return render(<ThreadsProvider initialThreads={[]}><ChatView models={[{ key: 'scout', label: 'Scout', description: '', private: true, toolCalling: true }]} canApprove /></ThreadsProvider>);
 }
 beforeEach(() => { calls = []; nav.path = '/workspace'; nav.search = 'agent=agent-a'; nav.enabled = true; Element.prototype.scrollTo = vi.fn(); });
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
@@ -77,4 +77,29 @@ it('reports stream cutoff without fabricating a finished response', async () => 
   await send();
   expect((await screen.findByRole('alert')).textContent).toContain('cut off');
   expect(screen.queryByText('Answer from sources.')).toBeNull();
+});
+
+it('restores authorized saved agent identity and citations with the release gate still closed', async () => {
+  nav.enabled = false; nav.path = `/workspace/c/${tid}`;
+  setup([], false, { agentId: agent.id, messages: [{ ...message, citations: [citation], knowledgeUnavailable: true }] });
+  await screen.findByRole('button', { name: /Research agent/ });
+  expect(screen.getByText('Canonical source')).toBeTruthy();
+  expect(screen.getByText('Knowledge retrieval was unavailable for this answer.')).toBeTruthy();
+  expect(screen.getByText('Custom-agent execution is not enabled yet.')).toBeTruthy();
+});
+it.each([null])('restores explicit null binding as ordinary chat, not a URL-selected agent', async (agentId) => {
+  nav.path = `/workspace/c/${tid}`; setup([], false, { agentId, messages: [message] });
+  await screen.findByText('Answer from sources.');
+  expect(screen.getByRole('button', { name: /TuGPT Assistant/ })).toBeTruthy();
+  expect(calls.some((c) => c.url.startsWith('/api/v1/agents'))).toBe(false);
+});
+it('fails closed for lost agent access instead of falsely showing the built-in agent', async () => {
+  nav.path = `/workspace/c/${tid}`; setup([], true, { agentId: agent.id, messages: [message] });
+  await screen.findByRole('button', { name: /This agent is unavailable/ });
+  expect(screen.queryByRole('button', { name: /TuGPT Assistant/ })).toBeNull();
+});
+it('drops malformed restored citations while preserving valid sources and flag', async () => {
+  nav.path = `/workspace/c/${tid}`; setup([], false, { agentId: null, messages: [{ ...message, citations: [{}, citation], knowledgeUnavailable: true }] });
+  await screen.findByText('Canonical source');
+  expect(screen.getAllByText('Canonical source')).toHaveLength(1);
 });
