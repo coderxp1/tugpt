@@ -59,7 +59,11 @@ export interface ConversationQuery {
   readonly folderId?: string;
   readonly unfiled?: boolean;
   readonly limit?: number;
-  /** ISO timestamp cursor: return conversations updated strictly before it. */
+  /**
+   * Opaque cursor: pass the previous page's `nextCursor` unchanged. A bare
+   * ISO timestamp is still accepted (conversations updated strictly before it,
+   * which can skip rows sharing that timestamp) for older clients.
+   */
   readonly before?: string;
 }
 export interface ConversationList { readonly threads: readonly Conversation[]; readonly nextCursor: string | null }

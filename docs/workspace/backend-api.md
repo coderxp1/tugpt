@@ -19,7 +19,7 @@ If you're writing UI code, import the client; don't hand-roll fetches.
 | Errors | `{"error": "<CODE>"}` (section 7). Messages are never raw database or storage text. |
 | Not-found vs forbidden | If you can't see a resource, you get **404**, whether it is foreign or missing, so IDs can't be enumerated. If you can see it but may not change it, you get **403**. |
 | Caching | All JSON is `Cache-Control: private, no-store`. |
-| Pagination | `?limit=` (bounded per route) and `?before=<ISO timestamp>`. Responses include `nextCursor`, which is `null` on the last page. |
+| Pagination | `?limit=` (bounded per route) and `?before=`. Pass the previous response's `nextCursor` back unchanged as `before`. `nextCursor` is `null` when there is no further page (also when the last page is exactly `limit` long). Conversations (`GET /chat/threads`) use an opaque cursor (`c1.…`) carrying the exact `updatedAt` and the thread id, so threads with identical timestamps are neither skipped nor repeated (Q-7, migration 20261120100007); a bare ISO timestamp is still accepted there with the old "updated strictly before" meaning. Files and approvals still use an ISO-timestamp cursor. |
 | IDs | UUIDs. A malformed ID in the path returns 404. |
 
 Roles: `owner`, `admin`, `agent` (member) and `viewer`. "Admin" below means owner or admin.
