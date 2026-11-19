@@ -167,17 +167,39 @@ The response never claims more than is true: a new document is `pending`, and it
 
 | Method & path | Body / query | Success | Who |
 |---|---|---|---|
-| `GET /api/v1/agents` | none | `200 {agents: CustomAgent[]}` (own private + organization agents) | members, viewers |
-| `POST /api/v1/agents` | `{name, description?, instructions?, modelKey?, visibility?: private\|organization, tools?: [{capability, provider}], conversationStarters?}` | `201 {agent}` | private: members; organization: admin |
-| `GET /api/v1/agents/{id}` | none | `200 {agent}` incl. `collectionIds` | readers |
-| `PATCH /api/v1/agents/{id}` | any subset of the POST fields | `200 {agent}`; `version` increments on every real change | owner of a private agent; admin or creator for organization agents. Readers get 403 |
-| `DELETE /api/v1/agents/{id}` | none | `200 {deleted:true}`; threads stay, with `agent_id` set to NULL | as PATCH |
-| `GET\|POST /api/v1/agents/{id}/collections` | POST `{collectionId}` | `200 {collections}` / `201 {linked:true}` | writers of the agent; the **linking user** must be able to read the collection (else 404). Max 20 |
-| `DELETE /api/v1/agents/{id}/collections/{collectionId}` | none | `200 {deleted:true}` | writers |
+| `GET /api/v1/agents` | none | `200 {agents: CustomAgent[]}` (own private + organization agents, newest first) | members, viewers |
+| `POST /api/v1/agents` | `{name ≤80, instructions 1..8000, description? ≤280, modelKey?, visibility?: private\|organization, tools?: [{capability, provider}], starters? ≤4×200, collectionIds? ≤10}` | `201 {agent}` | private: members; organization: owner/admin |
+| `GET /api/v1/agents/{id}` | none | `200 {agent}` | readers |
+| `PATCH /api/v1/agents/{id}` | any subset of the POST fields; the whole `CustomAgent` may be echoed back (read-only `id`, `ownedByMe`, `canEdit`, `canDelete`, `version`, `createdAt`, `updatedAt` are ignored; an echoed `id` must match the path) | `200 {agent}` | **owner only** (C-1). Everyone else, org admins included, gets `404` |
+| `DELETE /api/v1/agents/{id}` | none | `200 {deleted:true}`; threads stay, with `agent_id` set to NULL | owner, or org owner/admin for organization agents (`canDelete`). Readers 403 |
+| `GET\|POST /api/v1/agents/{id}/collections` | POST `{collectionId}` | `200 {collections}` / `201 {linked:true}` | GET: readers (readable collections only). POST: **owner only** (else 403); the collection must be readable (else 404); ≤10 visible links (`400 LIMIT_EXCEEDED`) |
+| `DELETE /api/v1/agents/{id}/collections/{collectionId}` | none | `200 {deleted:true}` | owner only |
 | `POST /api/v1/agents/{id}/run` | `{content ≤8000, threadId?, modelKey?, timeZone?}` | `200` NDJSON stream (below) | readers of the agent |
+| `POST /api/v1/chat/threads` | `{modelKey?, agentId?}` | `201 {thread:{id, title, modelKey, updatedAt, agentId}}` | with `agentId`: readers of the agent (`404 "Agent not found"` otherwise) |
 
-- **Instructions are only returned to editors** (`instructions: null` for readers), so organization agents can
-  be used without exposing their prompt.
+`CustomAgent` (C-1 shape): `{id, name, description, instructions, modelKey, visibility, tools, starters, collectionIds,
+ownedByMe, canEdit, canDelete, version, createdAt, updatedAt}`. `canEdit`, `canDelete`, `version` and `tools` are
+additive to C-1. `conversationStarters` was renamed to `starters` (the old name is rejected; the API was unreleased).
+
+- **Saving is one atomic statement** (`save_custom_agent`, migration `20261120100008`, SECURITY INVOKER): fields and
+  `collectionIds` change together or not at all. `collectionIds` *replaces* the links the caller can see; links to
+  collections the caller cannot read (e.g. added by an admin) are invisible to them and kept. Every id must be readable
+  by the caller (`400 INVALID_COLLECTION` otherwise: unknown, foreign or unreadable all look the same). The database
+  still caps an agent at 20 links in total, hidden ones included (`400 LIMIT_EXCEEDED`).
+- **Errors:** `400 INVALID_REQUEST` (shape, length, unknown keys), `400 LIMIT_EXCEEDED` (>4 starters, >10
+  collections), `400 INVALID_COLLECTION`, `400 INVALID_MODEL` (bad key or not in the catalogue; an unchanged stored
+  key that has since left the catalogue is accepted so the builder can still save), `403`/`404` as above.
+- **`version`** counts changes to the agent's own fields (trigger from `20261120100004`). A save that only changes
+  `collectionIds` does not bump it.
+- **Instructions are returned to the owner only**; everyone else gets `instructions: ""` (a string, so typed clients
+  need no null case), and organization agents can be used without exposing their prompt.
+- **Chat threads with an agent:** `POST /chat/threads {agentId}` uses the agent's model when it is in the catalogue,
+  else `modelKey` (`400 "Unknown model"` without one). `POST /chat/threads/{id}/messages` on such a thread runs the
+  agent turn (same events as `/run`, below): agent instructions, tools (merged with `mentions`), knowledge as the
+  caller, the agent's model (falling back to the chat's `modelKey` if it was retired), and the `agent.run` rate limit.
+  Errors there use the chat client's human-readable `error` text, e.g. `409 "This agent is no longer available to
+  you"` when the caller can no longer read the agent. Archived threads `404`; once the agent is deleted the thread
+  continues as plain chat.
 - **Run = the normal chat runtime.** Same model registry and endpoints, same `runTurn`, same tool registry,
   approval flow and message store. Model: `modelKey`, else the agent's model, else the first configured one
   (`400 UNKNOWN_MODEL` / `409 AGENT_MODEL_UNAVAILABLE`). Without `threadId` a thread with `agent_id` is

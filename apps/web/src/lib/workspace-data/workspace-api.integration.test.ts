@@ -193,6 +193,7 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
       load('agentCollections', import('@/app/api/v1/agents/[agentId]/collections/route')),
       load('agentCollection', import('@/app/api/v1/agents/[agentId]/collections/[collectionId]/route')),
       load('agentRun', import('@/app/api/v1/agents/[agentId]/run/route')),
+      load('messages', import('@/app/api/v1/chat/threads/[threadId]/messages/route')),
     ]);
   }, 60_000);
   afterAll(async () => {
@@ -795,24 +796,35 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
       let orgAgent = '';
       let ownerOnlyCol = '';
       let threadId = '';
+      let echo = '';
+      const sv = () => svc as unknown as PostgrestClient;
+      const linksOf = async (id: string) => ((await sv().from('custom_agent_collections').select('collection_id').eq('agent_id', id)).data ?? [])
+        .map((r: { collection_id: string }) => r.collection_id).sort();
+      const send = (threadId: string, content: string) => call('messages', 'POST', { params: { threadId }, body: { content, modelKey: 'tugpt-scout' } });
       const run = (agentId: string, body: Record<string, unknown>) => call('agentRun', 'POST', { params: { agentId }, body });
       const events = (text: string) => text.trim().split('\n').map((l) => JSON.parse(l) as Record<string, any>); // eslint-disable-line @typescript-eslint/no-explicit-any
 
-      it('CRUD: members create private agents, org agents need owner/admin, readers never see instructions', async () => {
+      it('CRUD (C-1): members create private agents, org agents need owner/admin, only the owner sees instructions and edits', async () => {
         as(U.memberA);
         const c = await call('agents', 'POST', { body: {
           name: 'Research helper', instructions: 'Answer in bullet points.', tools: [{ capability: 'calendar.read', provider: 'it-missing' }],
-          conversationStarters: ['Summarise my notes'],
+          starters: ['Summarise my notes'],
         } });
         expect(c.status).toBe(201);
-        expect(c.json.agent).toMatchObject({ visibility: 'private', ownedByMe: true, canEdit: true, version: 1, instructions: 'Answer in bullet points.' });
+        expect(c.json.agent).toMatchObject({
+          visibility: 'private', ownedByMe: true, canEdit: true, canDelete: true, version: 1, instructions: 'Answer in bullet points.',
+          starters: ['Summarise my notes'], collectionIds: [], modelKey: null,
+        });
+        expect(c.json.agent).not.toHaveProperty('conversationStarters');
         privAgent = c.json.agent.id;
-        expect((await call('agents', 'POST', { body: { name: 'Org', visibility: 'organization' } })).status).toBe(403);
-        expect((await call('agents', 'POST', { body: { name: '' } })).status).toBe(400);
-        expect((await call('agents', 'POST', { body: { name: 'x', secret: 1 } })).status).toBe(400);
-        expect((await call('agents', 'POST', { body: { name: 'x' }, csrf: false })).status).toBe(403);
+        expect((await call('agents', 'POST', { body: { name: 'Org', instructions: 'x', visibility: 'organization' } })).status).toBe(403);
+        expect((await call('agents', 'POST', { body: { name: '', instructions: 'x' } })).status).toBe(400);
+        expect((await call('agents', 'POST', { body: { name: 'No instructions' } })).json).toEqual({ error: 'INVALID_REQUEST' });
+        expect((await call('agents', 'POST', { body: { name: 'x', instructions: 'x', secret: 1 } })).status).toBe(400);
+        expect((await call('agents', 'POST', { body: { name: 'x', instructions: 'x', conversationStarters: ['old name'] } })).status).toBe(400);
+        expect((await call('agents', 'POST', { body: { name: 'x', instructions: 'x' }, csrf: false })).status).toBe(403);
         as(U.viewerA);
-        expect((await call('agents', 'POST', { body: { name: 'Viewer agent' } })).status).toBe(403);
+        expect((await call('agents', 'POST', { body: { name: 'Viewer agent', instructions: 'x' } })).status).toBe(403);
         as(U.ownerA);
         const o = await call('agents', 'POST', { body: { name: 'Policy desk', visibility: 'organization', instructions: 'Quote the company policies.' } });
         expect(o.status).toBe(201);
@@ -820,16 +832,19 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
 
         as(U.viewerA);
         expect((await call('agents', 'GET')).json.agents.map((a: { id: string }) => a.id)).toEqual([orgAgent]);
-        expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).json.agent).toMatchObject({ instructions: null, canEdit: false, ownedByMe: false });
-        expect((await call('agent', 'PATCH', { params: { agentId: orgAgent }, body: { name: 'hijack' } })).status).toBe(403);
+        expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).json.agent).toMatchObject({ instructions: '', canEdit: false, canDelete: false, ownedByMe: false });
+        expect((await call('agent', 'PATCH', { params: { agentId: orgAgent }, body: { name: 'hijack' } })).status).toBe(404); // C-1: PATCH owner only, others 404
         expect((await call('agent', 'DELETE', { params: { agentId: orgAgent } })).status).toBe(403);
         expect((await call('agent', 'GET', { params: { agentId: privAgent } })).status).toBe(404);
         as(U.memberA);
         const p = await call('agent', 'PATCH', { params: { agentId: privAgent }, body: { name: 'Research helper v2' } });
         expect(p.status).toBe(200);
-        expect(p.json.agent).toMatchObject({ name: 'Research helper v2', version: 2 });
-        expect((await call('agent', 'PATCH', { params: { agentId: orgAgent }, body: { name: 'hijack' } })).status).toBe(403);
-        expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).json.agent.instructions).toBeNull();
+        expect(p.json.agent).toMatchObject({ name: 'Research helper v2', version: 2, instructions: 'Answer in bullet points.' });
+        expect((await call('agent', 'PATCH', { params: { agentId: orgAgent }, body: { name: 'hijack' } })).status).toBe(404);
+        expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).json.agent).toMatchObject({ instructions: '', canEdit: false });
+        as(U.ownerA); // the org owner edits their own org agent; a member's private agent stays invisible to them
+        expect((await call('agent', 'PATCH', { params: { agentId: privAgent }, body: { name: 'x' } })).status).toBe(404);
+        expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).json.agent).toMatchObject({ canEdit: true, canDelete: true, instructions: 'Quote the company policies.' });
         as(U.ownerB);
         expect((await call('agents', 'GET')).json.agents).toEqual([]);
         expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).status).toBe(404);
@@ -840,7 +855,7 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).status).toBe(404);
       });
 
-      it('links only collections the linking user can read; readers cannot link', async () => {
+      it('links only collections the linking owner can read; only the owner links; lists show only readable links', async () => {
         as(U.ownerA);
         ownerOnlyCol = (await call('collections', 'POST', { body: { name: 'Board notes' } })).json.collection.id;
         const f = (await upload('board.txt', 'Confidential: the Contoso acquisition closes in March.', 'text/plain')).json.file.id;
@@ -849,6 +864,7 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         expect((await call('agentCollections', 'POST', { params: { agentId: orgAgent }, body: { collectionId: orgCol } })).status).toBe(201);
         // Allowed (the owner can read it) - but retrieval stays caller-scoped, see the run test.
         expect((await call('agentCollections', 'POST', { params: { agentId: orgAgent }, body: { collectionId: ownerOnlyCol } })).status).toBe(201);
+        expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).json.agent.collectionIds.sort()).toEqual([orgCol, ownerOnlyCol].sort());
         as(U.memberA);
         expect((await call('agentCollections', 'POST', { params: { agentId: privAgent }, body: { collectionId: privateCol } })).status).toBe(201);
         expect((await call('agentCollections', 'POST', { params: { agentId: privAgent }, body: { collectionId: orgCol } })).status).toBe(201);
@@ -857,6 +873,11 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         expect((await call('agentCollections', 'GET', { params: { agentId: privAgent } })).json.collections.map((c: { id: string }) => c.id).sort()).toEqual([orgCol, privateCol].sort());
         expect((await call('agentCollection', 'DELETE', { params: { agentId: privAgent, collectionId: orgCol } })).status).toBe(200);
         expect((await call('agent', 'GET', { params: { agentId: privAgent } })).json.agent.collectionIds).toEqual([privateCol]);
+        // A reader sees only the links to collections they can read (no ids of the owner's private collection).
+        expect((await call('agent', 'GET', { params: { agentId: orgAgent } })).json.agent.collectionIds).toEqual([orgCol]);
+        expect((await call('agents', 'GET')).json.agents.find((a: { id: string }) => a.id === orgAgent).collectionIds).toEqual([orgCol]);
+        expect((await call('agentCollections', 'GET', { params: { agentId: orgAgent } })).json.collections.map((c: { id: string }) => c.id)).toEqual([orgCol]);
+        expect((await call('agentCollection', 'DELETE', { params: { agentId: orgAgent, collectionId: orgCol } })).status).toBe(403);
         as(U.viewerA);
         expect((await call('agentCollections', 'POST', { params: { agentId: orgAgent }, body: { collectionId: orgCol } })).status).toBe(403);
         as(U.ownerB);
@@ -946,6 +967,142 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         expect((await own.from('chat_threads').select('agent_id').eq('id', threadId).single()).data).toEqual({ agent_id: null });
         expect((await call('thread', 'GET', { params: { threadId } })).status).toBe(200);
         expect((await run(privAgent, { content: 'hi', threadId })).status).toBe(404);
+      });
+
+      it('C-1 builder save: the whole agent echoed back, collectionIds replace links, typed validation errors', async () => {
+        as(U.memberA);
+        const c = await call('agents', 'POST', { body: {
+          name: 'Echo', description: 'Builder round trip', instructions: 'Cite the roadmap.', modelKey: 'tugpt-scout', visibility: 'private',
+          starters: ['What ships in Q2?', 'Who owns it?'], collectionIds: [privateCol],
+        } });
+        expect(c.status).toBe(201);
+        expect(c.json.agent).toMatchObject({ version: 1, modelKey: 'tugpt-scout', starters: ['What ships in Q2?', 'Who owns it?'], collectionIds: [privateCol] });
+        echo = c.json.agent.id;
+        const got = (await call('agent', 'GET', { params: { agentId: echo } })).json.agent;
+        // AgentsView sends the full object, read-only fields included.
+        const saved = await call('agent', 'PATCH', { params: { agentId: echo }, body: { ...got, name: 'Echo 2', starters: ['What ships in Q2?'], collectionIds: [privateCol, orgCol] } });
+        expect(saved.status).toBe(200);
+        expect(saved.json.agent).toMatchObject({ name: 'Echo 2', version: 2, starters: ['What ships in Q2?'], createdAt: got.createdAt, instructions: 'Cite the roadmap.' });
+        expect(saved.json.agent.collectionIds.sort()).toEqual([orgCol, privateCol].sort());
+        // version counts the agent's own fields (100004 trigger); a links-only save does not bump it.
+        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { ...saved.json.agent, collectionIds: [privateCol] } })).json.agent)
+          .toMatchObject({ version: 2, collectionIds: [privateCol] });
+        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { ...got, id: orgAgent } })).json).toEqual({ error: 'INVALID_REQUEST' });
+
+        const patch = async (body: Record<string, unknown>) => { const r = await call('agent', 'PATCH', { params: { agentId: echo }, body }); return `${r.status}:${r.json.error}`; };
+        expect(await patch({ collectionIds: [ownerOnlyCol] })).toBe('400:INVALID_COLLECTION'); // exists, but not readable by the member
+        expect(await patch({ collectionIds: [MISSING] })).toBe('400:INVALID_COLLECTION');
+        expect(await patch({ collectionIds: ['nope'] })).toBe('400:INVALID_COLLECTION');
+        expect(await patch({ modelKey: 'it-unknown-model' })).toBe('400:INVALID_MODEL');
+        expect(await patch({ modelKey: 'Bad Key' })).toBe('400:INVALID_MODEL');
+        expect(await patch({ starters: Array(5).fill('hi') })).toBe('400:LIMIT_EXCEEDED');
+        expect(await patch({ collectionIds: Array.from({ length: 11 }, (_, i) => `a4f00000-0000-4000-8000-${String(i + 1).padStart(12, '0')}`) })).toBe('400:LIMIT_EXCEEDED');
+        expect(await patch({ instructions: 'x'.repeat(8001) })).toBe('400:INVALID_REQUEST');
+        expect(await patch({ instructions: '' })).toBe('400:INVALID_REQUEST');
+        expect((await call('agent', 'GET', { params: { agentId: echo } })).json.agent).toMatchObject({ name: 'Echo 2', version: 2, collectionIds: [privateCol] });
+
+        // A stored model that has left the catalogue is accepted when echoed back unchanged, but cannot be newly chosen.
+        expect((await sv().from('custom_agents').update({ model_key: 'tugpt-retired' }).eq('id', echo)).error).toBeNull();
+        const stale = (await call('agent', 'GET', { params: { agentId: echo } })).json.agent;
+        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { ...stale, description: 'still saves' } })).json.agent)
+          .toMatchObject({ modelKey: 'tugpt-retired', description: 'still saves' });
+        expect(await patch({ modelKey: 'tugpt-other' })).toBe('400:INVALID_MODEL');
+        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { modelKey: 'tugpt-scout' } })).status).toBe(200);
+      });
+
+      it('a save keeps links to collections the owner cannot read, and replaces only the visible ones', async () => {
+        // Simulates a link someone else added (e.g. an org admin) to a collection the agent owner cannot read.
+        expect((await sv().from('custom_agent_collections').insert({ agent_id: echo, collection_id: ownerOnlyCol, organization_id: ORG_A, linked_by: U.ownerA.id })).error).toBeNull();
+        as(U.memberA);
+        expect((await call('agent', 'GET', { params: { agentId: echo } })).json.agent.collectionIds).toEqual([privateCol]);
+        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { collectionIds: [orgCol] } })).json.agent.collectionIds).toEqual([orgCol]);
+        expect(await linksOf(echo)).toEqual([orgCol, ownerOnlyCol].sort());
+        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { collectionIds: [] } })).json.agent.collectionIds).toEqual([]);
+        expect(await linksOf(echo)).toEqual([ownerOnlyCol]);
+        await sv().from('custom_agent_collections').delete().eq('agent_id', echo).eq('collection_id', ownerOnlyCol);
+        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { collectionIds: [privateCol] } })).status).toBe(200);
+      });
+
+      it('chat threads started with an agent (POST /chat/threads agentId) run that agent on every message', async () => {
+        as(U.memberA);
+        const t = await call('threads', 'POST', { body: { agentId: echo } });
+        expect(t.status).toBe(201);
+        expect(t.json.thread).toMatchObject({ agentId: echo, modelKey: 'tugpt-scout', title: 'New chat' });
+        const tid: string = t.json.thread.id;
+        const own = clients.get(U.memberA.id) as PostgrestClient;
+        expect((await own.from('chat_threads').select('agent_id').eq('id', tid).single()).data).toEqual({ agent_id: echo });
+
+        llmBodies.length = 0;
+        const m = await send(tid, 'What ships with the quantum ledger migration?');
+        expect(m.status).toBe(200);
+        const ev = events(m.text);
+        expect(ev.slice(0, 3).map((e) => e.type)).toEqual(['agent', 'user', 'citations']);
+        expect(ev[0].agent).toMatchObject({ id: echo, name: 'Echo 2' });
+        expect(ev[2].citations.map((c: { fileId: string }) => c.fileId)).toEqual([mdFile]);
+        expect(ev.at(-1)).toMatchObject({ type: 'done', message: { role: 'assistant', content: 'Hello from agent' } });
+        expect(llmBodies).toHaveLength(1);
+        expect(llmBodies[0].model).toBe('it-model');
+        const sys: string = llmBodies[0].messages[0].content;
+        expect(sys).toContain('<agent_instructions>\nCite the roadmap.\n</agent_instructions>');
+        expect(sys).toMatch(/<excerpt n="1" title="roadmap.md">[^<]*quantum/);
+        expect(events((await send(tid, 'And in Q3?')).text).at(-1)!.type).toBe('done');
+        expect(llmBodies[1].messages.map((x: { role: string }) => x.role)).toEqual(['system', 'user', 'assistant', 'user']);
+
+        // Plain chat is unchanged: no agent events, no agent prompt.
+        llmBodies.length = 0;
+        const plain = await send(T_MEMBER, 'Just a normal question');
+        expect(plain.status).toBe(200);
+        expect(events(plain.text).map((e) => e.type)).not.toContain('agent');
+        expect(events(plain.text).map((e) => e.type)).not.toContain('citations');
+        expect(JSON.stringify(llmBodies[0].messages)).not.toContain('agent_instructions');
+
+        // Starting: readable agents only; validated ids; errors in the chat client's text style.
+        expect((await call('threads', 'POST', { body: { agentId: MISSING } })).json).toEqual({ error: 'Agent not found' });
+        expect((await call('threads', 'POST', { body: { agentId: 'nope' } })).status).toBe(400);
+        expect((await call('threads', 'POST', { body: { agentId: echo }, csrf: false })).status).toBe(403);
+        as(U.ownerA);
+        expect((await call('threads', 'POST', { body: { agentId: echo } })).status).toBe(404); // a member's private agent
+        expect((await send(tid, 'hi')).status).toBe(404); // someone else's thread
+        as(U.ownerB);
+        expect((await call('threads', 'POST', { body: { agentId: orgAgent } })).status).toBe(404); // other tenant
+
+        // The agent's model has left the catalogue: starting needs the chat's model, and turns fall back to it.
+        as(U.memberA);
+        expect((await sv().from('custom_agents').update({ model_key: 'tugpt-retired' }).eq('id', echo)).error).toBeNull();
+        expect((await call('threads', 'POST', { body: { agentId: echo } })).json).toEqual({ error: 'Unknown model' });
+        expect((await call('threads', 'POST', { body: { agentId: echo, modelKey: 'tugpt-scout' } })).json.thread.modelKey).toBe('tugpt-scout');
+        llmBodies.length = 0;
+        expect(events((await send(tid, 'Still there?')).text).at(-1)!.type).toBe('done');
+        expect(llmBodies[0].model).toBe('it-model');
+        expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { modelKey: 'tugpt-scout' } })).status).toBe(200);
+      });
+
+      it('agent threads: agent no longer readable -> 409 with text; archived -> 404; agent deleted -> plain chat', async () => {
+        as(U.ownerA);
+        const tmp = (await call('agents', 'POST', { body: { name: 'Temp desk', instructions: 'Temporary desk.', visibility: 'organization' } })).json.agent.id;
+        as(U.memberA);
+        const tid: string = (await call('threads', 'POST', { body: { agentId: tmp, modelKey: 'tugpt-scout' } })).json.thread.id;
+        expect(events((await send(tid, 'hi')).text)[0]).toMatchObject({ type: 'agent', agent: { id: tmp } });
+        as(U.ownerA);
+        expect((await call('agent', 'PATCH', { params: { agentId: tmp }, body: { visibility: 'private' } })).status).toBe(200);
+        as(U.memberA);
+        const gone = await send(tid, 'hi again');
+        expect(gone.status).toBe(409);
+        expect(gone.json).toEqual({ error: 'This agent is no longer available to you' });
+
+        const own = clients.get(U.memberA.id) as PostgrestClient;
+        await own.from('chat_threads').update({ archived_at: new Date().toISOString() }).eq('id', tid);
+        expect((await send(tid, 'archived?')).status).toBe(404);
+        await own.from('chat_threads').update({ archived_at: null }).eq('id', tid);
+
+        as(U.ownerA);
+        expect((await call('agent', 'DELETE', { params: { agentId: tmp } })).status).toBe(200);
+        as(U.memberA);
+        llmBodies.length = 0;
+        const after = await send(tid, 'and now?');
+        expect(after.status).toBe(200);
+        expect(events(after.text).map((e) => e.type)).not.toContain('agent');
+        expect(JSON.stringify(llmBodies[0].messages)).not.toContain('Temporary desk.');
       });
 
       it('rate limits agent runs per user (30/min) with Retry-After', async () => {
