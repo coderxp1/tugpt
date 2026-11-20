@@ -43,6 +43,7 @@ export const en: Dictionary = {
   'workspace.recent': 'Recent chats',
   'workspace.loadingChats': 'Loading your chats',
   'workspace.chatsFailed': 'Your chats could not be loaded.',
+  'workspace.chat.resendDraft': 'Send draft again',
   'workspace.tryAgain': 'Try again',
   'workspace.noChats': 'No chats yet. Your conversations will appear here.',
   'workspace.private': 'Only you can see your chats.',

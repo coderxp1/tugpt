@@ -183,3 +183,8 @@
 .chatFiles a{display:grid;place-items:center;width:32px;height:32px;margin-left:auto;border-radius:8px;color:#171715}
 .chatFiles a:hover{background:#efede5}
 .chatFiles p{margin:0;padding:0 12px 10px;color:#5d5e57;font-size:12px}
+
+/* Never hide or truncate the conversation identity, including on narrow screens. */
+.conversationIdentity{display:flex;align-items:flex-start;gap:8px;margin:0 4px 8px;color:#4a4b45;font-size:13px;line-height:1.4;min-width:0}
+.conversationIdentity svg{flex:none;margin-top:1px}
+.conversationIdentity span{min-width:0;overflow-wrap:anywhere}

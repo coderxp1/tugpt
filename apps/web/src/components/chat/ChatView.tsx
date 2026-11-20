@@ -52,7 +52,7 @@ export function ChatView({ models, canApprove = false, firstName = null }: ChatV
 
         {c.agentNotice && <p className={s.error} role="status">{c.agentNotice}</p>}
         {c.toolsUnavailable && <p role="status">{t('workspace.agent.toolsUnavailable')}</p>}
-        {c.error && <p className={s.error} role="alert">{c.error.text}{c.error.connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</p>}
+        {c.error && <p className={s.error} role="alert">{c.error.text}{c.draft.trim() && <>{' '}<button type="button" className={s.tool} disabled={c.busy || c.uploading || c.overLimit || c.agentBlocked || !c.model} onClick={() => void c.send()}>{t('workspace.chat.resendDraft')}</button></>}{c.error.connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</p>}
         {models.length === 0 && <p className={s.error} role="alert">{t('workspace.model.noneConfigured')}</p>}
 
         <Composer draft={c.draft} attached={c.attached} matches={c.matches} pickerIndex={c.picker.index} showPicker={c.showPicker}

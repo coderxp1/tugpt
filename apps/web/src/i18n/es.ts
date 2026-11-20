@@ -55,6 +55,7 @@ export const es = {
   'workspace.recent': 'Chats recientes',
   'workspace.loadingChats': 'Cargando tus chats',
   'workspace.chatsFailed': 'No se pudieron cargar tus chats.',
+  'workspace.chat.resendDraft': 'Volver a enviar el borrador',
   'workspace.tryAgain': 'Reintentar',
   'workspace.noChats': 'Aún no hay chats. Tus conversaciones aparecerán aquí.',
   'workspace.private': 'Solo tú puedes ver tus chats.',

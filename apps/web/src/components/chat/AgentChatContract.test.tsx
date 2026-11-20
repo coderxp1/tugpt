@@ -48,7 +48,7 @@ it('creates with agentId, consumes metadata and preserves approval/done', async 
 });
 it('does not send for an inaccessible agent or silently fall back', async () => {
   setup([], true);
-  await screen.findByText('This agent is unavailable. Choose another agent before sending.');
+  await screen.findByText('This agent is unavailable. Choose another agent before sending.', { selector: 'p' });
   fireEvent.submit(screen.getByLabelText('Message').closest('form')!);
   expect(calls.some((c) => c.method === 'POST')).toBe(false);
 });
@@ -102,4 +102,11 @@ it('drops malformed restored citations while preserving valid sources and flag',
   nav.path = `/workspace/c/${tid}`; setup([], false, { agentId: null, messages: [{ ...message, citations: [{}, citation], knowledgeUnavailable: true }] });
   await screen.findByText('Canonical source');
   expect(screen.getAllByText('Canonical source')).toHaveLength(1);
+});
+
+it('never displays the built-in identity while resolving a requested custom agent', async () => {
+  setup([]);
+  expect(screen.getByText('Agent: Loading agent…')).toBeTruthy();
+  expect(screen.queryByText('Agent: TuGPT Assistant')).toBeNull();
+  expect(await screen.findByText('Agent: Research agent')).toBeTruthy();
 });

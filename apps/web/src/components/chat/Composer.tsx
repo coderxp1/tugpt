@@ -9,6 +9,7 @@ import { UPLOAD_ACCEPT, formatBytes } from '@/lib/workspace/uploads';
 import type { UploadItem } from './useChatSession';
 import { WORKSPACE_IMAGES } from '@/lib/workspace/routes';
 import { AgentMenu } from './AgentMenu';
+import { AgentIdentity } from './AgentIdentity';
 import { MentionPicker, type Capability } from './MentionPicker';
 import { ModelMenu } from './ModelMenu';
 import type { PublicModel } from './types';
@@ -68,6 +69,7 @@ export function Composer({ inputRef, ...p }: ComposerProps) {
 
   return (
     <form className={`${s.composer} ${p.hero ? s.composerHero : ''}`} onSubmit={(e) => { e.preventDefault(); p.onSend(); }}>
+      <AgentIdentity label={p.agentLabel} />
       <div className={`${s.box} ${dragging ? s.dragging : ''}`}
         onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}

@@ -138,7 +138,7 @@ export function useChatSession(models: PublicModel[]) {
   const agentNotice = activeId && !binding ? t('workspace.agent.loading') : agentBlocked ? t(!agentsApiAvailable ? 'workspace.agent.unverified' : savedAgentBlocked || agentFailed === requestedAgent ? 'workspace.agent.unavailable' : 'workspace.agent.loading') : null;
   const agentLabel = activeId
     ? turnAgent?.name ?? binding?.name ?? (binding?.agentId === null ? undefined : binding?.unavailable ? t('workspace.agent.unavailable') : typeof binding?.agentId === 'string' ? t('workspace.agent.loading') : agentsApiAvailable ? t('workspace.agent.saved') : undefined)
-    : requestedAgent && selectedAgent?.id === requestedAgent ? selectedAgent.name : undefined;
+    : requestedAgent ? selectedAgent?.id === requestedAgent ? selectedAgent.name : t(agentFailed === requestedAgent ? 'workspace.agent.unavailable' : 'workspace.agent.loading') : undefined;
 
   // Load the selected chat. Not for a chat this view just started: its messages arrive by stream.
   useEffect(() => {

@@ -386,7 +386,7 @@ describe('Workspace composer', () => {
     const { container } = renderChat({ models: two });
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File([new Uint8Array([77, 90])], 'setup.exe', { type: 'application/x-msdownload' })] } });
-    expect((await screen.findByRole('status')).textContent).toContain('setup.exe: this file type is not supported');
+    expect((await screen.findByText(/setup.exe: this file type is not supported/)).getAttribute('role')).toBe('status');
   });
 
   it('uploads a document, holds Send while it uploads, and links it to the chat the first message creates', async () => {
@@ -458,4 +458,27 @@ describe('Workspace composer', () => {
     expect(panel.textContent).toContain('Custom agents are not available yet.');
     expect(within(panel).getByRole('link', { name: 'Browse agents' }).getAttribute('href')).toBe('/workspace/agents');
   });
+});
+
+it('preserves a rejected draft and resends only on an explicit customer click', async () => {
+  let attempts = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/capabilities')) return new Response(JSON.stringify({ capabilities: [] }));
+    if (url.endsWith('/threads') && init?.method === 'POST') return new Response(JSON.stringify({ thread: { ...thread, agentId: null } }));
+    if (url.endsWith('/messages')) {
+      attempts++;
+      if (attempts === 1) return new Response(JSON.stringify({ error: 'MODEL_UNAVAILABLE' }), { status: 503 });
+      return new Response(JSON.stringify({ type: 'done', message: { id: 'retry-answer', role: 'assistant', content: 'Recovered response', status: 'complete', mentions: [], capabilityKey: null } }) + '\n');
+    }
+    return new Response(JSON.stringify({ threads: [], nextCursor: null }));
+  }));
+  renderChat({ models });
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Keep my draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  const retry = await screen.findByRole('button', { name: 'Send draft again' });
+  expect(attempts).toBe(1);
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Keep my draft');
+  fireEvent.click(retry);
+  await screen.findByText('Recovered response');
+  expect(attempts).toBe(2);
 });
