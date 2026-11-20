@@ -283,8 +283,8 @@ describe('ChatView approval cards', () => {
 
 describe('Workspace composer', () => {
   const two: PublicModel[] = [
-    { key: 'scout', label: 'TuGPT Scout', description: 'Private model', private: true, toolCalling: true },
-    { key: 'langdock:gpt', label: 'GPT Hosted', description: 'Hosted model', private: false, toolCalling: false },
+    { key: 'scout', experience: 'standard', label: 'TuGPT Scout', description: 'Private model', private: true, toolCalling: true },
+    { key: 'langdock:gpt', experience: 'advanced', label: 'GPT Hosted', description: 'Hosted model', private: false, toolCalling: false },
   ];
 
   it('switches model from the model menu, by keyboard, and sends with the chosen model', async () => {
@@ -297,18 +297,18 @@ describe('Workspace composer', () => {
       return ok({ threads: [] });
     });
     renderChat({ models: two });
-    const button = screen.getByRole('button', { name: 'Model: TuGPT Scout' });
+    const button = screen.getByRole('button', { name: 'Assistant capability: Standard' });
     expect(button.getAttribute('aria-haspopup')).toBe('listbox');
     fireEvent.click(button);
-    const list = await screen.findByRole('listbox', { name: 'Choose a model' });
+    const list = await screen.findByRole('listbox', { name: 'Choose an assistant capability' });
     expect(list.querySelectorAll('[role="option"]').length).toBe(2);
-    expect(list.querySelector('[aria-selected="true"]')?.textContent).toContain('TuGPT Scout');
-    expect(list.textContent).toContain('Private');
-    expect(list.textContent).toContain('Hosted (EU)');
+    expect(list.querySelector('[aria-selected="true"]')?.textContent).toContain('Standard');
+    expect(list.textContent).not.toContain('Private');
+    expect(list.textContent).not.toMatch(/GPT|Hosted|Scout/);
     fireEvent.keyDown(list, { key: 'ArrowDown' });
     fireEvent.keyDown(list, { key: 'Enter' });
-    expect(screen.queryByRole('listbox', { name: 'Choose a model' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Model: GPT Hosted' })).toBeTruthy();
+    expect(screen.queryByRole('listbox', { name: 'Choose an assistant capability' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Assistant capability: Advanced' })).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await screen.findByText('ok');
@@ -317,11 +317,11 @@ describe('Workspace composer', () => {
 
   it('closes the model menu on Escape and returns focus to its button', async () => {
     renderChat({ models: two });
-    const button = screen.getByRole('button', { name: 'Model: TuGPT Scout' });
+    const button = screen.getByRole('button', { name: 'Assistant capability: Standard' });
     fireEvent.click(button);
-    await screen.findByRole('listbox', { name: 'Choose a model' });
+    await screen.findByRole('listbox', { name: 'Choose an assistant capability' });
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
-    expect(screen.queryByRole('listbox', { name: 'Choose a model' })).toBeNull();
+    expect(screen.queryByRole('listbox', { name: 'Choose an assistant capability' })).toBeNull();
     expect(document.activeElement).toBe(button);
   });
 
@@ -386,7 +386,7 @@ describe('Workspace composer', () => {
     const { container } = renderChat({ models: two });
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
     fireEvent.change(input, { target: { files: [new File([new Uint8Array([77, 90])], 'setup.exe', { type: 'application/x-msdownload' })] } });
-    expect((await screen.findByRole('status')).textContent).toContain('setup.exe: this file type is not supported');
+    expect((await screen.findByText(/setup.exe: this file type is not supported/)).getAttribute('role')).toBe('status');
   });
 
   it('uploads a document, holds Send while it uploads, and links it to the chat the first message creates', async () => {
@@ -458,4 +458,72 @@ describe('Workspace composer', () => {
     expect(panel.textContent).toContain('Custom agents are not available yet.');
     expect(within(panel).getByRole('link', { name: 'Browse agents' }).getAttribute('href')).toBe('/workspace/agents');
   });
+});
+
+it('preserves a rejected draft and resends only on an explicit customer click', async () => {
+  let attempts = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/capabilities')) return new Response(JSON.stringify({ capabilities: [] }));
+    if (url.endsWith('/threads') && init?.method === 'POST') return new Response(JSON.stringify({ thread: { ...thread, agentId: null } }));
+    if (url.endsWith('/messages')) {
+      attempts++;
+      if (attempts === 1) return new Response(JSON.stringify({ error: 'RATE_LIMITED' }), { status: 429 });
+      return new Response(JSON.stringify({ type: 'done', message: { id: 'retry-answer', role: 'assistant', content: 'Recovered response', status: 'complete', mentions: [], capabilityKey: null } }) + '\n');
+    }
+    return new Response(JSON.stringify({ threads: [], nextCursor: null }));
+  }));
+  renderChat({ models });
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Keep my draft' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Send' }));
+  const retry = await screen.findByRole('button', { name: 'Send draft again' });
+  expect(attempts).toBe(1);
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('Keep my draft');
+  fireEvent.click(retry);
+  await screen.findByText('Recovered response');
+  expect(attempts).toBe(2);
+});
+
+it.each(['network', 'http500', 'cutoff'])('reconciles %s without reposting an uncertain message', async (failure) => {
+  let posts = 0;
+  const saved = { id: 'saved-answer', role: 'assistant', content: 'Saved answer recovered', status: 'complete', mentions: [], capabilityKey: null };
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/capabilities')) return new Response(JSON.stringify({ capabilities: [] }));
+    if (url.endsWith('/threads') && init?.method === 'POST') return new Response(JSON.stringify({ thread: { ...thread, agentId: null } }));
+    if (url.endsWith('/messages')) {
+      posts++;
+      if (failure === 'network') throw new Error('Connection lost');
+      if (failure === 'http500') return new Response('{}', { status: 500 });
+      return new Response(JSON.stringify({ type: 'delta', text: 'Unconfirmed words' }) + '\n');
+    }
+    if (url.endsWith(thread.id)) return new Response(JSON.stringify({ thread: { ...thread, agentId: null }, messages: [saved] }));
+    return new Response(JSON.stringify({ threads: [], nextCursor: null }));
+  }));
+  renderChat({ models });
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Do not duplicate' } });
+  const send = screen.getByRole('button', { name: 'Send' });
+  fireEvent.click(send); fireEvent.click(send);
+  const check = await screen.findByRole('button', { name: 'Check saved messages' });
+  expect(posts).toBe(1);
+  expect(screen.queryByRole('button', { name: 'Send draft again' })).toBeNull();
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+  if (failure === 'cutoff') expect(screen.getByText('Unconfirmed words')).toBeTruthy();
+  fireEvent.click(check);
+  await screen.findByText('Saved answer recovered');
+  expect(posts).toBe(1);
+});
+
+it('does not silently replace an unavailable saved model', async () => {
+ nav.path = '/workspace/c/' + thread.id;
+ vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(
+   url.endsWith('/capabilities') ? { capabilities: [] } : url.endsWith(thread.id)
+     ? { thread: { ...thread, agentId: null, modelKey: 'retired-model' }, messages: [] } : { threads: [thread], nextCursor: null }
+ ))));
+ renderChat({ models }, [thread]);
+ await screen.findByText('The saved assistant capability is unavailable. Choose an available capability before sending.');
+ fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Choose deliberately' } });
+ expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.click(screen.getByRole('button', { name: /^Assistant capability:/ }));
+ fireEvent.mouseDown(await screen.findByRole('option', { name: /TuGPT Assistant/ }));
+ expect(screen.queryByText('The saved assistant capability is unavailable. Choose an available capability before sending.')).toBeNull();
+ expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
 });

@@ -1,7 +1,7 @@
 import type { AgentCitation } from '@/lib/workspace/agent-events';
 import type { PendingApproval } from '@/lib/chat/approval';
 
-export interface PublicModel { key: string; label: string; description: string; private: boolean; toolCalling: boolean }
+export interface PublicModel { experience?: 'standard' | 'advanced' | 'fast'; available?: boolean; key: string; label: string; description: string; private: boolean; toolCalling: boolean }
 /** `folderId` is only known when the Workspace conversations API is available (null = not in a folder). */
 export interface Thread { id: string; title: string; modelKey: string; updatedAt: string; folderId?: string | null; agentId?: string | null }
 export interface Message {

@@ -39,7 +39,7 @@ export function ModelMenu({ models, value, disabled, onChange }: ModelMenuProps)
     setOpen(true);
     requestAnimationFrame(() => list.current?.focus());
   }
-  function pick(i: number) { const m = models[i]; if (m) onChange(m.key); close(true); }
+  function pick(i: number) { const m = models[i]; if (m && m.available !== false) onChange(m.key); close(true); }
   function onListKey(e: React.KeyboardEvent) {
     if (e.key === 'ArrowDown') { e.preventDefault(); setIndex((i) => (i + 1) % models.length); }
     else if (e.key === 'ArrowUp') { e.preventDefault(); setIndex((i) => (i - 1 + models.length) % models.length); }
@@ -56,7 +56,7 @@ export function ModelMenu({ models, value, disabled, onChange }: ModelMenuProps)
         aria-label={t('workspace.model.button', { model: current?.label ?? t('workspace.model.none') })}
         onClick={() => (open ? close(false) : show())}
         onKeyDown={(e) => { if (e.key === 'ArrowDown' || e.key === 'ArrowUp') { e.preventDefault(); show(); } }}>
-        {current?.private && <Icon name="lock" size={15} />}
+
         <span className={s.toolText}>{current?.label ?? t('workspace.model.none')}</span>
         <Icon name="chevronDown" size={15} />
       </button>
@@ -64,14 +64,14 @@ export function ModelMenu({ models, value, disabled, onChange }: ModelMenuProps)
         <ul ref={list} id={`${id}-list`} role="listbox" tabIndex={-1} aria-label={t('workspace.model.choose')}
           aria-activedescendant={`${id}-${index}`} className={`${s.popover} ${s.modelList}`} onKeyDown={onListKey}>
           {models.map((m, i) => (
-            <li key={m.key} id={`${id}-${i}`} role="option" aria-selected={m.key === value}
+            <li key={m.key} id={`${id}-${i}`} role="option" aria-selected={m.key === value} aria-disabled={m.available === false}
               className={`${s.modelOption} ${i === index ? s.modelActive : ''}`}
               onMouseEnter={() => setIndex(i)} onMouseDown={(e) => { e.preventDefault(); pick(i); }}>
               <span className={s.modelName}>{m.label}
-                {m.private ? <em className={s.badgePrivate}>{t('workspace.model.private')}</em> : <em className={s.badgeHosted}>{t('workspace.model.hosted')}</em>}
+                {m.available === false && <em>{t('workspace.capability.unavailable')}</em>}
                 {m.toolCalling && <em className={s.badgeTools}>{t('workspace.model.apps')}</em>}
               </span>
-              <span className={s.modelDesc}>{m.description}</span>
+
               {m.key === value && <span className={s.modelCheck}><Icon name="check" size={16} /></span>}
             </li>
           ))}

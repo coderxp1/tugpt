@@ -48,7 +48,7 @@ it('creates with agentId, consumes metadata and preserves approval/done', async 
 });
 it('does not send for an inaccessible agent or silently fall back', async () => {
   setup([], true);
-  await screen.findByText('This agent is unavailable. Choose another agent before sending.');
+  await screen.findByText('This agent is unavailable. Choose another agent before sending.', { selector: 'p' });
   fireEvent.submit(screen.getByLabelText('Message').closest('form')!);
   expect(calls.some((c) => c.method === 'POST')).toBe(false);
 });
@@ -90,16 +90,23 @@ it('restores authorized saved agent identity and citations with the release gate
 it.each([null])('restores explicit null binding as ordinary chat, not a URL-selected agent', async (agentId) => {
   nav.path = `/workspace/c/${tid}`; setup([], false, { agentId, messages: [message] });
   await screen.findByText('Answer from sources.');
-  expect(screen.getByRole('button', { name: /TuGPT Assistant/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Agent: TuGPT Assistant/ })).toBeTruthy();
   expect(calls.some((c) => c.url.startsWith('/api/v1/agents'))).toBe(false);
 });
 it('fails closed for lost agent access instead of falsely showing the built-in agent', async () => {
   nav.path = `/workspace/c/${tid}`; setup([], true, { agentId: agent.id, messages: [message] });
   await screen.findByRole('button', { name: /This agent is unavailable/ });
-  expect(screen.queryByRole('button', { name: /TuGPT Assistant/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Agent: TuGPT Assistant/ })).toBeNull();
 });
 it('drops malformed restored citations while preserving valid sources and flag', async () => {
   nav.path = `/workspace/c/${tid}`; setup([], false, { agentId: null, messages: [{ ...message, citations: [{}, citation], knowledgeUnavailable: true }] });
   await screen.findByText('Canonical source');
   expect(screen.getAllByText('Canonical source')).toHaveLength(1);
+});
+
+it('never displays the built-in identity while resolving a requested custom agent', async () => {
+  setup([]);
+  expect(screen.getByText('Agent: Loading agent…')).toBeTruthy();
+  expect(screen.queryByText('Agent: TuGPT Assistant')).toBeNull();
+  expect(await screen.findByText('Agent: Research agent')).toBeTruthy();
 });

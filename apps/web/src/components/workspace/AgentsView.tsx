@@ -1,7 +1,8 @@
 'use client';
 
+import { customerModels } from '@/lib/workspace/assistant-capabilities';
 import Link from 'next/link';
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useT } from '@/i18n/provider';
 import type { MessageKey } from '@/i18n/types';
 import type { PublicModel } from '@/components/chat/types';
@@ -43,7 +44,8 @@ function isBuilderAgent(value: unknown): value is CustomAgent {
     && Array.isArray(a.collectionIds) && a.collectionIds.every((v) => typeof v === 'string');
 }
 
-export function AgentsView({ models = [], role = 'viewer' }: AgentsViewProps) {
+export function AgentsView({ models: configured = [], role = 'viewer' }: AgentsViewProps) {
+  const models = useMemo(() => customerModels(configured), [configured]);
   const t = useT();
   const { agents: builtIn } = agentCatalogue();
   const { load, reload, update } = useLoad<{ agents: readonly CustomAgent[] }>('agents', () => agentsApi().listAgents(), (v) => hasArray(v, 'agents') && (v as { agents: unknown[] }).agents.every(isBuilderAgent));
@@ -184,7 +186,8 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
         <label className={u.field} htmlFor={`${id}-model`}><span>{t('workspace.agents.f.model')}</span>
           <select id={`${id}-model`} value={form.modelKey ?? ''} onChange={(e) => set('modelKey', e.target.value || null)}>
             <option value="">{t('workspace.agents.f.modelAny')}</option>
-            {models.map((m) => <option key={m.key} value={m.key}>{m.label}</option>)}
+            {form.modelKey && !models.some((m) => m.key === form.modelKey) && <option value={form.modelKey} disabled>{t('workspace.capability.unavailable')}</option>}
+            {models.map((m) => <option key={m.key} value={m.key} disabled={m.available === false}>{m.label}</option>)}
           </select></label>
 
         <fieldset className={u.choices}>

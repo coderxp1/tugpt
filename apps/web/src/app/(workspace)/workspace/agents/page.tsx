@@ -1,3 +1,4 @@
+import { customerModels } from '@/lib/workspace/assistant-capabilities';
 import { getSessionContext } from '@/lib/tenant/server';
 import type { Metadata } from 'next';
 import { configuredModels, publicModels } from '@/lib/chat/models';
@@ -12,5 +13,5 @@ export const metadata: Metadata = { title: 'Agents · TuGPT Workspace' };
 export default async function AgentsPage() {
   const session = await getSessionContext().catch(() => null);
   const role = session && !session.requestedTenantRejected ? session.tenant?.role : undefined;
-  return <AgentsView role={role} models={publicModels(configuredModels())} />;
+  return <AgentsView role={role} models={customerModels(publicModels(configuredModels()))} />;
 }

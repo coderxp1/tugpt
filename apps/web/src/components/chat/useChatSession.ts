@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { customerModels } from '@/lib/workspace/assistant-capabilities';
 import { usePathname, useSearchParams } from 'next/navigation';
 import type { Capability } from './MentionPicker';
 import type { ApprovalItem, Live, Message, PublicModel, RunResult, Thread } from './types';
@@ -59,7 +60,8 @@ export interface UploadItem {
   readonly message: string | null;
 }
 
-export function useChatSession(models: PublicModel[]) {
+export function useChatSession(configured: PublicModel[]) {
+  const models = useMemo(() => customerModels(configured), [configured]);
   const { add, touch, setBusy } = useThreads();
   const t = useT();
   const requestedAgent = useSearchParams()?.get('agent') ?? null;
@@ -87,6 +89,9 @@ export function useChatSession(models: PublicModel[]) {
   const [attached, setAttached] = useState<Capability[]>([]);
   const [picker, setPicker] = useState<{ open: boolean; query: string; index: number }>({ open: false, query: '', index: 0 });
   const [live, setLive] = useState<Live>(null);
+  const sending = useRef(false);
+  const [recovery, setRecovery] = useState<{ threadId: string; partial: string; original: string } | null>(null);
+  const [reconciling, setReconciling] = useState(false);
   const [error, setError] = useState<ChatProblem | null>(null);
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
   const pendingApprovals = useRef<PendingApproval[]>([]);
@@ -97,7 +102,7 @@ export function useChatSession(models: PublicModel[]) {
   const listId = useId();
   const activeRef = useRef<string | null>(activeId);
   useEffect(() => { activeRef.current = activeId; }, [activeId]);
-  const model = models.find((m) => m.key === modelKey) ?? null;
+  const model = models.find((m) => m.key === modelKey && m.available !== false) ?? null;
   const busy = live !== null;
   const fail = (text: string) => setError({ text, connect: false });
 
@@ -106,7 +111,7 @@ export function useChatSession(models: PublicModel[]) {
   if (routeThread !== seenRoute) {
     setSeenRoute(routeThread);
     if (routeThread !== activeId) {
-      setActiveId(routeThread); setTurnAgent(null); setToolsUnavailable(false); setMessages([]); setApprovals([]); setError(null);
+      setRecovery(null); setActiveId(routeThread); setTurnAgent(null); setToolsUnavailable(false); setMessages([]); setApprovals([]); setError(null);
       if (routeThread === null) { setAttached([]); setFiles([]); setFileNotice(null); setUploads([]); }
     }
   }
@@ -138,7 +143,7 @@ export function useChatSession(models: PublicModel[]) {
   const agentNotice = activeId && !binding ? t('workspace.agent.loading') : agentBlocked ? t(!agentsApiAvailable ? 'workspace.agent.unverified' : savedAgentBlocked || agentFailed === requestedAgent ? 'workspace.agent.unavailable' : 'workspace.agent.loading') : null;
   const agentLabel = activeId
     ? turnAgent?.name ?? binding?.name ?? (binding?.agentId === null ? undefined : binding?.unavailable ? t('workspace.agent.unavailable') : typeof binding?.agentId === 'string' ? t('workspace.agent.loading') : agentsApiAvailable ? t('workspace.agent.saved') : undefined)
-    : requestedAgent && selectedAgent?.id === requestedAgent ? selectedAgent.name : undefined;
+    : requestedAgent ? selectedAgent?.id === requestedAgent ? selectedAgent.name : t(agentFailed === requestedAgent ? 'workspace.agent.unavailable' : 'workspace.agent.loading') : undefined;
 
   // Load the selected chat. Not for a chat this view just started: its messages arrive by stream.
   useEffect(() => {
@@ -158,7 +163,7 @@ export function useChatSession(models: PublicModel[]) {
             ? { threadId: activeId, agentId, name: r.value.agent.name }
             : { threadId: activeId, agentId, unavailable: true });
         }
-        if (models.some((m) => m.key === d.thread.modelKey)) setModelKey(d.thread.modelKey);
+        setModelKey(d.thread.modelKey);
       })
       .catch(() => { if (current) setError({ text: 'This chat could not be opened.', connect: false }); });
     return () => { current = false; };
@@ -372,9 +377,25 @@ export function useChatSession(models: PublicModel[]) {
     } finally { finish(); }
   }
 
+  async function reconcile() {
+    if (!recovery || reconciling) return;
+    const id = recovery.threadId;
+    setReconciling(true);
+    try {
+      const d = await json<{ thread: Thread; messages: Message[] }>(await fetch(`/api/v1/chat/threads/${encodeURIComponent(id)}`, { cache: 'no-store' }));
+      if (activeRef.current !== id) return;
+      if (!Array.isArray(d.messages) || d.thread.id !== id) throw new Error('Invalid conversation');
+      setMessages(d.messages.map((m) => ({ ...m, citations: parseAgentCitations(m.citations), knowledgeUnavailable: m.knowledgeUnavailable === true })));
+      setRecovery(null); setError(null);
+    } catch { if (activeRef.current === id) fail(t('workspace.chat.recoveryFailed')); }
+    finally { setReconciling(false); }
+  }
+
   async function send() {
     const content = composeContent(draft, files);
-    if (!content || agentBlocked || busy || !model || content.length > MESSAGE_LIMIT || uploads.some((u) => u.status === 'uploading')) return;
+    if (!content || sending.current || recovery || agentBlocked || busy || !model || content.length > MESSAGE_LIMIT || uploads.some((u) => u.status === 'uploading')) return;
+    sending.current = true;
+    let partial = '';
     const typed = draft; const sentFiles = files;
     setError(null);
     let id = activeId;
@@ -387,7 +408,7 @@ export function useChatSession(models: PublicModel[]) {
         // Address follows the new chat without a navigation, so the answer below keeps streaming.
         window.history.replaceState(null, '', threadHref(id));
       }
-    } catch { fail('A new chat could not be started.'); return; }
+    } catch { sending.current = false; fail('A new chat could not be started.'); return; }
     void attachPending(id);
     const controller = begin();
     setDraft(''); setFiles([]); setFileNotice(null); setUploads((x) => x.filter((u) => u.status === 'failed'));
@@ -399,16 +420,20 @@ export function useChatSession(models: PublicModel[]) {
       });
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({})) as { error?: string };
-        setError(requestProblem(body.error)); setDraft(typed); setFiles(sentFiles); return;
+        setError(requestProblem(body.error));
+        if (res.status >= 500 || res.ok) setRecovery({ threadId: id, partial, original: content });
+        else { setDraft(typed); setFiles(sentFiles); }
+        return;
       }
-      const summary = await readTurnStream(res.body, (ev) => { if (!controller.signal.aborted) handleEvent(ev); });
+      const summary = await readTurnStream(res.body, (ev) => { if (!controller.signal.aborted) { if (ev.type === 'delta') partial += ev.text ?? ''; handleEvent(ev); } });
       // A stream that ends without done/error was cut off; never present it as a finished answer.
-      if (summary.terminal === null && !controller.signal.aborted) fail(turnProblem('INTERRUPTED'));
+      if (summary.terminal === null || controller.signal.aborted) { setRecovery({ threadId: id, partial, original: content }); fail(turnProblem('INTERRUPTED')); }
       setAttached([]);
       touch(id, typed.trim() || sentFiles[0]?.name || content);
-    } catch (e) {
-      if (!controller.signal.aborted) { fail(e instanceof Error && e.message ? e.message : 'The message could not be sent.'); setDraft(typed); setFiles(sentFiles); }
-    } finally { finish(); }
+    } catch {
+      setRecovery({ threadId: id, partial, original: content });
+      if (!controller.signal.aborted) fail('The response was interrupted. Check saved messages before sending again.');
+    } finally { sending.current = false; finish(); }
   }
 
   const showPicker = picker.open && capabilities !== null;
@@ -417,7 +442,7 @@ export function useChatSession(models: PublicModel[]) {
   const length = composeContent(draft, files).length;
 
   return {
-    agentBlocked, agentNotice, agentLabel, toolsUnavailable,
+    recovery, reconcile, reconciling, agentBlocked, agentNotice, agentLabel, toolsUnavailable,
     activeId, messages, approvals, live, error, busy, models, model, modelKey, setModelKey,
     draft, setDraft, attached, matches, picker, showPicker, activeOption, listId, input, log,
     files, fileNotice, length, overLimit: length > MESSAGE_LIMIT,

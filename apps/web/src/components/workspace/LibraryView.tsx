@@ -6,6 +6,7 @@ import { useT } from '@/i18n/provider';
 import { normalize } from '@/lib/workspace/group-threads';
 import { STARTERS } from '@/lib/workspace/starters';
 import { starterHref } from '@/lib/workspace/routes';
+import { FileManager } from './FileManager';
 import { Collections } from './Collections';
 import { Icon } from './icons';
 import s from './pages.module.css';
@@ -16,6 +17,7 @@ type Load = { state: 'loading' } | { state: 'ready'; entries: KnowledgeEntry[] }
 export interface LibraryViewProps {
   /** Owner or admin: may manage knowledge in the Dashboard (the API checks the role again). */
   readonly canManage: boolean;
+  readonly role?: string;
 }
 
 /**
@@ -23,7 +25,7 @@ export interface LibraryViewProps {
  * active organization, members read) and TuGPT's starter prompts. Editing knowledge stays in the
  * Dashboard, which is the administration surface.
  */
-export function LibraryView({ canManage }: LibraryViewProps) {
+export function LibraryView({ canManage, role }: LibraryViewProps) {
   const t = useT();
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [query, setQuery] = useState('');
@@ -59,6 +61,7 @@ export function LibraryView({ canManage }: LibraryViewProps) {
         </header>
 
         <Collections />
+        <FileManager role={role} />
 
         <section className={s.section} aria-labelledby="lib-starters">
           <div className={s.sectionHead}><h2 id="lib-starters">{t('workspace.library.starters')}</h2><p>{t('workspace.library.startersNote')}</p></div>

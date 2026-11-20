@@ -1,3 +1,4 @@
+import { customerModels } from '@/lib/workspace/assistant-capabilities';
 /**
  * The chat lives in this layout, not in the pages, so it stays mounted while the address moves
  * between /workspace (new chat) and /workspace/c/<id> (an open chat): starting a chat, opening one
@@ -14,7 +15,7 @@ export default async function ChatLayout({ children }: Readonly<{ children: Reac
   const session = await getSessionContext().catch(() => null);
   return (
     <>
-      <ChatView models={publicModels(configuredModels())} canApprove={canApproveMcpCalls(session)} firstName={firstName(session?.fullName)} />
+      <ChatView models={customerModels(publicModels(configuredModels()))} canApprove={canApproveMcpCalls(session)} firstName={firstName(session?.fullName)} />
       {children}
     </>
   );
