@@ -25,7 +25,13 @@ export async function POST(request: Request, { params }: Params) {
   } catch (e) { return toErrorResponse(e); }
 }
 
-/** Removes the document and its chunks/embeddings from the collection; the file stays. */
+/**
+ * Removes the document and its chunks/embeddings from the collection; the file stays.
+ *   200 {deleted: true}
+ *   403 FORBIDDEN   the caller can read this collection but may not change it (nothing removed)
+ *   404 NOT_FOUND   no such document here (already removed, never added, or not visible to the caller):
+ *                   a retry of a remove that already succeeded lands here
+ */
 export async function DELETE(request: Request, { params }: Params) {
   const { collectionId, documentId } = await params;
   if (!isUuid(collectionId) || !isUuid(documentId)) return errorResponse(404, 'NOT_FOUND');
