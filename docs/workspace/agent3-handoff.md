@@ -53,6 +53,8 @@ chars, collections ≤ 10. `version` does not bump on links-only saves.
   omitted (not redacted); user/tool messages always have `[]`/`false`. The
   plain list and `POST` include `agentId`; the search/paged list does not yet.
   Restoring this into the UI and validating it is Agent 3's task.
+  Q-9b (migration 20261120100011): the database now rejects `[{}]` and every
+  other malformed citation shape; the API contract is unchanged.
 
 ## Stream events (NDJSON, one object per line, `type` field)
 

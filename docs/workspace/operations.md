@@ -2,7 +2,7 @@
 
 Scope: what an operator must configure or know to run the workspace features
 (chat threads, library, custom agents) safely. Values verified on a fresh
-database built from the 113 committed migrations (latest `20261120100010`).
+database built from the 114 committed migrations (latest `20261120100011`).
 
 ## 1. Deploy order
 
@@ -15,6 +15,15 @@ database built from the 113 committed migrations (latest `20261120100010`).
    fail (status code not separately verified). 100010 is additive (two
    NOT NULL columns with constant defaults, two CHECKs), so it is safe to apply
    while the old app runs.
+   100011 (Q-9b) replaces the citation validator and re-validates every
+   `chat_messages` row: it holds an ACCESS EXCLUSIVE lock on `chat_messages`
+   for one full scan, and it **aborts and rolls back** if any stored row has
+   malformed citations (error `check constraint "chat_messages_citations_valid"
+   ... is violated by some row`). Nothing is repaired automatically. Apply 100010
+   and 100011 together; if 100010 was ever live on its own, look for rows with
+   `NOT private.valid_message_citations(citations)` before applying 100011 and
+   decide on them explicitly (they can only be a user's own assistant rows). The
+   app needs no change for 100011.
 2. Deploy web and worker together; the worker writes chunks the web reads.
 3. Migrations are frozen once committed; checksums live in
    `supabase/migrations/checksums.json`.

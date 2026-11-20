@@ -111,5 +111,6 @@
   "20261120100007_workspace_conversation_cursor.sql": "fab72fa01648000c9b8bf56598284d2022e6a42641b6a910e44420feaecb6ad2",
   "20261120100008_workspace_agent_save.sql": "e5cf39853dae6363b18acbb51dfaed0dbc8fce4bc177a95fdc2338a2b90a94db",
   "20261120100009_workspace_agent_owner_edit.sql": "0c11296cb370ff4b33acb56a0d457fdd4c86fc8581967d54704589fe2f9239dd",
-  "20261120100010_workspace_message_citations.sql": "5255b0c6b854fac11e5918c6f00a0e637c28732b9a489ca46d980148f7817c32"
+  "20261120100010_workspace_message_citations.sql": "5255b0c6b854fac11e5918c6f00a0e637c28732b9a489ca46d980148f7817c32",
+  "20261120100011_workspace_message_citations_strict.sql": "eabe3931244aa5f1cd6331d34dfbe5942ad57c67f1208eefe18fa86c4bebdcec"
 }
