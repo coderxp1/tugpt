@@ -171,3 +171,48 @@ them, although the refused tool step stays in the history. The runtime claims
 the approval before it executes, so a call that then fails (for example, the
 proxy is down) still uses up the approval.
 
+
+## Model text is not a tool result
+
+Only results produced by the server's own tool execution (`tool_result`
+events) count as tool results. Anything that appears in the model's text and
+looks like a tool call, a tool result or another chat turn is removed on the
+server before it is streamed or stored. The UI does not do this filtering.
+
+Root cause found on the private serving (`tugpt-scout`, Ollama, `llama4:scout`
+template); the evidence is in the takeover notes:
+
+- The template does not close the last message with `<|eot|>`. After a tool
+  result the model continues the pattern: it invents result JSON, writes an
+  `assistant` header and further turns, and calls tools as plain text.
+- With tools offered, the template drops `role: system` messages, so the
+  untrusted-data and approval rules in TuGPT's system prompt are lost on tool
+  turns.
+- Tool content is inserted unescaped into `{"response": "..."}`.
+- Request `stop` values (`<|eot|>`, `<|header_start|>`) did not stop it
+  (2 of 3 runs still ran on).
+
+What the server does (`lib/chat/model-text.ts`, `lib/chat/turn.ts`):
+
+1. Plain chat streams through `TurnBoundaryFilter`: the answer ends at the first
+   leaked turn header (`assistant`, `user`, `ipython` followed by a blank
+   line). The upstream stream is then cancelled.
+2. Answers in tool turns are buffered, then cleaned by `cleanToolTurnText`. It
+   cuts at a turn boundary and removes text-form calls of offered tools,
+   including unfinished ones. If no tool succeeded, it also removes any JSON
+   that looks like a result.
+3. If any call in a turn returns `APPROVAL_REQUIRED`, there is no further tool
+   round, because the model then tends to call the same tool again. If nothing
+   succeeded, the model is not asked at all. The answer is the fixed text
+   `APPROVAL_PENDING_ANSWER` ("Nothing has run yet. ..."). If some calls ran,
+   the model summarizes those results and the server appends the same
+   sentence.
+4. If cleaning leaves nothing, the answer is a fixed text instead:
+   `RESULT_WITHOUT_SUMMARY_ANSWER` if a tool ran, otherwise
+   `NO_TOOL_RESULT_ANSWER`.
+5. The follow-up after **Run now** is cleaned the same way.
+
+Fixed texts are English only. A corrected serving template (with `<|eot|>`
+after every message, the system prompt kept when tools are offered, and
+escaped tool content) is proposed but not applied. The private model is shared
+infrastructure.
