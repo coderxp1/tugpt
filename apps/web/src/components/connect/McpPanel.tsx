@@ -194,7 +194,7 @@ export function McpPanel({ canManage, routes, enabled, fetcher }: McpPanelProps)
           <GapNote gap={BACKEND_GAPS.MCP_STATE}>After a reload TuGPT cannot tell which tool list was last reviewed, so the review starts again from Discover tools.</GapNote>
         </>
       )}
-      <GapNote gap={BACKEND_GAPS.MCP_RUNTIME}>Active MCP servers appear in the Chat <kbd>@</kbd> menu as &ldquo;Not available in chat yet&rdquo; until MCP calls can be audited. Chat does not call them before then.</GapNote>
+      <GapNote gap={BACKEND_GAPS.MCP_RUNTIME}>Approved tools from an active MCP server can be used in Chat with <kbd>@</kbd> once your administrator switches on MCP in Chat. Every call is recorded in your organization&rsquo;s audit log. While it is switched off, the <kbd>@</kbd> menu shows these tools as &ldquo;Not available in chat yet&rdquo; with the reason.</GapNote>
       {deleting && (
         <ConfirmDialog
           title={`Remove ${deleting.displayName}?`}

@@ -150,6 +150,27 @@ function api(handler: Handler) {
 const EP = { id: 'e1', url: 'https://mcp.example.com/sse', displayName: 'Docs', status: 'pending' };
 const ACTIVE = { id: 'e2', url: 'https://kb.example.com/mcp', displayName: 'Knowledge base', status: 'active' };
 
+describe('Connect page copy matches what Chat can do (MCP in chat, per-call approval)', () => {
+  it('does not claim Chat never calls MCP tools; explains the switch and the audit instead', () => {
+    const f = vi.fn().mockResolvedValue(new Response(JSON.stringify({ endpoints: [] }), { status: 200 }));
+    const { container } = render(<McpPanel canManage routes={all('available')} enabled={false} fetcher={f as unknown as typeof fetch} />);
+    const text = container.textContent ?? '';
+    expect(text).not.toMatch(/Chat does not call them/);
+    expect(text).not.toMatch(/until MCP calls can be audited/);
+    expect(text).toMatch(/approved tools .* can be used in Chat/i);
+    expect(text).toMatch(/administrator/i);
+    expect(text).toMatch(/audit log/i);
+  });
+  it('per-call approval note points to the approval card in Chat, not to a missing screen', () => {
+    const { container } = render(<McpToolReview tools={TOOLS} approved={false} onApprove={vi.fn()} />);
+    fireEvent.change(screen.getByLabelText('Permission level for refund'), { target: { value: 'write' } });
+    const text = container.textContent ?? '';
+    expect(text).not.toMatch(/no screen for that approval/);
+    expect(text).not.toMatch(/service-role client/);
+    expect(text).toMatch(/approval card in Chat/);
+  });
+});
+
 describe('McpPanel', () => {
   it('members see a message and the list is never requested', () => {
     const f = api(() => json({ endpoints: [] }));
