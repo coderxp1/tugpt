@@ -8,11 +8,15 @@ export const FRIENDLY_INVITATION_CODES = new Set([
   'INVITATION_NOT_FOUND', 'INVITATION_ALREADY_PENDING', 'INVITATION_NOT_PENDING', 'INVITATION_EXPIRED',
   'INVITATION_WRONG_ACCOUNT', 'ALREADY_A_MEMBER', 'ROLE_ABOVE_YOUR_OWN', 'INVALID_EMAIL', 'VERIFIED_EMAIL_REQUIRED',
 ]);
+import { createTranslator } from '@/i18n';
+import type { Translator } from '@/i18n/types';
+
+const EN = createTranslator('en');
 export const GENERIC_ERROR = 'Something went wrong. Please try again.';
 
 export type InvitationError = { status: number; code: string | null; message: string };
 
-export async function readInvitationError(res: Response): Promise<InvitationError> {
+export async function readInvitationError(res: Response, t: Translator = EN): Promise<InvitationError> {
   let code: string | null = null;
   let serverMessage: string | null = null;
   try {
@@ -20,14 +24,16 @@ export async function readInvitationError(res: Response): Promise<InvitationErro
     if (typeof body.error?.code === 'string') code = body.error.code;
     if (typeof body.error?.message === 'string') serverMessage = body.error.message;
   } catch { /* non-JSON body */ }
-  return { status: res.status, code, message: invitationErrorText(res.status, code, serverMessage) };
+  return { status: res.status, code, message: invitationErrorText(res.status, code, serverMessage, t) };
 }
 
-export function invitationErrorText(status: number, code: string | null, serverMessage: string | null): string {
-  if (code && FRIENDLY_INVITATION_CODES.has(code) && serverMessage) return serverMessage;
-  if (status === 401) return 'Your session has ended. Sign in again to continue.';
-  if (status === 403) return 'Only owners and administrators can manage invitations.';
-  if (status === 429) return 'Too many requests. Wait a moment and try again.';
-  if (status === 400 && serverMessage) return serverMessage;
-  return GENERIC_ERROR;
+export function invitationErrorText(status: number, code: string | null, serverMessage: string | null, t: Translator = EN): string {
+  // Known codes have a sentence in both dictionaries; the server's English sentence is the fallback.
+  if (code && FRIENDLY_INVITATION_CODES.has(code) && serverMessage) return t.maybe(`errors.${code}`, serverMessage);
+  if (status === 401) return t('team.err.401');
+  if (status === 403) return t('team.err.403');
+  if (status === 429) return t('team.err.429');
+  // 400 without a known code: the server's text is English and may be technical; say what to check instead.
+  if (status === 400 && serverMessage) return t.locale === 'en' ? serverMessage : t('team.err.badRequest');
+  return t('team.err.generic');
 }

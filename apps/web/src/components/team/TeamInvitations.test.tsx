@@ -2,6 +2,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
+import { I18nProvider } from '@/i18n/provider';
 import { TeamInvitations, effectiveStatus, invitableRoles, inviteLink } from './TeamInvitations';
 
 const future = new Date(Date.now() + 7 * 864e5).toISOString();
@@ -71,9 +72,9 @@ describe('TeamInvitations', () => {
     fetchMock.mockResolvedValueOnce(json({ invitations: [] }));
     render(<TeamInvitations role="owner" organizationName="Acme" />);
     await screen.findByText(/No invitations yet/);
-    await userEvent.type(screen.getByLabelText('E-mail address'), 'not-an-email');
+    await userEvent.type(screen.getByLabelText('Email address'), 'not-an-email');
     await userEvent.click(screen.getByRole('button', { name: 'Create invitation' }));
-    expect(screen.getByRole('alert').textContent).toBe('Enter a valid e-mail address.');
+    expect(screen.getByRole('alert').textContent).toBe('Enter a valid email address.');
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
@@ -84,7 +85,7 @@ describe('TeamInvitations', () => {
       .mockResolvedValueOnce(json({ invitations: [INV[0]] }));
     render(<TeamInvitations role="owner" organizationName="Acme" />);
     await screen.findByText(/No invitations yet/);
-    await userEvent.type(screen.getByLabelText('E-mail address'), ' new@example.com ');
+    await userEvent.type(screen.getByLabelText('Email address'), ' new@example.com ');
     await userEvent.selectOptions(screen.getByLabelText('Role'), 'manager');
     await userEvent.click(screen.getByRole('button', { name: 'Create invitation' }));
     const link = (await screen.findByLabelText('Invitation link')) as HTMLInputElement;
@@ -103,7 +104,7 @@ describe('TeamInvitations', () => {
       .mockResolvedValueOnce(json({ error: { code: 'INVITATION_ALREADY_PENDING', message: 'This address already has a pending invitation. Revoke it before sending another.' } }, 409));
     render(<TeamInvitations role="owner" organizationName="Acme" />);
     await screen.findByText(/No invitations yet/);
-    await userEvent.type(screen.getByLabelText('E-mail address'), 'dup@example.com');
+    await userEvent.type(screen.getByLabelText('Email address'), 'dup@example.com');
     await userEvent.click(screen.getByRole('button', { name: 'Create invitation' }));
     expect((await screen.findByRole('alert')).textContent).toContain('already has a pending invitation');
   });
@@ -122,5 +123,30 @@ describe('TeamInvitations', () => {
     expect(init.body).toBe('{}');
     expect(await screen.findByText(/was revoked. The link no longer works/)).toBeTruthy();
     await waitFor(() => expect(within(screen.getByRole('table')).getByText('Revoked')).toBeTruthy());
+  });
+
+  it('never leaves an empty Action cell (mobile cards label every cell)', async () => {
+    fetchMock.mockResolvedValueOnce(json({ invitations: INV }));
+    render(<TeamInvitations role="owner" organizationName="Acme" />);
+    const table = await screen.findByRole('table');
+    for (const td of table.querySelectorAll('td')) {
+      expect(td.getAttribute('data-label')).toBeTruthy();
+      expect(td.textContent?.trim()).toBeTruthy();
+    }
+    expect(within(table).getAllByText('None')).toHaveLength(2);
+  });
+
+  it('renders fully in Spanish, including server error codes', async () => {
+    fetchMock.mockResolvedValueOnce(json({ invitations: INV }));
+    fetchMock.mockResolvedValueOnce(json({ error: { code: 'INVITATION_ALREADY_PENDING', message: 'That address already has a pending invitation.' } }, 409));
+    render(<I18nProvider locale="es"><TeamInvitations role="owner" organizationName="Acme" /></I18nProvider>);
+    const table = await screen.findByRole('table');
+    expect(within(table).getByText('Miembro')).toBeTruthy();
+    expect(within(table).getByText('Vencida')).toBeTruthy();
+    expect(within(table).getByText('Aceptada')).toBeTruthy();
+    await userEvent.type(screen.getByLabelText('Correo electrónico'), 'dup@example.com');
+    await userEvent.click(screen.getByRole('button', { name: 'Crear invitación' }));
+    expect((await screen.findByRole('alert')).textContent).toContain('ya tiene una invitación pendiente');
+    expect(screen.queryByText(/Invite a colleague|Invite colleagues|Pending|Expired|Revoke|Email address|Sent invitations/)).toBeNull();
   });
 });

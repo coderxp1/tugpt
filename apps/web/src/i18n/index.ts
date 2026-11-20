@@ -27,6 +27,19 @@ export type { Dictionary, Locale, MessageKey, TranslationParams, Translator };
 export { ORGANIZATION_LOCALES as SUPPORTED_LOCALES };
 export const DEFAULT_LOCALE: Locale = 'en';
 
+/** Cookie holding a person's chosen Dashboard language (not a secret; readable by the page). */
+export const LOCALE_COOKIE = 'tugpt_locale';
+
+/** A stored preference is used only when it is exactly a supported locale; anything else is English. */
+export function parseLocalePreference(v: string | undefined | null): Locale {
+  return (ORGANIZATION_LOCALES as readonly string[]).includes(v ?? '') ? (v as Locale) : DEFAULT_LOCALE;
+}
+
+/** Client-side: remember the choice for a year, for this site only. */
+export function localeCookie(locale: Locale): string {
+  return `${LOCALE_COOKIE}=${locale}; Path=/; Max-Age=31536000; SameSite=Lax; Secure`;
+}
+
 /**
  * Both dictionaries, eagerly. Together they are a few kilobytes; a dynamic
  * import would buy nothing and would make `getDictionary` async, which would
@@ -103,5 +116,5 @@ export function formatDateTime(value: string, locale: Locale): string {
 export function formatDate(value: string, locale: Locale): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value;
-  return parsed.toLocaleDateString(FORMATTING_LOCALES[locale], { year: 'numeric', month: 'short', day: 'numeric' });
+  return parsed.toLocaleDateString(FORMATTING_LOCALES[locale], { year: 'numeric', month: 'short', day: 'numeric', timeZone: 'UTC' });
 }

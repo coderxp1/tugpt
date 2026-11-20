@@ -16,17 +16,22 @@
 import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
 import { EmailText } from './EmailText';
 import s from '@/components/connect/connect.module.css';
-import { GENERIC_ERROR as GENERIC, readInvitationError } from '@/lib/team/invitation-errors';
+import { readInvitationError } from '@/lib/team/invitation-errors';
+import { useT } from '@/i18n/provider';
+import { formatDate as fmtDate } from '@/i18n';
+import type { Translator } from '@/i18n/types';
+import { canManageOrg, roleLabel } from '@/lib/team/roles';
 
 export type Invitation = { id: string; email: string; role: string; status: string; expires_at: string; created_at: string };
 type Created = { invitation_id: string; token: string; email: string; role: string; expires_at: string };
 
+/** English role names, for callers without a translator. Prefer roleLabel(role, t). */
 export const ROLE_LABEL: Record<string, string> = { owner: 'Owner', admin: 'Administrator', manager: 'Manager', agent: 'Member', viewer: 'Viewer' };
-const STATUS_LABEL: Record<string, string> = { pending: 'Pending', accepted: 'Accepted', revoked: 'Revoked', expired: 'Expired' };
+const STATUSES = new Set(['pending', 'accepted', 'revoked', 'expired']);
 const JSON_HEADERS = { 'Content-Type': 'application/json', 'x-tugpt-csrf': '1' };
 
 export function canManageInvitations(role: string | null | undefined): boolean {
-  return role === 'owner' || role === 'admin';
+  return canManageOrg(role);
 }
 
 /** Roles the current user may offer. Only owners may create other owners. */
@@ -47,30 +52,29 @@ export function effectiveStatus(inv: Pick<Invitation, 'status' | 'expires_at'>, 
 
 const EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-async function errorText(res: Response): Promise<string> {
-  return (await readInvitationError(res)).message;
+async function errorText(res: Response, t: Translator): Promise<string> {
+  return (await readInvitationError(res, t)).message;
 }
 
 type LoadResult = { items: Invitation[] } | { error: string };
 
-async function fetchInvitations(): Promise<LoadResult> {
+async function fetchInvitations(t: Translator): Promise<LoadResult> {
   try {
     const res = await fetch('/api/v1/invitations', { cache: 'no-store' });
-    if (!res.ok) return { error: await errorText(res) };
+    if (!res.ok) return { error: await errorText(res, t) };
     const body = (await res.json()) as { invitations?: Invitation[] };
     return { items: body.invitations ?? [] };
   } catch {
-    return { error: 'Invitations could not be loaded. Check your connection and try again.' };
+    return { error: t('team.inv.loadFailed') };
   }
 }
 
-function formatDate(iso: string): string {
-  const d = new Date(iso);
-  return Number.isNaN(d.getTime()) ? '—' : d.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' });
-}
 
 export function TeamInvitations({ role, organizationName }: { role: string | null; organizationName: string | null }) {
+  const t = useT();
   const manage = canManageInvitations(role);
+  const org = organizationName ?? t('team.thisOrg');
+  const formatDate = (iso: string) => (Number.isNaN(Date.parse(iso)) ? '—' : fmtDate(iso, t.locale));
   const ids = { email: useId(), role: useId(), link: useId(), status: useId() };
   const [items, setItems] = useState<Invitation[] | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
@@ -92,30 +96,30 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
   const apply = useCallback((r: LoadResult) => {
     if ('items' in r) { setLoadError(null); setItems(r.items); } else { setLoadError(r.error); }
   }, []);
-  const load = useCallback(async () => { apply(await fetchInvitations()); }, [apply]);
+  const load = useCallback(async () => { apply(await fetchInvitations(t)); }, [apply, t]);
 
   // Same pattern as McpPanel: fetch purely, apply in .then, ignore results after unmount.
   useEffect(() => {
     if (!manage) return;
     let live = true;
-    void fetchInvitations().then((r) => { if (live) apply(r); });
+    void fetchInvitations(t).then((r) => { if (live) apply(r); });
     return () => { live = false; };
-  }, [manage, apply]);
+  }, [manage, apply, t]);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
     setFormError(null); setNotice(null); setCreated(null); setCopied('idle');
     const value = email.trim();
-    if (!EMAIL.test(value)) { setFormError('Enter a valid e-mail address.'); return; }
+    if (!EMAIL.test(value)) { setFormError(t('team.inv.invalidEmail')); return; }
     setBusy(true);
     try {
       const res = await fetch('/api/v1/invitations', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ email: value, role: newRole }) });
-      if (!res.ok) { setFormError(await errorText(res)); return; }
+      if (!res.ok) { setFormError(await errorText(res, t)); return; }
       const body = (await res.json()) as { invitation: Created };
       setCreated(body.invitation);
       setEmail('');
       await load();
-    } catch { setFormError(GENERIC); } finally { setBusy(false); }
+    } catch { setFormError(t('team.err.generic')); } finally { setBusy(false); }
   }
 
   async function copy(link: string) {
@@ -127,19 +131,19 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
     setRowError(null); setNotice(null); setBusy(true);
     try {
       const res = await fetch(`/api/v1/invitations/${encodeURIComponent(inv.id)}/revoke`, { method: 'POST', headers: JSON_HEADERS, body: '{}' });
-      if (!res.ok) { setRowError(await errorText(res)); return; }
+      if (!res.ok) { setRowError(await errorText(res, t)); return; }
       setConfirmId(null);
       if (created?.invitation_id === inv.id) setCreated(null);
-      setNotice(`Invitation for ${inv.email} was revoked. The link no longer works.`);
+      setNotice(t('team.inv.revoked', { email: inv.email }));
       await load();
-    } catch { setRowError(GENERIC); } finally { setBusy(false); }
+    } catch { setRowError(t('team.err.generic')); } finally { setBusy(false); }
   }
 
   if (!manage) {
     return (
       <section className={s.card} aria-labelledby="team-h" id="team">
-        <h2 id="team-h">Invitations</h2>
-        <p className={s.next}>Owners and administrators of {organizationName ?? 'this organization'} can invite colleagues. Ask one of them to send you or your colleague an invitation link.</p>
+        <h2 id="team-h">{t('team.inv.titleMember')}</h2>
+        <p className={s.next}>{t('team.inv.memberBody', { org })}</p>
       </section>
     );
   }
@@ -148,75 +152,76 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
 
   return (
     <section className={s.card} aria-labelledby="team-h" id="team">
-      <h2 id="team-h">Invite colleagues</h2>
-      <p className={s.next}>Invite a colleague to {organizationName ?? 'this organization'}. TuGPT creates a one-time link; you send it to them yourself. They must sign in with the same e-mail address to join.</p>
+      <h2 id="team-h">{t('team.inv.title')}</h2>
+      <p className={s.next}>{t('team.inv.lead', { org })}</p>
 
       <form className={s.form} onSubmit={submit} noValidate aria-describedby={formError ? ids.status : undefined}>
         <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', alignItems: 'flex-end' }}>
           <label htmlFor={ids.email} style={{ display: 'grid', gap: '0.25rem', flex: '1 1 16rem' }}>
-            <span>E-mail address</span>
+            <span>{t('team.inv.email')}</span>
             <input id={ids.email} type="email" autoComplete="off" inputMode="email" maxLength={320} required value={email}
               onChange={(e) => setEmail(e.target.value)} aria-invalid={formError ? true : undefined}
               style={{ border: '1px solid #a1a1aa', borderRadius: 6, padding: '0.5rem 0.625rem', minHeight: 44 }} />
           </label>
           <label htmlFor={ids.role} style={{ display: 'grid', gap: '0.25rem', flex: '0 1 12rem' }}>
-            <span>Role</span>
+            <span>{t('team.inv.role')}</span>
             <select id={ids.role} value={newRole} onChange={(e) => setNewRole(e.target.value)}
               style={{ border: '1px solid #a1a1aa', borderRadius: 6, padding: '0.5rem', minHeight: 44 }}>
-              {invitableRoles(role).map((r) => <option key={r} value={r}>{ROLE_LABEL[r]}</option>)}
+              {invitableRoles(role).map((r) => <option key={r} value={r}>{roleLabel(r, t)}</option>)}
             </select>
           </label>
-          <button type="submit" className={s.primary} disabled={busy} style={{ minHeight: 44 }}>{busy ? 'Working…' : 'Create invitation'}</button>
+          <button type="submit" className={s.primary} disabled={busy} style={{ minHeight: 44 }}>{busy ? t('team.inv.working') : t('team.inv.create')}</button>
         </div>
         {formError && <p id={ids.status} role="alert" className={s.error}>{formError}</p>}
       </form>
 
       {created && (
         <div className={s.bannerOk} role="status" ref={createdRef} tabIndex={-1} style={{ marginTop: '1rem' }}>
-          <p><strong>Invitation created for <EmailText value={created.email} /></strong> as {ROLE_LABEL[created.role] ?? created.role}. Valid until {formatDate(created.expires_at)}.</p>
-          <p>Copy this link now and send it to them. For security it is shown only once.</p>
+          <p><strong>{t('team.inv.created', { email: created.email, role: roleLabel(created.role, t), date: formatDate(created.expires_at) })}</strong></p>
+          <p>{t('team.inv.copyNow')}</p>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
-            <label htmlFor={ids.link} className={s.sr}>Invitation link</label>
+            <label htmlFor={ids.link} className={s.sr}>{t('team.inv.linkLabel')}</label>
             <input id={ids.link} readOnly value={link} onFocus={(e) => e.currentTarget.select()}
               style={{ flex: '1 1 20rem', minWidth: 0, fontFamily: 'ui-monospace, monospace', fontSize: '0.85rem', border: '1px solid #a1a1aa', borderRadius: 6, padding: '0.5rem', minHeight: 44 }} />
-            <button type="button" className={s.secondary} onClick={() => copy(link)} style={{ minHeight: 44 }}>Copy link</button>
+            <button type="button" className={s.secondary} onClick={() => copy(link)} style={{ minHeight: 44 }}>{t('team.inv.copy')}</button>
           </div>
-          <p aria-live="polite">{copied === 'copied' ? 'Link copied.' : copied === 'manual' ? 'Copying is blocked by your browser. The link is selected; press Ctrl+C or ⌘C.' : ''}</p>
+          <p aria-live="polite">{copied === 'copied' ? t('team.inv.copied') : copied === 'manual' ? t('team.inv.copyBlocked') : ''}</p>
         </div>
       )}
 
       {notice && <p className={s.bannerOk} role="status" ref={noticeRef} tabIndex={-1} style={{ marginTop: '1rem' }}>{notice}</p>}
 
-      <h3 style={{ marginTop: '1.5rem' }}>Sent invitations</h3>
+      <h3 style={{ marginTop: '1.5rem' }}>{t('team.inv.sent')}</h3>
       {loadError ? (
-        <div role="alert" className={s.bannerError}><p>{loadError}</p><button type="button" className={s.secondary} onClick={() => { setLoadError(null); setItems(null); void load(); }}>Try again</button></div>
+        <div role="alert" className={s.bannerError}><p>{loadError}</p><button type="button" className={s.secondary} onClick={() => { setLoadError(null); setItems(null); void load(); }}>{t('team.inv.retry')}</button></div>
       ) : items === null ? (
-        <p aria-busy="true">Loading invitations…</p>
+        <p aria-busy="true">{t('team.inv.loading')}</p>
       ) : items.length === 0 ? (
-        <p className={s.muted}>No invitations yet. Invite your first colleague above.</p>
+        <p className={s.muted}>{t('team.inv.empty')}</p>
       ) : (
         <div className={s.tableWrap}>
           <table className={`${s.table} ${s.stack}`}>
-            <caption className={s.sr}>Invitations for {organizationName ?? 'this organization'}</caption>
-            <thead><tr><th scope="col">E-mail</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Expires</th><th scope="col"><span className={s.sr}>Actions</span></th></tr></thead>
+            <caption className={s.sr}>{t('team.inv.caption', { org })}</caption>
+            <thead><tr><th scope="col">{t('team.col.email')}</th><th scope="col">{t('team.col.role')}</th><th scope="col">{t('team.col.status')}</th><th scope="col">{t('team.col.expires')}</th><th scope="col">{t('team.col.action')}</th></tr></thead>
             <tbody>
               {items.map((inv) => {
                 const st = effectiveStatus(inv);
                 return (
                   <tr key={inv.id}>
-                    <td data-label="E-mail"><EmailText value={inv.email} /></td>
-                    <td data-label="Role">{ROLE_LABEL[inv.role] ?? inv.role}</td>
-                    <td data-label="Status"><span className={`${s.badge} ${st === 'pending' ? s.idle : s.off}`}>{STATUS_LABEL[st] ?? st}</span></td>
-                    <td data-label="Expires" className={s.nowrap}>{st === 'pending' ? formatDate(inv.expires_at) : '—'}</td>
-                    <td data-label="Action">
+                    <td data-label={t('team.col.email')}><EmailText value={inv.email} /></td>
+                    <td data-label={t('team.col.role')}>{roleLabel(inv.role, t)}</td>
+                    <td data-label={t('team.col.status')}><span className={`${s.badge} ${st === 'pending' ? s.idle : s.off}`}>{STATUSES.has(st) ? t(`team.inv.status.${st as 'pending'}`) : st}</span></td>
+                    <td data-label={t('team.col.expires')} className={s.nowrap}>{st === 'pending' ? formatDate(inv.expires_at) : '—'}</td>
+                    <td data-label={t('team.col.action')}>
                       {st === 'pending' && (confirmId === inv.id ? (
-                        <span role="group" aria-label={`Confirm revoking the invitation for ${inv.email}`} style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-                          <button type="button" className={s.danger} disabled={busy} onClick={() => void revoke(inv)}>Revoke</button>
-                          <button type="button" className={s.secondary} disabled={busy} onClick={() => { setConfirmId(null); setRowError(null); }}>Keep</button>
+                        <span role="group" aria-label={t('team.inv.confirmFor', { email: inv.email })} style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <button type="button" className={s.danger} disabled={busy} onClick={() => void revoke(inv)}>{t('team.inv.revoke')}</button>
+                          <button type="button" className={s.secondary} disabled={busy} onClick={() => { setConfirmId(null); setRowError(null); }}>{t('team.inv.keep')}</button>
                         </span>
                       ) : (
-                        <button type="button" className={s.secondary} disabled={busy} onClick={() => { setConfirmId(inv.id); setRowError(null); }} aria-label={`Revoke invitation for ${inv.email}`}>Revoke…</button>
+                        <button type="button" className={s.secondary} disabled={busy} onClick={() => { setConfirmId(inv.id); setRowError(null); }} aria-label={t('team.inv.revokeFor', { email: inv.email })}>{t('team.inv.revokeAsk')}</button>
                       ))}
+                      {st !== 'pending' && <span className={s.muted}>{t('team.inv.noAction')}</span>}
                     </td>
                   </tr>
                 );

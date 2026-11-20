@@ -5,6 +5,9 @@
  * plain facts in here. Nothing is reported as available unless a gate said so;
  * a gate that could not be read counts as "not enabled", never as available.
  */
+import { createTranslator } from '@/i18n';
+import type { Translator } from '@/i18n/types';
+
 export type FeatureState = 'available' | 'partial' | 'disabled' | 'not_implemented';
 
 export type FeatureKey =
@@ -43,43 +46,42 @@ export const STATE_LABEL: Record<FeatureState, string> = {
   not_implemented: 'Not available yet',
 };
 
-const NOT_ENABLED = 'Not enabled for your organization. TuGPT switches it on per organization; it cannot be turned on from the Dashboard yet.';
+const EN = createTranslator('en');
+export const stateLabel = (st: FeatureState, t: Translator = EN) => t(`feature.state.${st}`);
 
-function provider(name: string, gate: ProviderGate): Pick<FeatureStatus, 'state' | 'detail'> {
-  if (gate === 'connected') return { state: 'available', detail: `${name} is connected. Type @ in Chat to use it.` };
-  if (gate === 'ready') return { state: 'available', detail: `Ready to connect. An owner or admin can connect ${name} on the Connect page.` };
+function provider(name: string, gate: ProviderGate, t: Translator): Pick<FeatureStatus, 'state' | 'detail'> {
+  if (gate === 'connected') return { state: 'available', detail: t('feature.provider.connected', { name }) };
+  if (gate === 'ready') return { state: 'available', detail: t('feature.provider.ready', { name }) };
   // Same wording as the Connect page: the provider is not offered by TuGPT yet.
-  if (gate === 'off') return { state: 'not_implemented', detail: `Connecting ${name} is not switched on for TuGPT yet. Nothing is connected.` };
-  return { state: 'disabled', detail: `The ${name} connection status could not be checked, so it is shown as not enabled.` };
+  if (gate === 'off') return { state: 'not_implemented', detail: t('feature.provider.off', { name }) };
+  return { state: 'disabled', detail: t('feature.provider.unknown', { name }) };
 }
 
-export function describeFeatures(f: FeatureFacts): FeatureStatus[] {
+export function describeFeatures(f: FeatureFacts, t: Translator = EN): FeatureStatus[] {
   const drafts = f.draftsEnabled === true;
-  const gated = (key: FeatureKey, name: string, href: string, on: string): FeatureStatus =>
-    ({ key, name, href, state: drafts ? 'available' : 'disabled', detail: drafts ? on : f.draftsEnabled === null ? 'Its status could not be checked, so it is shown as not enabled.' : NOT_ENABLED });
+  const n = (key: FeatureKey) => t(`feature.name.${key}`);
+  const gated = (key: 'inbox' | 'drafts' | 'knowledge', href: string): FeatureStatus =>
+    ({ key, name: n(key), href, state: drafts ? 'available' : 'disabled', detail: drafts ? t(`feature.detail.${key}`) : f.draftsEnabled === null ? t('feature.unchecked') : t('feature.notEnabled') });
   return [
-    { key: 'chat', name: 'Chat', href: '/dashboard/chat', state: f.hasChatModel ? 'available' : 'disabled',
-      detail: f.hasChatModel ? 'Chat with TuGPT’s private AI model. Your chats are kept per organization.' : 'No AI model is set up for your organization yet.' },
-    { key: 'team', name: 'Team & invitations', href: '/dashboard/settings#team', state: 'partial',
-      detail: 'Invite colleagues, manage invitations and see who is a member. Changing roles and removing members is not available yet.' },
-    { key: 'google', name: 'Google Workspace', href: '/dashboard/connect', ...provider('Google', f.google) },
-    { key: 'microsoft', name: 'Microsoft 365', href: '/dashboard/connect', ...provider('Microsoft 365', f.microsoft) },
-    { key: 'mcp', name: 'Your own tools (MCP servers)', href: '/dashboard/connect#mcp-title', state: f.mcpManage ? 'available' : 'disabled',
-      detail: f.mcpManage ? 'Owners and admins can add a server, review its tools and switch it on.' : 'Adding and switching on MCP servers is not enabled yet. Existing servers can still be turned off or removed.' },
-    { key: 'mcp_chat', name: 'MCP tools in Chat', href: '/dashboard/chat', state: f.mcpChat ? 'available' : 'disabled',
-      detail: f.mcpChat ? 'Approved, active MCP tools can be used in Chat with @.' : 'Approved MCP tools cannot be used in Chat yet. Chat never calls them until this is switched on.' },
-    gated('inbox', 'Conversations', '/dashboard/inbox', 'See customer conversations that are waiting for your team.'),
-    gated('drafts', 'AI Drafts', '/dashboard/drafts', 'Review, edit and approve replies drafted by TuGPT.'),
-    gated('knowledge', 'Knowledge', '/dashboard/knowledge', 'Maintain the facts TuGPT uses when drafting replies.'),
-    { key: 'images', name: 'Image generation', href: '/dashboard/create', state: f.imagesConfigured ? 'available' : 'disabled',
-      detail: f.imagesConfigured ? 'Generate images on TuGPT’s own EU GPU.' : 'Image generation is not set up for your organization yet.' },
-    { key: 'video', name: 'Video generation', href: '/dashboard/create', state: 'not_implemented', detail: 'Not part of TuGPT yet.' },
-    { key: 'media', name: 'Media Studio', href: '/dashboard/media', state: 'disabled',
-      detail: 'On hold during a security review. Nothing can be generated or uploaded until the review is complete.' },
-    { key: 'analytics', name: 'Usage & Costs', href: '/dashboard/analytics', state: 'partial',
-      detail: 'Shows recorded usage. Chat messages are not counted yet, so totals can read 0 even when your team uses Chat.' },
-    { key: 'agents', name: 'Agents & workflows', href: null, state: 'not_implemented', detail: 'Not part of TuGPT yet.' },
-    { key: 'crm', name: 'CRM integration', href: null, state: 'not_implemented', detail: 'Not part of TuGPT yet.' },
+    { key: 'chat', name: n('chat'), href: '/dashboard/chat', state: f.hasChatModel ? 'available' : 'disabled',
+      detail: f.hasChatModel ? t('feature.detail.chatOn') : t('feature.detail.chatOff') },
+    { key: 'team', name: n('team'), href: '/dashboard/settings#team', state: 'partial', detail: t('feature.detail.team') },
+    { key: 'google', name: n('google'), href: '/dashboard/connect', ...provider('Google', f.google, t) },
+    { key: 'microsoft', name: n('microsoft'), href: '/dashboard/connect', ...provider('Microsoft 365', f.microsoft, t) },
+    { key: 'mcp', name: n('mcp'), href: '/dashboard/connect#mcp-title', state: f.mcpManage ? 'available' : 'disabled',
+      detail: f.mcpManage ? t('feature.detail.mcpOn') : t('feature.detail.mcpOff') },
+    { key: 'mcp_chat', name: n('mcp_chat'), href: '/dashboard/chat', state: f.mcpChat ? 'available' : 'disabled',
+      detail: f.mcpChat ? t('feature.detail.mcpChatOn') : t('feature.detail.mcpChatOff') },
+    gated('inbox', '/dashboard/inbox'),
+    gated('drafts', '/dashboard/drafts'),
+    gated('knowledge', '/dashboard/knowledge'),
+    { key: 'images', name: n('images'), href: '/dashboard/create', state: f.imagesConfigured ? 'available' : 'disabled',
+      detail: f.imagesConfigured ? t('feature.detail.imagesOn') : t('feature.detail.imagesOff') },
+    { key: 'video', name: n('video'), href: '/dashboard/create', state: 'not_implemented', detail: t('feature.detail.notYet') },
+    { key: 'media', name: n('media'), href: '/dashboard/media', state: 'disabled', detail: t('feature.detail.media') },
+    { key: 'analytics', name: n('analytics'), href: '/dashboard/analytics', state: 'partial', detail: t('feature.detail.analytics') },
+    { key: 'agents', name: n('agents'), href: null, state: 'not_implemented', detail: t('feature.detail.notYet') },
+    { key: 'crm', name: n('crm'), href: null, state: 'not_implemented', detail: t('feature.detail.notYet') },
   ];
 }
 

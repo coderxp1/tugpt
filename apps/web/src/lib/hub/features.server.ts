@@ -11,6 +11,8 @@ import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
 import { CHAT_MCP_EXECUTION_ENV } from '@/lib/chat/mcp';
 import { configuredImageService } from '@/lib/create/image-service';
 import { configuredModels } from '@/lib/chat/models';
+import { createTranslator } from '@/i18n';
+import { getRequestLocale } from '@/i18n/server';
 import { describeFeatures, type FeatureStatus, type ProviderGate } from './features';
 
 export function providerGate(rows: readonly CapabilityRow[] | null, key: string): ProviderGate {
@@ -42,5 +44,5 @@ export const loadOrgFeatures = cache(async (): Promise<FeatureStatus[]> => {
     mcpChat: process.env[CHAT_MCP_EXECUTION_ENV]?.trim() === 'true',
     imagesConfigured,
     hasChatModel,
-  });
+  }, createTranslator(await getRequestLocale()));
 });
