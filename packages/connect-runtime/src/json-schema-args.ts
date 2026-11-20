@@ -15,10 +15,18 @@
  * server (admin-approved, still untrusted text), so only plain identifiers are echoed as paths; anything else
  * becomes "<property>". Messages are fixed strings plus JSON type names, at most MAX_DETAIL_ISSUES issues and
  * MAX_DETAIL_CHARS characters.
+ *
+ * decodeStringEncodedJson (run BEFORE the check): some models/serving stacks send a nested array/object argument
+ * as a JSON string (observed with TuGPT Scout: Python json.dumps formatting). Where, and only where, the schema
+ * says the value must be an array or object and does NOT also allow string, a string of at most MAX_DECODE_CHARS
+ * whose first non-blank character is [ or { is JSON.parse'd, and the result is used only if it has an allowed type.
+ * Everything else is left untouched, so the check rejects it exactly as before (fail closed). The input is never
+ * mutated. Callers keep hashing/approving the ORIGINAL arguments; the decoded value is a pure function of them.
  */
 export const MAX_SCHEMA_DEPTH = 32;
 export const MAX_DETAIL_ISSUES = 5;
 export const MAX_DETAIL_CHARS = 512;
+export const MAX_DECODE_CHARS = 65_536;
 
 const SAFE_NAME = /^[A-Za-z0-9_-]{1,64}$/;
 const KNOWN_TYPES = new Set(['string', 'number', 'integer', 'boolean', 'null', 'object', 'array']);
@@ -104,4 +112,56 @@ export function checkArgumentsAgainstSchema(schema: unknown, value: unknown): Ar
   const more = st.issues.length - shown.length;
   const detail = shown.join('; ') + (more > 0 ? `; and ${more}${st.issues.length >= MAX_COLLECTED ? '+' : ''} more` : '');
   return { ok: false, detail: detail.length > MAX_DETAIL_CHARS ? `${detail.slice(0, MAX_DETAIL_CHARS - 3)}...` : detail };
+}
+
+function declaredTypes(schema: Rec): string[] {
+  const rawTypes = typeof schema.type === 'string' ? [schema.type] : Array.isArray(schema.type) ? schema.type : [];
+  return rawTypes.filter((t): t is string => typeof t === 'string' && KNOWN_TYPES.has(t));
+}
+
+function setOwn(o: Rec, k: string, v: unknown): void {
+  // defineProperty, not assignment: a "__proto__" key must stay a plain data property.
+  Object.defineProperty(o, k, { value: v, writable: true, enumerable: true, configurable: true });
+}
+
+function decode(schema: unknown, value: unknown, depth: number): unknown {
+  if (depth > MAX_SCHEMA_DEPTH || !isRecord(schema)) return value;
+  const types = declaredTypes(schema);
+  let v = value;
+  if (typeof v === 'string' && v.length <= MAX_DECODE_CHARS && types.length > 0 && !types.includes('string')
+    && (types.includes('array') || types.includes('object'))) {
+    const first = v.trimStart()[0];
+    if (first === '[' || first === '{') {
+      try {
+        const parsed: unknown = JSON.parse(v);
+        if (types.some((t) => matchesType(t, parsed))) v = parsed;
+      } catch { /* not JSON: leave the string; the check reports the type mismatch */ }
+    }
+  }
+  if (isRecord(v)) {
+    const props = isRecord(schema.properties) ? schema.properties : {};
+    let out: Rec | null = null;
+    for (const k of Object.keys(v)) {
+      const sub = own(props, k) ? props[k] : isRecord(schema.additionalProperties) ? schema.additionalProperties : undefined;
+      if (sub === undefined) continue;
+      const nv = decode(sub, v[k], depth + 1);
+      if (nv !== v[k]) {
+        if (out === null) { out = {}; for (const kk of Object.keys(v)) setOwn(out, kk, v[kk]); }
+        setOwn(out, k, nv);
+      }
+    }
+    return out ?? v;
+  }
+  if (Array.isArray(v) && isRecord(schema.items)) {
+    const items = schema.items;
+    let changed = false;
+    const mapped = v.map((item) => { const nv = decode(items, item, depth + 1); if (nv !== item) changed = true; return nv; });
+    return changed ? mapped : v;
+  }
+  return v;
+}
+
+/** Returns `value` with string-encoded arrays/objects decoded where `schema` requires them; see the module comment. */
+export function decodeStringEncodedJson(schema: unknown, value: unknown): unknown {
+  return decode(schema, value, 0);
 }

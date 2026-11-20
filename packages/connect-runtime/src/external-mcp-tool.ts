@@ -20,7 +20,7 @@
 import { promises as dnsPromises } from 'node:dns';
 import type { JsonSchemaObject } from '@tugpt/ai-providers';
 import type { ConnectTool, ToolErrorCode, ToolOutput, ValidationOutcome } from './types.js';
-import { checkArgumentsAgainstSchema } from './json-schema-args.js';
+import { checkArgumentsAgainstSchema, decodeStringEncodedJson } from './json-schema-args.js';
 
 const MODEL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
@@ -427,10 +427,13 @@ export function createExternalMcpTool(
       if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
         return { ok: false, detail: 'arguments must be a JSON object' };
       }
+      // String-encoded nested arrays/objects are decoded only where the APPROVED schema requires them. The
+      // runtime hashes and approves `raw`; the executed value is a deterministic function of exactly `raw`.
+      const decoded = decodeStringEncodedJson(toolDef.inputSchema, raw) as Record<string, unknown>;
       // Checked against the APPROVED snapshot's schema before the runtime claims any approval.
-      const checked = checkArgumentsAgainstSchema(toolDef.inputSchema, raw);
+      const checked = checkArgumentsAgainstSchema(toolDef.inputSchema, decoded);
       if (!checked.ok) return { ok: false, detail: checked.detail };
-      return { ok: true, value: raw as Record<string, unknown> };
+      return { ok: true, value: decoded };
     },
     async execute(args): Promise<ToolOutput> {
       const unavailable = { ok: false, code: 'PROVIDER_UNAVAILABLE' as ToolErrorCode } as const;
