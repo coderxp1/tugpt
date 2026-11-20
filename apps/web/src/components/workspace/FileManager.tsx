@@ -5,6 +5,7 @@ import { useT } from '@/i18n/provider';
 import type { WorkspaceFile } from '@/lib/workspace-data/contracts';
 import { hasArray, messageKeyFor, workspaceApi } from '@/lib/workspace/service';
 import { formatBytes } from '@/lib/workspace/uploads';
+import { PendingUploads } from './PendingUploads';
 import { FileUpload } from './FileUpload';
 import { FilePreview, previewKind } from './FilePreview';
 import { Dialog } from './Dialog';
@@ -47,7 +48,7 @@ export function FileManager({ role, uploadScope }: { role?: string; uploadScope?
     } finally { lock.current = false; setBusy(false); }
   }
   return <section className={`${s.section} ${f.manager}`} aria-labelledby="workspace-files-title">
-    <h2 id="workspace-files-title">{text.title}</h2><p className={s.muted}>{text.help}</p>
+    <h2 id="workspace-files-title">{text.title}</h2><PendingUploads scope={uploadScope} /><p className={s.muted}>{text.help}</p>
     {!writable && <p>{text.readOnly}</p>}
     <div className={f.controls}>
       <label className={u.field}>{text.scope}<select value={scope} disabled={busy} onChange={(e) => { setScope(e.target.value as typeof scope); setCursor(undefined); }}><option value="mine">{text.mine}</option><option value="organization">{text.org}</option></select></label>

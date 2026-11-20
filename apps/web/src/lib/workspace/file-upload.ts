@@ -36,7 +36,7 @@ export async function uploadSafely(file: File, mediaType: string, scope: string,
       const match = result.value.files.find(f => f.ownedByMe && f.visibility === visibility && f.filename === file.name && f.sizeBytes === file.size && f.sha256 === sha256);
       if (match) {
         if (match.status !== 'ready') return { kind: 'uncertain' };
-        try { storage.removeItem(key); } catch { /* A retained marker is conservative. */ }
+        try { storage.removeItem(key); if (typeof window !== 'undefined') window.dispatchEvent(new Event('tugpt-upload-change')); } catch { /* A retained marker is conservative. */ }
         return { kind: 'existing', file: match };
       }
       if (!result.value.nextCursor) { exhausted = true; break; }
@@ -45,15 +45,15 @@ export async function uploadSafely(file: File, mediaType: string, scope: string,
     }
     if (!exhausted) return { kind: 'unavailable' };
     if (pending || signal.aborted) return { kind: 'uncertain' };
-    try { storage.setItem(key, 'pending'); } catch { return { kind: 'unavailable' }; }
+    try { storage.setItem(key, 'pending'); if (typeof window !== 'undefined') window.dispatchEvent(new Event('tugpt-upload-change')); } catch { return { kind: 'unavailable' }; }
     const result = await createWorkspaceClient(uploadTransport(signal, progress)).uploadFile(file.slice(0, file.size, mediaType), file.name, visibility);
     if (result.ok && result.value.file?.status === 'ready') {
-      try { storage.removeItem(key); } catch { /* Safe to retain. */ }
+      try { storage.removeItem(key); if (typeof window !== 'undefined') window.dispatchEvent(new Event('tugpt-upload-change')); } catch { /* Safe to retain. */ }
       return { kind: 'stored', file: result.value.file };
     }
     // Only definitive rejections permit a fresh, explicit attempt.
     if (!result.ok && [400, 401, 403, 413, 415, 422, 429].includes(result.status)) {
-      try { storage.removeItem(key); } catch { return { kind: 'uncertain' }; }
+      try { storage.removeItem(key); if (typeof window !== 'undefined') window.dispatchEvent(new Event('tugpt-upload-change')); } catch { return { kind: 'uncertain' }; }
       return { kind: 'failed' };
     }
     return { kind: 'uncertain' };

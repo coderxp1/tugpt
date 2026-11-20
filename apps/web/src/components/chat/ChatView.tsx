@@ -54,7 +54,7 @@ export function ChatView({ models: configured, canApprove = false, firstName = n
         {c.toolsUnavailable && <p role="status">{t('workspace.agent.toolsUnavailable')}</p>}
         {c.error && <p className={s.error} role="alert">{c.error.text}{!c.recovery && c.draft.trim() && <>{' '}<button type="button" className={s.tool} disabled={c.busy || c.uploading || c.overLimit || c.agentBlocked || !c.model} onClick={() => void c.send()}>{t('workspace.chat.resendDraft')}</button></>}{c.error.connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</p>}
         {c.recovery && <section className={`${s.error} ${s.recovery}`} aria-label={t('workspace.chat.recoveryTitle')}>
-          <p role="status">{t('workspace.chat.recoveryNote')}</p>
+          <p role="status">{t('workspace.chat.recoveryNote')}</p><p>{t('workspace.chat.recoveryDurable')}</p>
           <details><summary>{t('workspace.chat.original')}</summary><p>{c.recovery.original}</p></details>
           {c.recovery.partial && <details><summary>{t('workspace.chat.partial')}</summary><p>{c.recovery.partial}</p></details>}
           <button type="button" className={s.tool} disabled={c.reconciling || c.busy} onClick={() => void c.reconcile()}>{t(c.reconciling ? 'workspace.chat.reconciling' : 'workspace.chat.reconcile')}</button>

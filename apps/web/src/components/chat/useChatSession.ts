@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { saveChatRecovery, loadChatRecovery, clearChatRecovery, hasRecoveredAnswer, type ChatRecovery } from '@/lib/workspace/chat-recovery';
 import { uploadSafely } from '@/lib/workspace/file-upload';
 import { customerModels } from '@/lib/workspace/assistant-capabilities';
 import { usePathname, useSearchParams } from 'next/navigation';
@@ -96,7 +97,7 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
   const [picker, setPicker] = useState<{ open: boolean; query: string; index: number }>({ open: false, query: '', index: 0 });
   const [live, setLive] = useState<Live>(null);
   const sending = useRef(false);
-  const [recovery, setRecovery] = useState<{ threadId: string; partial: string; original: string } | null>(null);
+  const [recovery, setRecovery] = useState<ChatRecovery | null>(null);
   const [reconciling, setReconciling] = useState(false);
   const [error, setError] = useState<ChatProblem | null>(null);
   const [approvals, setApprovals] = useState<ApprovalItem[]>([]);
@@ -160,6 +161,8 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
       .then((r) => json<{ thread: Thread; messages: Message[] }>(r))
       .then(async (d) => {
         if (!current) return;
+        if (d.thread.id !== activeId || !Array.isArray(d.messages)) throw new Error('Invalid conversation');
+        setRecovery(loadChatRecovery(uploadScope, activeId));
         setMessages(d.messages.map((m) => ({ ...m, citations: parseAgentCitations(m.citations), knowledgeUnavailable: m.knowledgeUnavailable === true })));
         const agentId = typeof d.thread.agentId === 'string' ? d.thread.agentId : d.thread.agentId === null ? null : undefined;
         setSavedAgent({ threadId: activeId, agentId });
@@ -174,7 +177,7 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
       })
       .catch(() => { if (current) setError({ text: 'This chat could not be opened.', connect: false }); });
     return () => { current = false; };
-  }, [activeId, models]);
+  }, [activeId, models, uploadScope]);
 
   // Leaving the chat while an answer streams (e.g. Back) stops that answer; it is not shown elsewhere.
   useEffect(() => {
@@ -403,6 +406,8 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
       if (activeRef.current !== id) return;
       if (!Array.isArray(d.messages) || d.thread.id !== id) throw new Error('Invalid conversation');
       setMessages(d.messages.map((m) => ({ ...m, citations: parseAgentCitations(m.citations), knowledgeUnavailable: m.knowledgeUnavailable === true })));
+      if (!hasRecoveredAnswer(recovery, d.messages)) { fail(t('workspace.chat.stillUnresolved')); return; }
+      if (!clearChatRecovery(uploadScope, id)) { fail(t('workspace.chat.stillUnresolved')); return; }
       setRecovery(null); setError(null);
     } catch { if (activeRef.current === id) fail(t('workspace.chat.recoveryFailed')); }
     finally { setReconciling(false); }
@@ -413,6 +418,8 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
     if (!content || sending.current || recovery || agentBlocked || busy || !model || content.length > MESSAGE_LIMIT || uploads.some((u) => u.status === 'uploading')) return;
     sending.current = true;
     let partial = '';
+    let pending: ChatRecovery | null = null;
+    const remember = () => { if (pending) { pending = { ...pending, partial }; saveChatRecovery(uploadScope, pending); if (activeRef.current === pending.threadId || created.current === pending.threadId) setRecovery(pending); } };
     const typed = draft; const sentFiles = files;
     setError(null);
     let id = activeId;
@@ -426,6 +433,8 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
         window.history.replaceState(null, '', threadHref(id));
       }
     } catch { sending.current = false; fail('A new chat could not be started.'); return; }
+    pending = { threadId: id, original: content, partial: '' };
+    if (!saveChatRecovery(uploadScope, pending)) { sending.current = false; fail(t('workspace.chat.storageUnavailable')); return; }
     void attachPending(id);
     const controller = begin();
     setDraft(''); setFiles([]); setFileNotice(null); setUploads((x) => x.filter((u) => u.status === 'failed'));
@@ -438,17 +447,21 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
       if (!res.ok || !res.body) {
         const body = await res.json().catch(() => ({})) as { error?: string };
         setError(requestProblem(body.error));
-        if (res.status >= 500 || res.ok) setRecovery({ threadId: id, partial, original: content });
-        else { setDraft(typed); setFiles(sentFiles); }
+        if (res.status >= 500 || res.status === 404 || res.status === 409 || res.ok) { remember(); if (res.status === 409) setDraft(typed); }
+        else { clearChatRecovery(uploadScope, id); setDraft(typed); setFiles(sentFiles); }
         return;
       }
-      const summary = await readTurnStream(res.body, (ev) => { if (!controller.signal.aborted) { if (ev.type === 'delta') partial += ev.text ?? ''; handleEvent(ev); } });
+      const summary = await readTurnStream(res.body, (ev) => { if (!controller.signal.aborted) { if (ev.type === 'delta') partial += ev.text ?? '';
+        if (pending && ev.type === 'user' && ev.message && typeof (ev.message as Message).id === 'string') pending.userMessageId = (ev.message as Message).id;
+        if (pending && (ev.type === 'user' || ev.type === 'delta')) saveChatRecovery(uploadScope, { ...pending, partial });
+        handleEvent(ev); } });
       // A stream that ends without done/error was cut off; never present it as a finished answer.
-      if (summary.terminal === null || controller.signal.aborted) { setRecovery({ threadId: id, partial, original: content }); fail(turnProblem('INTERRUPTED')); }
+      if (summary.terminal === null || controller.signal.aborted) { remember(); fail(turnProblem('INTERRUPTED')); }
+      else clearChatRecovery(uploadScope, id);
       setAttached([]);
       touch(id, typed.trim() || sentFiles[0]?.name || content);
     } catch {
-      setRecovery({ threadId: id, partial, original: content });
+      remember();
       if (!controller.signal.aborted) fail('The response was interrupted. Check saved messages before sending again.');
     } finally { sending.current = false; finish(); }
   }

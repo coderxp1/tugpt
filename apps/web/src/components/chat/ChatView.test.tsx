@@ -23,7 +23,7 @@ function renderChat(props: { models: PublicModel[]; canApprove?: boolean; firstN
 
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
-  nav.path = '/workspace'; nav.search = '';
+  nav.path = '/workspace'; nav.search = ''; sessionStorage.clear();
   Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo;
   fetchMock = vi.fn((url: string) => (String(url).endsWith('/capabilities') ? ok({ capabilities: [] }) : ok({ threads: [thread] })));
   vi.stubGlobal('fetch', fetchMock);
@@ -526,4 +526,15 @@ it('does not silently replace an unavailable saved model', async () => {
  fireEvent.mouseDown(await screen.findByRole('option', { name: /TuGPT Assistant/ }));
  expect(screen.queryByText('The saved assistant capability is unavailable. Choose an available capability before sending.')).toBeNull();
  expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
+});
+
+it('restores recovery after remount and only clears a correlated complete answer', async () => {
+ const {saveChatRecovery}=await import('@/lib/workspace/chat-recovery');
+ saveChatRecovery('test-owner',{threadId:thread.id,original:'Restore me',partial:'Partial persisted',userMessageId:'u-recovery'});
+ nav.path='/workspace/c/'+thread.id;let complete=false;let posts=0;
+ fetchMock.mockImplementation(async(url:string,init?:RequestInit)=>{if(init?.method==='POST')posts++;return ok(url.endsWith('/capabilities')?{capabilities:[]}:url.endsWith(thread.id)?{thread:{...thread,agentId:null},messages:complete?[{id:'u-recovery',role:'user',content:'Restore me',status:'complete',mentions:[]},{id:'a-recovery',role:'assistant',content:'Verified saved answer',status:'complete',mentions:[]}]:[]}:{threads:[thread]});});
+ const first=renderChat({models},[thread]);await screen.findByText('Partial persisted');first.unmount();
+ renderChat({models},[thread]);await screen.findByText('Partial persisted');fireEvent.click(screen.getByRole('button',{name:'Check saved messages'}));await screen.findByText(/completed answer for this exact request has not been confirmed/);
+ expect((screen.getByLabelText('Message') as HTMLTextAreaElement).disabled).toBe(true);
+ complete=true;fireEvent.click(screen.getByRole('button',{name:'Check saved messages'}));await screen.findByText('Verified saved answer');expect(posts).toBe(0);
 });
