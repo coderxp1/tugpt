@@ -166,6 +166,17 @@ describe('POST /api/v1/chat/threads/[id]/approved-call', () => {
     expect(String(system?.content)).not.toMatch(/waiting for their approval/);
     expect(String(system?.content)).toMatch(/approved this exact call/);
   });
+  it('a replay of a used approval is refused, calls no model and stores an answer that says nothing was run (real-stack regression)', async () => {
+    approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
+    await events(await runReq(body()));
+    streamed.length = 0; appended.length = 0;
+    const again = await events(await runReq(body({ callId: 'call_2' })));
+    expect(again[1]).toMatchObject({ code: 'APPROVAL_REQUIRED' });
+    expect(streamed).toHaveLength(0);
+    const saved = appended.find((m) => m.role === 'assistant');
+    expect(String(saved?.content)).toMatch(/Nothing was run/);
+    expect(String(saved?.content)).not.toMatch(/Model answer/);
+  });
   it('a member can run an approval that an owner recorded; the claim is per organization', async () => {
     approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
     user = MEMBER;
