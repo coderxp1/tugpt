@@ -30,6 +30,12 @@ What else runs in-process (no network beyond loopback):
   routes and the real pdfjs extractor, so 202 → pending → ready/failed is
   tested end to end, including FILE_MISSING and a simulated storage outage
   (backoff). `authenticator` must be a member of `service_role`.
+- **Server-authored chat writes (Q-9c):** `createSsoControlClient` is replaced
+  by a PostgREST client with an `sso_control` JWT (same secret). It is used for
+  `append_chat_message_server` and `custom_agent_run_instructions`. As in
+  production, `authenticator` must be a member of `sso_control`
+  (`GRANT sso_control TO authenticator;` on the disposable test database).
+  The suite fails fast with that hint when the membership is missing.
 - **Fake embeddings server** on 127.0.0.1 (hashed character trigrams, 64
   dims). It makes semantic/hybrid ranking deterministic; it says nothing
   about the quality of a real embedding model.

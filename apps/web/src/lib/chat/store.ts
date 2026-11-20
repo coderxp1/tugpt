@@ -1,9 +1,16 @@
 /**
  * Chat persistence through the caller's own RLS-bound client.
  *
- * There is no service-role path: what a user can read or write here is
- * exactly what 20261115000001's policies allow. Rows come back as `unknown`
- * and are parsed, so a schema drift fails loudly instead of rendering junk.
+ * What a user can read or write here is exactly what the chat policies and
+ * column grants allow (20261115000001, 20261120200002/3). Two things are not
+ * the user's to touch directly (Q-9c):
+ * - citations are read only through chat_message_citations, which filters each
+ *   entry by the reader's CURRENT document access in the database (F-2);
+ * - assistant and tool messages are written only by the server, through
+ *   append_chat_message_server on the sso_control client (F-3). There is still
+ *   no service-role path.
+ * Rows come back as `unknown` and are parsed, so a schema drift fails loudly
+ * instead of rendering junk.
  */
 export interface DbResult { readonly data: unknown; readonly error: { readonly message?: string; readonly code?: string } | null }
 export interface DbQuery extends PromiseLike<DbResult> {
@@ -118,7 +125,8 @@ export function toCapability(row: unknown): CapabilityRow {
 }
 
 const THREAD_COLS = 'id,title,model_key,updated_at,agent_id';
-const MESSAGE_COLS = 'id,role,content,created_at,status,mentions,capability_key,citations,knowledge_unavailable';
+/** No `citations`: authenticated has no column SELECT on it (20261120200002). */
+const MESSAGE_COLS = 'id,role,content,created_at,status,mentions,capability_key,knowledge_unavailable';
 /** PostgREST puts in.(...) into the URL; 100 uuids stay well below proxy URL limits. */
 const CITATION_CHECK_BATCH = 100;
 
@@ -144,15 +152,28 @@ export async function getThread(db: ChatDb, organizationId: string, threadId: st
 
 /**
  * Messages of one thread (RLS: the thread owner only). Stored citations are a
- * snapshot, not a grant: each cited document is looked up again under the
- * READER's RLS and citations of documents they can no longer read (collection
- * made private, document removed) are left out. The remaining ones keep their
- * original n, so [n] markers in the answer still point at the right source.
+ * snapshot, not a grant: chat_message_citations returns only the entries whose
+ * document the READER can still read in the same collection and file
+ * (collection made private, document removed -> left out), enforced in the
+ * database. authorizeCitations re-checks the same rule under the reader's RLS
+ * as a second layer. The remaining entries keep their original n, so [n]
+ * markers in the answer still point at the right source.
  */
 export async function listMessages(db: ChatDb, organizationId: string, threadId: string): Promise<StoredMessage[]> {
   const data = check(await db.from('chat_messages').select(MESSAGE_COLS)
     .eq('thread_id', threadId).eq('organization_id', organizationId).order('created_at', { ascending: true }).limit(400));
-  return authorizeCitations(db, organizationId, (Array.isArray(data) ? data : []).map(toMessage));
+  const raw = (Array.isArray(data) ? data : []) as Record<string, unknown>[];
+  // Only assistant messages can carry citations; the limit above (400) is the RPC's id cap.
+  const cited = raw.filter((r) => r.role === 'assistant').map((r) => str(r.id));
+  const citations = new Map<string, unknown>();
+  if (cited.length > 0) {
+    const rows = check(await db.rpc('chat_message_citations', { p_organization_id: organizationId, p_thread_id: threadId, p_message_ids: cited }));
+    for (const row of Array.isArray(rows) ? rows : []) {
+      const r = row as Record<string, unknown>;
+      citations.set(str(r.message_id), r.citations);
+    }
+  }
+  return authorizeCitations(db, organizationId, raw.map((r) => toMessage({ ...r, citations: citations.get(str(r.id)) ?? [] })));
 }
 
 export async function authorizeCitations(db: ChatDb, organizationId: string, messages: StoredMessage[]): Promise<StoredMessage[]> {
@@ -172,21 +193,41 @@ export async function authorizeCitations(db: ChatDb, organizationId: string, mes
   return messages.map((m) => (m.citations.length === 0 || m.citations.every(allowed) ? m : { ...m, citations: m.citations.filter(allowed) }));
 }
 
+/** The user's own message, through their RLS-bound client (role = 'user' only; 20261120200003). */
 export async function appendMessage(db: ChatDb, input: {
-  organizationId: string; threadId: string; role: 'user' | 'assistant' | 'tool'; content: string; modelKey?: string;
+  organizationId: string; threadId: string; role: 'user'; content: string; modelKey?: string;
+  mentions?: readonly Mention[]; status?: 'complete' | 'error' | 'stopped';
+}): Promise<StoredMessage> {
+  // Exactly the columns authenticated may INSERT; citations/knowledge_unavailable/capability_key take their defaults.
+  const data = check(await db.from('chat_messages').insert({
+    organization_id: input.organizationId, thread_id: input.threadId, role: 'user', content: input.content,
+    model_key: input.modelKey ?? null, mentions: input.mentions ?? [], status: input.status ?? 'complete',
+  }).select(MESSAGE_COLS).single());
+  return toMessage(data);
+}
+
+/**
+ * An assistant or tool message, written by the server for `userId` through
+ * the sso_control client (append_chat_message_server). The database re-checks
+ * that userId owns the open thread and is a current member, so a wrong id can
+ * never write into someone else's thread. Never pass the user's own client.
+ */
+export async function appendServerMessage(control: ChatDb, input: {
+  organizationId: string; userId: string; threadId: string; role: 'assistant' | 'tool'; content: string; modelKey?: string;
   mentions?: readonly Mention[]; status?: 'complete' | 'error' | 'stopped'; capabilityKey?: string;
   /** Assistant messages only (ignored otherwise): the citations streamed with this turn. */
   citations?: readonly MessageCitation[]; knowledgeUnavailable?: boolean;
 }): Promise<StoredMessage> {
   const assistant = input.role === 'assistant';
-  const data = check(await db.from('chat_messages').insert({
-    organization_id: input.organizationId, thread_id: input.threadId, role: input.role, content: input.content,
-    model_key: input.modelKey ?? null, mentions: input.mentions ?? [], status: input.status ?? 'complete',
-    capability_key: input.role === 'tool' ? input.capabilityKey ?? null : null,
-    citations: assistant ? citationsForStorage(input.citations) : [],
-    knowledge_unavailable: assistant && input.knowledgeUnavailable === true,
-  }).select(MESSAGE_COLS).single());
-  return toMessage(data);
+  const r = await control.rpc('append_chat_message_server', {
+    p_organization_id: input.organizationId, p_user_id: input.userId, p_thread_id: input.threadId, p_role: input.role,
+    p_content: input.content, p_status: input.status ?? 'complete', p_model_key: input.modelKey ?? null, p_mentions: input.mentions ?? [],
+    p_capability_key: input.role === 'tool' ? input.capabilityKey ?? null : null,
+    p_citations: assistant ? citationsForStorage(input.citations) : [],
+    p_knowledge_unavailable: assistant && input.knowledgeUnavailable === true,
+  });
+  if (r.error?.code === 'P0002') throw new ChatStoreError('NOT_FOUND');
+  return toMessage(check(r));
 }
 
 export async function touchThread(db: ChatDb, organizationId: string, threadId: string, patch: { title?: string; modelKey?: string }): Promise<void> {

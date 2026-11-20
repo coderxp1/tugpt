@@ -24,7 +24,7 @@ import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
-  appendMessage, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
+  appendMessage, appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
 import { runAgentTurn, threadAgentId } from '@/lib/workspace-data/agent-turn';
 import { asWorkspaceDb } from '@/lib/workspace-data/db';
@@ -66,8 +66,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   let registry: ChatToolRegistry = builtinRegistry();
   let history: Awaited<ReturnType<typeof listMessages>>;
   let isFirst: boolean;
+  // Assistant/tool messages are server-authored through sso_control (Q-9c F-3); created before the stream starts.
+  let control: ReturnType<typeof asChatDb>;
   try {
     await getThread(ctx.db, orgId, threadId);
+    control = asChatDb(await createSsoControlClient());
     const caps = requested.length ? await listCapabilities(ctx.db, orgId) : [];
     attached = requested.map((m) => caps.find((c) => c.capabilityKey === m.capability && c.providerKey === m.provider))
       .filter((c): c is CapabilityRow => c !== undefined);
@@ -125,9 +128,9 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
           if (ev.type === 'delta') answer += ev.text;
           if (ev.type === 'tool_result') {
             const cap = toolset.describe(ev.tool);
-            await appendMessage(ctx.db, {
+            await appendServerMessage(control, {
               // chat_messages.capability_key references the built-in catalogue; MCP tools are not in it.
-              organizationId: orgId, threadId, role: 'tool', capabilityKey: cap?.providerKey === MCP_PROVIDER ? undefined : cap?.capabilityKey,
+              organizationId: orgId, userId: ctx.userId, threadId, role: 'tool', capabilityKey: cap?.providerKey === MCP_PROVIDER ? undefined : cap?.capabilityKey,
               content: ev.ok ? `${cap?.providerName ?? 'Integration'} responded` : `${cap?.providerName ?? 'Integration'} failed: ${ev.code ?? 'ERROR'}`,
               status: ev.ok ? 'complete' : 'error',
             }).catch(() => undefined);
@@ -147,8 +150,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
         else { status = 'error'; errorCode = e instanceof ModelCallError ? e.code : 'TURN_FAILED'; }
       }
       try {
-        const saved = await appendMessage(ctx.db, {
-          organizationId: orgId, threadId, role: 'assistant', modelKey: model.key, status,
+        const saved = await appendServerMessage(control, {
+          organizationId: orgId, userId: ctx.userId, threadId, role: 'assistant', modelKey: model.key, status,
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
         });
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key, ...(isFirst ? { title: titleFrom(content) } : {}) });

@@ -24,6 +24,27 @@ database built from the 114 committed migrations (latest `20261120100011`).
    `NOT private.valid_message_citations(citations)` before applying 100011 and
    decide on them explicitly (they can only be a user's own assistant rows). The
    app needs no change for 100011.
+   **Q-9c (200001–200003) is a breaking pair with the app, in both directions.**
+   They revoke the column reads of `custom_agents.instructions` and
+   `chat_messages.citations` and restrict client INSERTs on `chat_messages` to
+   `role = 'user'`. The app **before** Q-9c selects those columns and writes
+   assistant/tool rows with the user's client, so on a Q-9c database it fails
+   (42501) on agent lists/reads, thread reads and every chat answer. The app
+   **with** Q-9c calls `custom_agent_instructions`, `custom_agent_run_instructions`,
+   `chat_message_citations` and `append_chat_message_server`, which an older
+   database does not have. Apply 200001–200003 and deploy the Q-9c web build in
+   one maintenance window, migrations first, and keep the window short. The
+   migrations are DDL/grant changes only (no table rewrite and no row scan). Each
+   takes a brief ACCESS EXCLUSIVE lock for its `REVOKE`/`GRANT`/policy change.
+   **B-1 (ordering with Agent 2's MCP migrations):** Agent 2's
+   `20261120000001`–`000006` (`agent2/m9-followup`, `47ea476`) sort *between*
+   this tree's `20261119100004` and `20261120100001`. The Supabase CLI refuses
+   local migrations older than the remote's latest without `--include-all`
+   (docs/server-migrations.md §6). The Q-9c IDs (`20261120200001`–`3`) sort
+   after both sequences, so they add no new interleaving. Agent 2's six still
+   have to land on `main` and be applied **before** 20261120100001+ reach a
+   database, or else be renumbered by Agent 2. That decision is Agent 2's and
+   is still open.
 2. Deploy web and worker together; the worker writes chunks the web reads.
 3. Migrations are frozen once committed; checksums live in
    `supabase/migrations/checksums.json`.
@@ -44,6 +65,16 @@ database built from the 114 committed migrations (latest `20261120100011`).
 - `link_custom_agent_collection` is `SECURITY INVOKER` (RLS applies).
 - The PostgREST login role must be a member of `sso_control`:
   `GRANT sso_control TO authenticator;` (the SSO pre-request hook depends on it).
+  Since Q-9c **chat itself** depends on it as well: every assistant/tool message
+  is written through `append_chat_message_server`, and every agent run reads its
+  instructions through `custom_agent_run_instructions`. Both are executable
+  only by `sso_control` and `service_role`. Without the membership, every chat
+  answer fails with `STORE_UNAVAILABLE` and agent runs fail before streaming.
+- Q-9c functions (all `SECURITY DEFINER`, `search_path=pg_catalog`, no PUBLIC/anon):
+  `custom_agent_instructions` and `chat_message_citations` are executable by
+  authenticated (they return only what the caller may see).
+  `custom_agent_run_instructions` and `append_chat_message_server` are
+  executable by `sso_control` and `service_role` only.
 
 ## 3. HTTPS origin (`TUGPT_APP_ORIGIN`)
 

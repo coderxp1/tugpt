@@ -3,6 +3,10 @@
 -- knowledge_unavailable; only on assistant messages; append-only; readable by
 -- the thread owner only, never across users or tenants. Also: the thread's
 -- agent_id is visible to its owner only.
+-- Q-9c (F-2/F-3): assistant rows are written by the server only
+-- (append_chat_message_server as sso_control) and authenticated has no column
+-- SELECT on citations; stored values are read back as the table owner here,
+-- reader-side filtering is covered by workspace_message_citations_confidential.
 BEGIN;
 SELECT plan(31);
 
@@ -25,7 +29,7 @@ INSERT INTO public.chat_threads (id, organization_id, owner_user_id, title, mode
  ('ea700000-0000-4000-8000-0000000000b1','eab00000-0000-4000-8000-00000000000b','ea333333-3333-4333-8333-333333333333','B chat','it-model',NULL);
 
 CREATE TEMP TABLE c (k text PRIMARY KEY, v jsonb) ON COMMIT DROP;
-GRANT SELECT ON c TO authenticated;
+GRANT SELECT ON c TO authenticated, sso_control;
 INSERT INTO c VALUES ('one', '{"n":1,"documentId":"ea0d0000-0000-4000-8000-000000000001","collectionId":"eac00000-0000-4000-8000-000000000001","fileId":"eaf00000-0000-4000-8000-000000000001","title":"roadmap.md","ordinal":0,"snippet":"The quantum ledger migration ships in Q2."}');
 
 SELECT has_column('public','chat_messages','citations','chat_messages.citations exists'); -- 1
@@ -40,28 +44,41 @@ SELECT ok(NOT has_function_privilege('anon','private.valid_message_citations(jso
 SELECT ok(NOT has_table_privilege('authenticated','public.chat_messages','UPDATE')
   AND NOT has_column_privilege('authenticated','public.chat_messages','citations','UPDATE'), 'messages stay append-only for users'); -- 6
 
-SET LOCAL ROLE authenticated;
-SELECT set_config('request.jwt.claims','{"sub":"ea222222-2222-4222-8222-222222222222","role":"authenticated"}',true);
+-- Runs the server RPC AS sso_control (EXECUTE is checked for that role), then
+-- restores the caller's role. pgTAP itself is not resolvable by sso_control (no
+-- USAGE on extensions), so the assertions stay outside the role switch; on error
+-- the enclosing subtransaction restores the role.
+CREATE FUNCTION pg_temp.ctl(p_org uuid, p_user uuid, p_thread uuid, p_role text, p_content text, p jsonb DEFAULT '[]', p_ku boolean DEFAULT false)
+RETURNS jsonb LANGUAGE plpgsql AS $f$
+DECLARE v_prev text := current_user; v jsonb;
+BEGIN
+  PERFORM set_config('role', 'sso_control', true);
+  v := public.append_chat_message_server(p_org, p_user, p_thread, p_role, p_content, 'complete', NULL, '[]'::jsonb, NULL, p, p_ku);
+  PERFORM set_config('role', v_prev, true);
+  RETURN v;
+END $f$;
+CREATE FUNCTION pg_temp.srv(p_thread uuid, p_content text, p jsonb DEFAULT '[]', p_role text DEFAULT 'assistant', p_ku boolean DEFAULT false)
+RETURNS jsonb LANGUAGE sql AS $f$
+  SELECT pg_temp.ctl('eaa00000-0000-4000-8000-00000000000a', 'ea222222-2222-4222-8222-222222222222', p_thread, p_role, p_content, p, p_ku) $f$;
 
 -- Valid: the streamed shape, two entries.
-SELECT lives_ok($$INSERT INTO public.chat_messages (id, thread_id, organization_id, role, content, citations)
-  SELECT 'ea5e0000-0000-4000-8000-000000000001','ea700000-0000-4000-8000-0000000000a1','eaa00000-0000-4000-8000-00000000000a','assistant','Answer [1] [2]',
-         jsonb_build_array(v, v || '{"n":2,"ordinal":3}') FROM c WHERE k = 'one'$$, 'owner stores an assistant answer with citations'); -- 7
-SELECT is((SELECT citations FROM public.chat_messages WHERE id = 'ea5e0000-0000-4000-8000-000000000001'),
-  (SELECT jsonb_build_array(v, v || '{"n":2,"ordinal":3}') FROM c WHERE k = 'one'), 'citations read back unchanged'); -- 8
-SELECT lives_ok($$INSERT INTO public.chat_messages (thread_id, organization_id, role, content, knowledge_unavailable)
-  VALUES ('ea700000-0000-4000-8000-0000000000a1','eaa00000-0000-4000-8000-00000000000a','assistant','No knowledge this time', true)$$,
+SELECT lives_ok($$SELECT set_config('t.m1', pg_temp.srv('ea700000-0000-4000-8000-0000000000a1', 'Answer [1] [2]',
+  (SELECT jsonb_build_array(v, v || '{"n":2,"ordinal":3}') FROM c WHERE k = 'one'))->>'id', true)$$,
+  'server stores an assistant answer with citations'); -- 7
+RESET ROLE;
+SELECT is((SELECT citations FROM public.chat_messages WHERE id = current_setting('t.m1')::uuid),
+  (SELECT jsonb_build_array(v, v || '{"n":2,"ordinal":3}') FROM c WHERE k = 'one'), 'citations stored unchanged'); -- 8
+SELECT lives_ok($$SELECT pg_temp.srv('ea700000-0000-4000-8000-0000000000a1', 'No knowledge this time', '[]', 'assistant', true)$$,
   'assistant answer with knowledge_unavailable and no citations'); -- 9
-SELECT lives_ok($$INSERT INTO public.chat_messages (id, thread_id, organization_id, role, content)
-  VALUES ('ea5e0000-0000-4000-8000-000000000002','ea700000-0000-4000-8000-0000000000a2','eaa00000-0000-4000-8000-00000000000a','assistant','Plain answer')$$,
+SELECT lives_ok($$SELECT set_config('t.m2', pg_temp.srv('ea700000-0000-4000-8000-0000000000a2', 'Plain answer')->>'id', true)$$,
   'plain chat answer without the new columns'); -- 10
-SELECT is((SELECT (citations, knowledge_unavailable)::text FROM public.chat_messages WHERE id = 'ea5e0000-0000-4000-8000-000000000002'),
+RESET ROLE;
+SELECT is((SELECT (citations, knowledge_unavailable)::text FROM public.chat_messages WHERE id = current_setting('t.m2')::uuid),
   '([],f)', 'plain answer gets [] / false'); -- 11
 
 -- Shape violations are rejected by the CHECK (23514), never stored.
-CREATE FUNCTION pg_temp.bad(p jsonb, p_role text DEFAULT 'assistant', p_ku boolean DEFAULT false) RETURNS void LANGUAGE sql AS $f$
-  INSERT INTO public.chat_messages (thread_id, organization_id, role, content, citations, knowledge_unavailable)
-  VALUES ('ea700000-0000-4000-8000-0000000000a1','eaa00000-0000-4000-8000-00000000000a', p_role, 'x', p, p_ku) $f$;
+CREATE FUNCTION pg_temp.bad(p jsonb, p_role text DEFAULT 'assistant', p_ku boolean DEFAULT false) RETURNS jsonb LANGUAGE sql AS $f$
+  SELECT pg_temp.srv('ea700000-0000-4000-8000-0000000000a1', 'x', p, p_role, p_ku) $f$;
 SELECT throws_ok($$SELECT pg_temp.bad((SELECT jsonb_build_array(v || '{"url":"https://evil.example"}') FROM c))$$, '23514', NULL, 'extra key rejected'); -- 12
 SELECT throws_ok($$SELECT pg_temp.bad((SELECT jsonb_build_array(v - 'snippet') FROM c))$$, '23514', NULL, 'missing key rejected'); -- 13
 SELECT throws_ok($$SELECT pg_temp.bad((SELECT jsonb_build_array(v || '{"documentId":"EA0D0000-0000-4000-8000-000000000001"}') FROM c))$$, '23514', NULL, 'non-canonical uuid rejected'); -- 14
@@ -74,9 +91,14 @@ SELECT throws_ok($$SELECT pg_temp.bad((SELECT jsonb_build_array(v || '{"title":"
 SELECT throws_ok($$SELECT pg_temp.bad((SELECT jsonb_agg(v) FROM c, generate_series(1, 21)))$$, '23514', NULL, 'more than 20 citations rejected'); -- 21
 SELECT throws_ok($$SELECT pg_temp.bad('{"n":1}'::jsonb)$$, '23514', NULL, 'object instead of array rejected'); -- 22
 SELECT throws_ok($$SELECT pg_temp.bad('["x", 1]'::jsonb)$$, '23514', NULL, 'scalar elements rejected (CHECK, not a runtime error)'); -- 23
-SELECT throws_ok($$SELECT pg_temp.bad((SELECT jsonb_build_array(v) FROM c), 'user')$$, '23514', NULL, 'user messages cannot carry citations'); -- 24
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"ea222222-2222-4222-8222-222222222222","role":"authenticated"}',true);
+SELECT throws_ok($$INSERT INTO public.chat_messages (thread_id, organization_id, role, content, citations)
+  SELECT 'ea700000-0000-4000-8000-0000000000a2','eaa00000-0000-4000-8000-00000000000a','user','x', jsonb_build_array(v) FROM c$$,
+  '42501', NULL, 'user messages cannot carry citations (no INSERT grant on citations)'); -- 24
 SELECT throws_ok($$SELECT pg_temp.bad('[]'::jsonb, 'tool', true)$$, '23514', NULL, 'tool messages cannot carry knowledge_unavailable'); -- 25
-SELECT throws_ok($$UPDATE public.chat_messages SET citations = '[]' WHERE id = 'ea5e0000-0000-4000-8000-000000000001'$$,
+SET LOCAL ROLE authenticated;
+SELECT throws_ok($$UPDATE public.chat_messages SET citations = '[]' WHERE id = current_setting('t.m1')::uuid$$,
   '42501', NULL, 'stored citations cannot be edited afterwards'); -- 26
 
 -- Same org, other user: neither the messages nor the thread's agent binding.
@@ -87,8 +109,8 @@ SELECT is((SELECT count(*)::int FROM public.chat_threads WHERE agent_id = 'ead00
   'org owner cannot discover which threads use the agent'); -- 28
 -- Other tenant: no read, no write into A's thread.
 SELECT set_config('request.jwt.claims','{"sub":"ea333333-3333-4333-8333-333333333333","role":"authenticated"}',true);
-SELECT is((SELECT count(*)::int FROM public.chat_messages WHERE citations <> '[]'::jsonb AND organization_id = 'eaa00000-0000-4000-8000-00000000000a'), 0,
-  'other tenant cannot read A''s citations'); -- 29
+SELECT is((SELECT count(*)::int FROM public.chat_messages WHERE organization_id = 'eaa00000-0000-4000-8000-00000000000a'), 0,
+  'other tenant cannot read A''s cited answers'); -- 29
 SELECT throws_ok($$INSERT INTO public.chat_messages (thread_id, organization_id, role, content, citations)
   SELECT 'ea700000-0000-4000-8000-0000000000a1','eaa00000-0000-4000-8000-00000000000a','assistant','forged', jsonb_build_array(v) FROM c$$,
   '42501', NULL, 'other tenant cannot plant citations in A''s thread'); -- 30

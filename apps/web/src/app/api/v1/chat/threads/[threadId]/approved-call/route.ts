@@ -26,7 +26,7 @@ import { runApprovedCall, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, toolAvailable } from '@/lib/chat/connect';
 import { loadChatToolRegistry, MCP_PROVIDER } from '@/lib/chat/mcp';
 import { argumentsSha256, MAX_ARGUMENT_BYTES } from '@/lib/chat/approval.server';
-import { appendMessage, getThread, listCapabilities, listMessages, touchThread } from '@/lib/chat/store';
+import { appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, touchThread } from '@/lib/chat/store';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -64,8 +64,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   let toolset: ReturnType<typeof buildChatToolset>;
   let history: Awaited<ReturnType<typeof listMessages>>;
   let toolName: string;
+  // Assistant/tool messages are server-authored through sso_control (Q-9c F-3).
+  let control: ReturnType<typeof asChatDb>;
   try {
     await getThread(ctx.db, orgId, threadId);
+    control = asChatDb(await createSsoControlClient());
     const caps = await listCapabilities(ctx.db, orgId);
     const row = caps.find((c) => c.providerKey === MCP_PROVIDER && c.connectionId === connectionId && c.capabilityKey === capability);
     if (!row || row.state !== 'connected') return jsonError(409, 'An attached integration is not connected');
@@ -105,8 +108,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
           if (ev.type === 'delta') answer += ev.text;
           if (ev.type === 'tool_result') {
             const cap = toolset.describe(ev.tool);
-            await appendMessage(ctx.db, {
-              organizationId: orgId, threadId, role: 'tool',
+            await appendServerMessage(control, {
+              organizationId: orgId, userId: ctx.userId, threadId, role: 'tool',
               content: ev.ok ? `${cap?.providerName ?? 'Integration'} responded (approved call)` : `${cap?.providerName ?? 'Integration'} failed: ${ev.code ?? 'ERROR'}`,
               status: ev.ok ? 'complete' : 'error',
             }).catch(() => undefined);
@@ -118,8 +121,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
         else { status = 'error'; errorCode = e instanceof ModelCallError ? e.code : 'TURN_FAILED'; }
       }
       try {
-        const saved = await appendMessage(ctx.db, {
-          organizationId: orgId, threadId, role: 'assistant', modelKey: model.key, status,
+        const saved = await appendServerMessage(control, {
+          organizationId: orgId, userId: ctx.userId, threadId, role: 'assistant', modelKey: model.key, status,
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
         });
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key });

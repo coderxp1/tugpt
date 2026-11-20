@@ -28,7 +28,7 @@ import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
-  appendMessage, ChatStoreError, listCapabilities, listMessages, titleFrom, touchThread, type CapabilityRow, type Mention, type StoredMessage,
+  appendMessage, appendServerMessage, asChatDb, ChatStoreError, listCapabilities, listMessages, titleFrom, touchThread, type CapabilityRow, type Mention, type StoredMessage,
 } from '@/lib/chat/store';
 import { agentSystemPrompt, loadAgentForRun, retrieveForAgent, toCitations, type AgentTool } from './agents';
 import type { SearchHit } from './contracts';
@@ -113,9 +113,12 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
   let registry: ChatToolRegistry = builtinRegistry();
   let thread: TurnThread | null = null;
   let history: StoredMessage[] = [];
+  // Server-only writes (assistant/tool messages) and the agent's instructions go through sso_control (Q-9c F-1/F-3).
+  let control: ReturnType<typeof asChatDb>;
   try {
     await consumeRateLimit(wdb, orgId, 'agent.run');
-    try { agent = await loadAgentForRun(wdb, orgId, o.agentId); }
+    control = asChatDb(await createSsoControlClient());
+    try { agent = await loadAgentForRun(wdb, asWorkspaceDb(control), orgId, ctx.userId, o.agentId); }
     catch (e) {
       if (e instanceof WorkspaceError && e.status === 404 && o.unreadableAgent === 'unavailable') throw new Refusal(409, 'AGENT_UNAVAILABLE', CHAT_TEXT.AGENT_UNAVAILABLE);
       throw e;
@@ -237,8 +240,8 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
           if (ev.type === 'delta') answer += ev.text;
           if (ev.type === 'tool_result') {
             const cap = toolset.describe(ev.tool);
-            await appendMessage(ctx.db, {
-              organizationId: orgId, threadId, role: 'tool', capabilityKey: cap?.providerKey === MCP_PROVIDER ? undefined : cap?.capabilityKey,
+            await appendServerMessage(control, {
+              organizationId: orgId, userId: ctx.userId, threadId, role: 'tool', capabilityKey: cap?.providerKey === MCP_PROVIDER ? undefined : cap?.capabilityKey,
               content: ev.ok ? `${cap?.providerName ?? 'Integration'} responded` : `${cap?.providerName ?? 'Integration'} failed: ${ev.code ?? 'ERROR'}`,
               status: ev.ok ? 'complete' : 'error',
             }).catch(() => undefined);
@@ -255,10 +258,10 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
         else { status = 'error'; errorCode = e instanceof ModelCallError ? e.code : 'TURN_FAILED'; }
       }
       try {
-        const saved = await appendMessage(ctx.db, {
-          organizationId: orgId, threadId, role: 'assistant', modelKey: model.key, status,
+        const saved = await appendServerMessage(control, {
+          organizationId: orgId, userId: ctx.userId, threadId, role: 'assistant', modelKey: model.key, status,
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
-          // Persist what was streamed, so a reloaded thread shows the same sources (re-authorised on read).
+          // Persist what was streamed, so a reloaded thread shows the same sources (re-authorised on read by chat_message_citations).
           citations, knowledgeUnavailable,
         });
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key, ...(isFirst ? { title: titleFrom(content) } : {}) });

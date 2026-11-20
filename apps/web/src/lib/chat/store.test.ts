@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
-  appendMessage, authorizeCitations, ChatStoreError, getThread, listMessages, MAX_CITATION_SNIPPET, parseCitations,
+  appendMessage, appendServerMessage, authorizeCitations, ChatStoreError, getThread, listMessages, MAX_CITATION_SNIPPET, parseCitations,
   type ChatDb, type DbQuery, type DbResult, type MessageCitation, type StoredMessage,
 } from './store';
 
@@ -13,10 +13,22 @@ const DOC1 = id(1), DOC2 = id(2), COL = id(10), COL_OTHER = id(11), FILE1 = id(2
 const cite = (n: number, documentId: string, fileId: string, collectionId = COL): MessageCitation =>
   ({ n, documentId, collectionId, fileId, title: `doc ${n}.md`, ordinal: n - 1, snippet: `excerpt ${n}` });
 
-type Call = { table: string; op: string; cols?: string; values?: Record<string, unknown>; eq: Record<string, unknown>; in: Record<string, readonly unknown[]> };
+type Call = { table: string; op: string; cols?: string; values?: Record<string, unknown>; eq: Record<string, unknown>; in: Record<string, readonly unknown[]>; args?: Record<string, unknown> };
 
-/** Records every query; `tables` answers selects, `fail` makes a table error out. */
-function fakeDb(tables: Record<string, unknown>, fail: Set<string> = new Set()) {
+/**
+ * Stand-in for chat_message_citations: the stored citations of the requested
+ * messages that have any (document filtering is the database's job and is
+ * covered by pgTAP; here only the merge is tested).
+ */
+function citationRpc(tables: Record<string, unknown>, args: Record<string, unknown>): DbResult {
+  const wanted = new Set(args.p_message_ids as string[]);
+  const msgs = (Array.isArray(tables.chat_messages) ? tables.chat_messages : []) as Record<string, unknown>[];
+  return { data: msgs.filter((m) => wanted.has(m.id as string) && Array.isArray(m.citations) && (m.citations as unknown[]).length > 0)
+    .map((m) => ({ message_id: m.id, citations: m.citations })), error: null };
+}
+
+/** Records every query and RPC; `tables` answers selects, `rpcs` answers RPCs, `fail` makes a table or RPC error out. */
+function fakeDb(tables: Record<string, unknown>, fail: Set<string> = new Set(), rpcs: Record<string, (args: Record<string, unknown>) => DbResult> = {}) {
   const calls: Call[] = [];
   const db: ChatDb = {
     from(table: string) {
@@ -34,7 +46,14 @@ function fakeDb(tables: Record<string, unknown>, fail: Set<string> = new Set()) 
       };
       return { select: (cols: string) => start('select').select(cols), insert: (v: object) => start('insert', v as Record<string, unknown>), update: (v: object) => start('update', v as Record<string, unknown>) };
     },
-    rpc: () => Promise.resolve({ data: null, error: null }),
+    rpc: (fn: string, args?: object) => {
+      const a = (args ?? {}) as Record<string, unknown>;
+      calls.push({ table: `rpc:${fn}`, op: 'rpc', eq: {}, in: {}, args: a });
+      if (fail.has(`rpc:${fn}`)) return Promise.resolve({ data: null, error: { message: 'down' } });
+      if (fn in rpcs) return Promise.resolve(rpcs[fn](a));
+      if (fn === 'chat_message_citations') return Promise.resolve(citationRpc(tables, a));
+      return Promise.resolve({ data: null, error: null });
+    },
   };
   return { db, calls };
 }
@@ -77,15 +96,33 @@ describe('chat store: citations (Q-9)', () => {
     const m = await listMessages(db, ORG, THREAD);
     expect(m.map((x) => [x.role, x.citations.length, x.knowledgeUnavailable])).toEqual([['user', 0, false], ['assistant', 2, false], ['assistant', 0, true]]);
     expect(m[1].citations).toEqual([cite(1, DOC1, FILE1), cite(2, DOC2, FILE2)]);
-    expect(calls[0].cols).toContain('citations');
+    // Q-9c F-2: the column itself is never selected; citations come only from the filtering RPC, for assistant messages.
+    expect(calls[0].cols?.split(',')).not.toContain('citations');
     expect(calls[0].cols).toContain('knowledge_unavailable');
-    // The re-check runs under the same (caller's) client, scoped to the tenant.
-    expect(calls[1]).toMatchObject({ table: 'knowledge_documents', eq: { organization_id: ORG }, in: { id: [DOC1, DOC2] } });
+    expect(calls[1]).toMatchObject({ table: 'rpc:chat_message_citations', args: { p_organization_id: ORG, p_thread_id: THREAD, p_message_ids: [id(52), id(53)] } });
+    // The app-side re-check still runs under the same (caller's) client, scoped to the tenant.
+    expect(calls[2]).toMatchObject({ table: 'knowledge_documents', eq: { organization_id: ORG }, in: { id: [DOC1, DOC2] } });
 
     const plain = fakeDb({ chat_messages: [row({ role: 'user' }), row({})] });
     const p = await listMessages(plain.db, ORG, THREAD);
     expect(p.every((x) => x.citations.length === 0 && x.knowledgeUnavailable === false)).toBe(true);
-    expect(plain.calls.map((c) => c.table)).toEqual(['chat_messages']); // no extra query without citations
+    expect(plain.calls.map((c) => c.table)).toEqual(['chat_messages', 'rpc:chat_message_citations']); // no document query without citations
+    const userOnly = fakeDb({ chat_messages: [row({ role: 'user' })] });
+    await listMessages(userOnly.db, ORG, THREAD);
+    expect(userOnly.calls.map((c) => c.table)).toEqual(['chat_messages']); // no RPC without assistant messages
+  });
+
+  it('shows only what the citation RPC returns, and fails closed when it fails', async () => {
+    const stored = [cite(1, DOC1, FILE1), cite(2, DOC2, FILE2)];
+    const docs = [{ id: DOC1, collection_id: COL, file_id: FILE1 }, { id: DOC2, collection_id: COL, file_id: FILE2 }];
+    // The database dropped [2] (revoked): the app must not resurrect it from anywhere else.
+    const { db } = fakeDb({ chat_messages: [row({ id: id(52), citations: stored })], knowledge_documents: docs }, new Set(),
+      { chat_message_citations: () => ({ data: [{ message_id: id(52), citations: [stored[0]] }], error: null }) });
+    expect((await listMessages(db, ORG, THREAD))[0].citations).toEqual([stored[0]]);
+    const down = fakeDb({ chat_messages: [row({ id: id(52), citations: stored })], knowledge_documents: docs }, new Set(['rpc:chat_message_citations']));
+    await expect(listMessages(down.db, ORG, THREAD)).rejects.toEqual(new ChatStoreError('STORE_UNAVAILABLE'));
+    const denied = fakeDb({ chat_messages: [row({})] }, new Set(), { chat_message_citations: () => ({ data: null, error: { message: 'x', code: '42501' } }) });
+    await expect(listMessages(denied.db, ORG, THREAD)).rejects.toEqual(new ChatStoreError('FORBIDDEN'));
   });
 
   it('omits citations whose document the reader can no longer read, or that moved; the rest keep their n', async () => {
@@ -112,21 +149,39 @@ describe('chat store: citations (Q-9)', () => {
     await expect(authorizeCitations(fakeDb({}, new Set(['knowledge_documents'])).db, ORG, msgs)).rejects.toEqual(new ChatStoreError('STORE_UNAVAILABLE'));
   });
 
-  it('stores only contract keys, bounded, and only on assistant messages', async () => {
+  it('server messages: stores only contract keys, bounded, and only on assistant messages (Q-9c F-3)', async () => {
+    const USER = id(7);
+    const echo = (a: Record<string, unknown>): DbResult => ({ data: {
+      id: id(99), role: a.p_role, content: a.p_content, created_at: '2026-11-20T10:00:00Z', status: a.p_status, mentions: a.p_mentions,
+      capability_key: a.p_capability_key, citations: a.p_citations, knowledge_unavailable: a.p_knowledge_unavailable }, error: null });
     const long = { ...cite(1, DOC1, FILE1), snippet: 'x'.repeat(MAX_CITATION_SNIPPET + 50), extra: 'drop me' } as MessageCitation;
-    const a = fakeDb({});
-    const saved = await appendMessage(a.db, { organizationId: ORG, threadId: THREAD, role: 'assistant', content: 'A', citations: [long], knowledgeUnavailable: true });
-    const v = a.calls[0].values!;
-    expect(v.knowledge_unavailable).toBe(true);
-    expect(v.citations).toEqual([{ ...cite(1, DOC1, FILE1), snippet: 'x'.repeat(MAX_CITATION_SNIPPET) }]);
-    expect(saved.citations).toEqual(v.citations);
+    const a = fakeDb({}, new Set(), { append_chat_message_server: echo });
+    const saved = await appendServerMessage(a.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'assistant', content: 'A', modelKey: 'm', citations: [long], knowledgeUnavailable: true });
+    expect(a.calls).toHaveLength(1);
+    const v = a.calls[0].args!;
+    expect(a.calls[0].table).toBe('rpc:append_chat_message_server');
+    expect(v).toMatchObject({ p_organization_id: ORG, p_user_id: USER, p_thread_id: THREAD, p_role: 'assistant', p_status: 'complete', p_model_key: 'm', p_capability_key: null, p_knowledge_unavailable: true });
+    expect(v.p_citations).toEqual([{ ...cite(1, DOC1, FILE1), snippet: 'x'.repeat(MAX_CITATION_SNIPPET) }]);
+    expect(saved.citations).toEqual(v.p_citations);
     expect(saved.knowledgeUnavailable).toBe(true);
 
+    const t = fakeDb({}, new Set(), { append_chat_message_server: echo });
+    await appendServerMessage(t.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'tool', content: 'T', capabilityKey: 'cal', citations: [cite(1, DOC1, FILE1)], knowledgeUnavailable: true });
+    expect(t.calls[0].args).toMatchObject({ p_role: 'tool', p_capability_key: 'cal', p_citations: [], p_knowledge_unavailable: false });
+
+    const gone = fakeDb({}, new Set(), { append_chat_message_server: () => ({ data: null, error: { message: 'x', code: 'P0002' } }) });
+    await expect(appendServerMessage(gone.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'assistant', content: 'A' })).rejects.toEqual(new ChatStoreError('NOT_FOUND'));
+    const down = fakeDb({}, new Set(['rpc:append_chat_message_server']));
+    await expect(appendServerMessage(down.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'assistant', content: 'A' })).rejects.toEqual(new ChatStoreError('STORE_UNAVAILABLE'));
+  });
+
+  it('user messages insert exactly the columns authenticated may write (Q-9c F-3)', async () => {
     const u = fakeDb({});
-    await appendMessage(u.db, { organizationId: ORG, threadId: THREAD, role: 'user', content: 'Q', citations: [cite(1, DOC1, FILE1)], knowledgeUnavailable: true });
-    expect(u.calls[0].values).toMatchObject({ citations: [], knowledge_unavailable: false });
-    const plain = fakeDb({});
-    await appendMessage(plain.db, { organizationId: ORG, threadId: THREAD, role: 'assistant', content: 'A' });
-    expect(plain.calls[0].values).toMatchObject({ citations: [], knowledge_unavailable: false });
+    await appendMessage(u.db, { organizationId: ORG, threadId: THREAD, role: 'user', content: 'Q', mentions: [{ capability: 'c', provider: 'p' }] });
+    expect(u.calls).toHaveLength(1);
+    expect(u.calls[0].op).toBe('insert');
+    expect(Object.keys(u.calls[0].values!).sort()).toEqual(['content', 'mentions', 'model_key', 'organization_id', 'role', 'status', 'thread_id']);
+    expect(u.calls[0].values!.role).toBe('user');
+    expect(u.calls[0].cols?.split(',')).not.toContain('citations');
   });
 });

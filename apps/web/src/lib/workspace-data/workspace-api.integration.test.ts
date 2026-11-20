@@ -6,7 +6,11 @@
  * Only `chatContext` (session + tenant resolution, covered by its own tests)
  * is replaced so each request can choose its user and tenant - including a
  * FORGED tenant (a user claiming an organization they do not belong to), to
- * prove the database rejects that on its own.
+ * prove the database rejects that on its own. `createSsoControlClient` is
+ * replaced by a PostgREST client signed for `sso_control` (the real one signs
+ * with the deployment's bridge secret); the database grants are the real ones.
+ * That needs `GRANT sso_control TO authenticator` on the test database, as in
+ * production (docs/workspace/operations.md).
  *
  * Skipped unless WS_IT_POSTGREST_URL is set. See tests/workspace-it/README.md.
  */
@@ -54,6 +58,12 @@ let current: { db: unknown; userId: string; tenant: Record<string, unknown> } | 
 vi.mock('@/lib/chat/request', async (importOriginal) => {
   const orig = await importOriginal<typeof import('@/lib/chat/request')>();
   return { ...orig, chatContext: vi.fn(async () => current ?? orig.jsonError(401, 'Unauthenticated')) };
+});
+
+let control: unknown = null;
+vi.mock('@/lib/supabase/server', async (importOriginal) => {
+  const orig = await importOriginal<typeof import('@/lib/supabase/server')>();
+  return { ...orig, createSsoControlClient: vi.fn(async () => { if (!control) throw new Error('control client not ready'); return control; }) };
 });
 
 const b64 = (v: string | Buffer) => Buffer.from(v).toString('base64url');
@@ -144,6 +154,10 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
     store = new FilesystemBlobStore(blobDir);
     setBlobStoreForTests(store);
     svc = new PostgrestClient(URL_!, { headers: { Authorization: `Bearer ${jwt('a4900000-0000-4000-8000-000000000001', secret, 'service_role')}` } }) as unknown as KnowledgeDeps['db'];
+    control = new PostgrestClient(URL_!, { headers: { Authorization: `Bearer ${jwt('a4900000-0000-4000-8000-000000000002', secret, 'sso_control')}` } });
+    // Fail fast with a clear message when the stack lacks the production prerequisite.
+    const probe = await (control as PostgrestClient).rpc('custom_agent_run_instructions', { p_organization_id: ORG_A, p_user_id: U.ownerA.id, p_agent_id: MISSING });
+    if (probe.error) throw new Error(`sso_control is not usable through PostgREST (${probe.error.code}); run GRANT sso_control TO authenticator on the test database.`);
     // The suite assumes the state fixtures.sql creates (it also clears the per-user rate-limit windows).
     // A second run on the same database would otherwise fail a dozen tests for unrelated-looking reasons.
     const left = async (table: string) => (await (svc as unknown as PostgrestClient).from(table)
@@ -1179,11 +1193,48 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
             as(who);
             const db = clients.get(who.id) as PostgrestClient;
             expect((await db.from('chat_threads').select('agent_id').eq('id', tid)).data).toEqual([]);
-            expect((await db.from('chat_messages').select('citations,knowledge_unavailable').eq('thread_id', tid)).data).toEqual([]);
+            expect((await db.from('chat_messages').select('id,knowledge_unavailable').eq('thread_id', tid)).data).toEqual([]);
+            expect((await db.rpc('chat_message_citations', { p_organization_id: who.org, p_thread_id: tid, p_message_ids: [MISSING] })).data).toEqual([]);
             expect((await db.from('chat_threads').select('id').eq('agent_id', privAgent)).data).toEqual([]);
           }
           as(U.memberA);
           expect((await getThread(tid)).json.thread.agentId).toBe(privAgent);
+        });
+
+        it('Q-9c: PostgREST cannot bypass the API for instructions, citations or server-authored messages', async () => {
+          as(U.memberA);
+          const tid = events((await run(privAgent, { content: 'quantum ledger' })).text)[0].thread.id as string;
+          as(U.ownerA);
+          const owner = clients.get(U.ownerA.id) as PostgrestClient; // same org, owner role, not the agent's owner
+          as(U.memberA);
+          const mine = clients.get(U.memberA.id) as PostgrestClient;
+          // F-1: no column read of instructions for anyone, the server-only run RPC is not callable, the editor RPC is scoped.
+          for (const db of [mine, owner]) {
+            expect((await db.from('custom_agents').select('instructions').eq('id', privAgent)).error?.code).toBe('42501');
+            expect((await db.from('custom_agents').select('*').eq('id', privAgent)).error?.code).toBe('42501');
+            expect((await db.rpc('custom_agent_run_instructions', { p_organization_id: ORG_A, p_user_id: U.memberA.id, p_agent_id: privAgent })).error?.code).toBe('42501');
+          }
+          expect((await mine.from('custom_agents').select('id,name').eq('id', privAgent)).data).toHaveLength(1);
+          expect((await mine.rpc('custom_agent_instructions', { p_organization_id: ORG_A, p_agent_ids: [privAgent] })).data).toHaveLength(1);
+          expect((await owner.rpc('custom_agent_instructions', { p_organization_id: ORG_A, p_agent_ids: [privAgent] })).data).toEqual([]);
+          // F-2: no direct read of the column, even of one's own messages.
+          expect((await mine.from('chat_messages').select('citations').eq('thread_id', tid)).error?.code).toBe('42501');
+          expect((await mine.from('chat_messages').select('*').eq('thread_id', tid)).error?.code).toBe('42501');
+          // F-3: no forged assistant/tool rows, no client-set citations, no server RPC.
+          const base = { organization_id: ORG_A, thread_id: tid, content: 'forged' };
+          for (const role of ['assistant', 'tool']) expect((await mine.from('chat_messages').insert({ ...base, role })).error?.code).toBe('42501');
+          expect((await mine.from('chat_messages').insert({ ...base, role: 'user', citations: [{ n: 1 }] })).error?.code).toBe('42501');
+          expect((await mine.from('chat_messages').insert({ ...base, role: 'user', knowledge_unavailable: true })).error?.code).toBe('42501');
+          expect((await mine.rpc('append_chat_message_server', { p_organization_id: ORG_A, p_user_id: U.memberA.id, p_thread_id: tid, p_role: 'assistant', p_content: 'forged' })).error?.code).toBe('42501');
+          const rows = (await (svc as unknown as PostgrestClient).from('chat_messages').select('role,content').eq('thread_id', tid)).data ?? [];
+          expect(rows.filter((r) => r.content === 'forged')).toEqual([]);
+          expect(rows.map((r) => r.role).sort()).toEqual(['assistant', 'user']); // the real turn: server-authored assistant reply
+          // The server path re-checks ownership: sso_control cannot write into another user's thread.
+          const ctl = control as PostgrestClient;
+          expect((await ctl.rpc('append_chat_message_server', { p_organization_id: ORG_A, p_user_id: U.ownerA.id, p_thread_id: tid, p_role: 'assistant', p_content: 'forged' })).error?.code).toBe('P0002');
+          expect((await ctl.rpc('append_chat_message_server', { p_organization_id: ORG_B, p_user_id: U.memberA.id, p_thread_id: tid, p_role: 'assistant', p_content: 'forged' })).error?.code).toBe('P0002');
+          // The user's own message still goes in directly.
+          expect((await mine.from('chat_messages').insert({ ...base, role: 'user', content: 'mine' }).select('id')).error).toBeNull();
         });
 
         it('ordinary conversations: agentId null and no citations', async () => {
@@ -1224,9 +1275,13 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
             const hidden = await getThread(tid);
             expect(hidden.status).toBe(200);
             expect(assistants(hidden.json)[0]).toMatchObject({ content: 'Hello from agent', citations: [] }); // omitted, not leaked
-            // The stored snapshot is untouched (owner's own RLS read), only the API response is filtered.
+            // Q-9c F-2: the filter is in the database. The thread owner cannot read the raw column, and the
+            // citation RPC returns nothing for this message; the stored snapshot itself is untouched (service_role read).
             const own = clients.get(U.memberA.id) as PostgrestClient;
-            expect(((await own.from('chat_messages').select('citations').eq('thread_id', tid).eq('role', 'assistant')).data ?? [])[0].citations).toEqual(streamed);
+            expect((await own.from('chat_messages').select('citations').eq('thread_id', tid)).error?.code).toBe('42501');
+            const mid = assistants(hidden.json)[0].id as string;
+            expect((await own.rpc('chat_message_citations', { p_organization_id: ORG_A, p_thread_id: tid, p_message_ids: [mid] })).data).toEqual([{ message_id: mid, citations: [] }]); // filtered to nothing, not leaked
+            expect(((await (svc as unknown as PostgrestClient).from('chat_messages').select('citations').eq('id', mid)).data ?? [])[0].citations).toEqual(streamed);
 
             as(U.ownerA);
             expect((await call('collection', 'PATCH', { params: { collectionId: shared }, body: { visibility: 'organization' } })).status).toBe(200);

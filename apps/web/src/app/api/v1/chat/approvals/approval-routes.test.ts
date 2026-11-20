@@ -34,6 +34,8 @@ vi.mock('@/lib/chat/store', async (orig) => ({
   getThread: async () => ({ id: THREAD }),
   listMessages: async () => [{ id: 'm1', role: 'user', content: 'open a ticket', status: 'complete', mentions: [], capabilityKey: null }],
   appendMessage: async (_db: unknown, m: Record<string, unknown>) => { appended.push(m); return { id: `saved-${appended.length}`, ...m }; },
+  // Q-9c F-3: assistant/tool messages are server-authored (sso_control client), tagged so the tests can tell.
+  appendServerMessage: async (_db: unknown, m: Record<string, unknown>) => { appended.push({ ...m, server: true }); return { id: `saved-${appended.length}`, ...m }; },
   touchThread: async () => undefined,
 }));
 vi.mock('@/lib/chat/openai-compatible', async (orig) => ({
@@ -145,6 +147,9 @@ describe('POST /api/v1/chat/threads/[id]/approved-call', () => {
     expect(ev[1]).toMatchObject({ type: 'tool_result', ok: false, code: 'APPROVAL_REQUIRED' });
     expect(ev.at(-1)).toMatchObject({ type: 'done' });
     expect(state.mcpAudit).toEqual([expect.objectContaining({ p_endpoint_id: EP, p_capability: 'external.create_ticket', p_outcome: 'APPROVAL_REQUIRED', p_arguments_sha256: HASH })]);
+    // Q-9c F-3: tool and assistant messages went through the server-only path, for the caller.
+    expect(appended.some((m) => m.role === 'assistant')).toBe(true);
+    expect(appended.filter((m) => m.role !== 'user').every((m) => m.server === true && m.userId === OWNER)).toBe(true);
   });
   it('with an approval the runtime claims it once (before execution); here the call then fails because no MCP server is reachable', async () => {
     const a = approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });

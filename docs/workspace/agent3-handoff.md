@@ -78,3 +78,16 @@ chars, collections ≤ 10. `version` does not bump on links-only saves.
 - 409 `CONFLICT` – file not ready yet. 403/404 – no access to the collection.
 - Dedupe is per tenant + collection; deleting a document frees the slot
   (re-add → 202, new id).
+
+## Q-9c security fixes (Agent 4) — no frontend change needed
+
+The HTTP API is unchanged: same routes, request bodies, response shapes and
+stream events. `agent.instructions` is still `''` for callers who cannot edit
+the agent, and `messages[].citations` still shows only sources the reader can
+read now. What changed is where this is enforced. The database no longer lets
+a signed-in user read `custom_agents.instructions` or
+`chat_messages.citations` directly, or insert assistant/tool messages. The
+API reads and writes those through new database functions. New error mode:
+if the deployment lacks `GRANT sso_control TO authenticator`, chat answers
+end with `{"type":"error","code":"STORE_UNAVAILABLE"}`, which the UI already
+handles.

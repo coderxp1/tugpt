@@ -64,7 +64,8 @@ export const AGENT_INPUT_FIELDS = ['name', 'description', 'instructions', 'model
 export const AGENT_ECHO_FIELDS = ['id', 'ownedByMe', 'canEdit', 'canDelete', 'version', 'createdAt', 'updatedAt'] as const;
 export const AGENT_PATCH_FIELDS: readonly string[] = [...AGENT_INPUT_FIELDS, ...AGENT_ECHO_FIELDS];
 const KEY = /^[a-z0-9][a-z0-9._:-]{0,79}$/;
-const AGENT_COLS = 'id,owner_user_id,name,description,instructions,model_key,visibility,tools,conversation_starters,version,created_at,updated_at';
+/** No `instructions`: authenticated has no column SELECT on it (20261120200001, F-1). Editors get it via editorInstructions. */
+const AGENT_COLS = 'id,owner_user_id,name,description,model_key,visibility,tools,conversation_starters,version,created_at,updated_at';
 const bad = (code: 'INVALID_REQUEST' | 'INVALID_MODEL' | 'INVALID_COLLECTION' | 'LIMIT_EXCEEDED' = 'INVALID_REQUEST') => new WorkspaceError(400, code);
 
 /** C-1: only the owner edits (and never as a viewer). */
@@ -202,11 +203,29 @@ async function visibleLinks(db: WorkspaceDb, organizationId: string, agentIds: r
   return out;
 }
 
+/**
+ * agent id -> instructions, for the agents in `list` the caller may edit. The
+ * database decides (custom_agent_instructions: owner, member, not a viewer);
+ * the canEditAgent pre-filter only avoids a call when nothing is editable.
+ * At most 200 ids (listAgents' limit and the RPC's cap).
+ */
+async function editorInstructions(db: WorkspaceDb, tenant: TenantContext, userId: string, list: readonly Record<string, unknown>[]): Promise<Map<string, string>> {
+  const ids = list.filter((r) => canEditAgent(str(r.owner_user_id), userId, tenant.role)).map((r) => str(r.id));
+  const out = new Map<string, string>();
+  if (ids.length === 0) return out;
+  for (const row of rows(await db.rpc('custom_agent_instructions', { p_organization_id: tenant.organizationId, p_agent_ids: ids }))) {
+    const r = row as Record<string, unknown>;
+    out.set(str(r.agent_id), str(r.instructions));
+  }
+  return out;
+}
+
 export async function listAgents(db: WorkspaceDb, tenant: TenantContext, userId: string): Promise<CustomAgent[]> {
   const list = rows(await db.from('custom_agents').select(AGENT_COLS).eq('organization_id', tenant.organizationId)
     .order('updated_at', { ascending: false }).order('id', { ascending: false }).limit(200)) as Record<string, unknown>[];
-  const links = await visibleLinks(db, tenant.organizationId, list.map((r) => str(r.id)));
-  return list.map((r) => toAgent(r, userId, tenant.role, links.get(str(r.id)) ?? []));
+  const ids = list.map((r) => str(r.id));
+  const [links, instructions] = await Promise.all([visibleLinks(db, tenant.organizationId, ids), editorInstructions(db, tenant, userId, list)]);
+  return list.map((r) => toAgent({ ...r, instructions: instructions.get(str(r.id)) ?? '' }, userId, tenant.role, links.get(str(r.id)) ?? []));
 }
 
 /** Readable agent row or 404 (unreadable agents are indistinguishable from missing ones). */
@@ -218,7 +237,8 @@ async function readAgentRow(db: WorkspaceDb, organizationId: string, id: string)
 
 export async function getAgent(db: WorkspaceDb, tenant: TenantContext, userId: string, id: string): Promise<CustomAgent> {
   const row = await readAgentRow(db, tenant.organizationId, id);
-  return toAgent(row, userId, tenant.role, (await visibleLinks(db, tenant.organizationId, [id])).get(id) ?? []);
+  const [links, instructions] = await Promise.all([visibleLinks(db, tenant.organizationId, [id]), editorInstructions(db, tenant, userId, [row])]);
+  return toAgent({ ...row, instructions: instructions.get(id) ?? '' }, userId, tenant.role, links.get(id) ?? []);
 }
 
 /** Members create private agents; organization agents need owner/admin (RLS: 403 FORBIDDEN). */
@@ -294,10 +314,26 @@ export async function unlinkAgentCollection(db: WorkspaceDb, tenant: TenantConte
 }
 
 // ---------------------------------------------------------------- run support
-/** Full row for running (instructions included regardless of edit rights: they are applied server-side, never returned). */
-export async function loadAgentForRun(db: WorkspaceDb, organizationId: string, id: string): Promise<{ id: string; name: string; instructions: string; modelKey: string | null; tools: AgentTool[]; version: number }> {
+export interface AgentForThread { id: string; name: string; modelKey: string | null; tools: AgentTool[]; version: number }
+
+/** Readable agent (caller's RLS) without instructions: enough to start a thread. 404 when unreadable. */
+export async function loadAgentForThread(db: WorkspaceDb, organizationId: string, id: string): Promise<AgentForThread> {
   const r = await readAgentRow(db, organizationId, id);
-  return { id: str(r.id), name: str(r.name), instructions: str(r.instructions), modelKey: optStr(r.model_key), tools: toTools(r.tools), version: num(r.version) };
+  return { id: str(r.id), name: str(r.name), modelKey: optStr(r.model_key), tools: toTools(r.tools), version: num(r.version) };
+}
+
+/**
+ * The agent plus its instructions, for running it as `userId`. Readability is
+ * checked under the caller's RLS (404 otherwise); the instructions come from
+ * the server-only custom_agent_run_instructions on the sso_control client,
+ * which re-checks that userId can read the agent. They are applied
+ * server-side and never returned to the client (F-1).
+ */
+export async function loadAgentForRun(db: WorkspaceDb, control: WorkspaceDb, organizationId: string, userId: string, id: string): Promise<AgentForThread & { instructions: string }> {
+  const agent = await loadAgentForThread(db, organizationId, id);
+  const instructions = check(await control.rpc('custom_agent_run_instructions', { p_organization_id: organizationId, p_user_id: userId, p_agent_id: id }));
+  if (typeof instructions !== 'string') throw new WorkspaceError(404, 'NOT_FOUND');
+  return { ...agent, instructions };
 }
 
 export const RETRIEVAL_LIMIT = 6;

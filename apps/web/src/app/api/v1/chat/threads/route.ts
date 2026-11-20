@@ -4,7 +4,7 @@ import { chatContext, jsonError, PRIVATE_HEADERS, storeErrorResponse } from '@/l
 import { configuredModels, findModel, publicModels } from '@/lib/chat/models';
 import { createThread, listThreads } from '@/lib/chat/store';
 import { parseThreadCursor, searchConversations } from '@/lib/workspace-data/conversations';
-import { loadAgentForRun } from '@/lib/workspace-data/agents';
+import { loadAgentForThread } from '@/lib/workspace-data/agents';
 import { asWorkspaceDb, check } from '@/lib/workspace-data/db';
 import { WorkspaceError } from '@/lib/workspace-data/errors';
 import { isUuid, parseBool, parseLimit, toErrorResponse, workspaceContext } from '@/lib/workspace-data/http';
@@ -75,7 +75,7 @@ async function createAgentThread(request: Request, agentId: string, modelKey: un
   const orgId = ctx.tenant.organizationId;
   const wdb = asWorkspaceDb(ctx.db);
   try {
-    const agent = await loadAgentForRun(wdb, orgId, agentId);
+    const agent = await loadAgentForThread(wdb, orgId, agentId);
     const models = configuredModels();
     const model = (agent.modelKey ? findModel(models, agent.modelKey) : null) ?? findModel(models, modelKey);
     if (!model) return jsonError(400, 'Unknown model');

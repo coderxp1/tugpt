@@ -69,7 +69,10 @@ SELECT is((SELECT count(*)::int FROM public.custom_agents WHERE name = 'X'), 0, 
 
 SELECT is(public.save_custom_agent('eba00000-0000-4000-8000-00000000000a', current_setting('t.m')::uuid, '{"name":"Travel 2"}',
   ARRAY['ebc00000-0000-4000-8000-000000000003']::uuid[]), current_setting('t.m')::uuid, 'owner update returns the agent id'); -- 15
-SELECT is((SELECT row(name, instructions, version - current_setting('t.v')::int)::text FROM public.custom_agents WHERE id = current_setting('t.m')::uuid),
+-- Q-9c (F-1): the owner has no column SELECT on instructions; the editor RPC is their read path.
+SELECT is((SELECT row(a.name, i.instructions, a.version - current_setting('t.v')::int)::text FROM public.custom_agents a
+  JOIN public.custom_agent_instructions('eba00000-0000-4000-8000-00000000000a', ARRAY[current_setting('t.m')::uuid]) i ON i.agent_id = a.id
+  WHERE a.id = current_setting('t.m')::uuid),
   row('Travel 2', 'Answer travel questions.', 1)::text, 'absent keys are kept and the version is bumped once'); -- 16
 SELECT results_eq($$SELECT collection_id FROM public.custom_agent_collections WHERE agent_id = current_setting('t.m')::uuid$$,
   $$VALUES ('ebc00000-0000-4000-8000-000000000003'::uuid)$$, 'collectionIds replace the visible links'); -- 17

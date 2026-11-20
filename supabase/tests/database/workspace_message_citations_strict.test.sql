@@ -6,6 +6,10 @@
 -- the function (must be exactly false, never NULL) AND as a real INSERT by the thread owner
 -- (must fail with 23514). Valid shapes, existing rows, re-validation and the assistant-only
 -- rule are re-checked. 67 malformed and 9 valid cases.
+-- Q-9c (F-2/F-3): assistant rows can only be written by the server through
+-- public.append_chat_message_server (sso_control), and authenticated can no longer
+-- SELECT citations, so the table-driven INSERTs now go through that function and
+-- stored values are read back as the table owner. Every CHECK case is unchanged.
 BEGIN;
 SELECT plan(174);
 
@@ -23,7 +27,7 @@ INSERT INTO public.chat_threads (id, organization_id, owner_user_id, title, mode
 
 CREATE TEMP TABLE bad (ord int PRIMARY KEY, label text NOT NULL, j jsonb NOT NULL) ON COMMIT DROP;
 CREATE TEMP TABLE good (ord int PRIMARY KEY, label text NOT NULL, j jsonb NOT NULL) ON COMMIT DROP;
-GRANT SELECT ON bad, good TO authenticated;
+GRANT SELECT ON bad, good TO authenticated, sso_control;
 INSERT INTO bad VALUES
  (1, '[{}] (Agent 3 reproduction)', '[{}]'),
  (2, '[valid, {}] - empty object last', '[{"n": 1, "documentId": "eb0d0000-0000-4000-8000-000000000001", "collectionId": "ebc00000-0000-4000-8000-000000000001", "fileId": "ebf00000-0000-4000-8000-000000000001", "title": "roadmap.md", "ordinal": 0, "snippet": "The quantum ledger migration ships in Q3."}, {}]'),
@@ -148,34 +152,55 @@ SELECT ok(EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = 'public.chat_mess
   AND NOT EXISTS (SELECT 1 FROM public.chat_messages WHERE id = 'eb5e0000-0000-4000-8000-0000000000ff'),
   'after the failed re-validation the constraint is intact and the planted row is gone'); -- 12
 
-SET LOCAL ROLE authenticated;
-SELECT set_config('request.jwt.claims','{"sub":"eb222222-2222-4222-8222-222222222222","role":"authenticated"}',true);
-CREATE FUNCTION pg_temp.ins(p jsonb, p_role text DEFAULT 'assistant', p_ku boolean DEFAULT false) RETURNS void LANGUAGE sql AS $f$
-  INSERT INTO public.chat_messages (thread_id, organization_id, role, content, citations, knowledge_unavailable)
-  VALUES ('eb700000-0000-4000-8000-0000000000a1','eba00000-0000-4000-8000-00000000000a', p_role, 'x', p, p_ku) $f$;
-
--- Existing persisted citations still read back unchanged and still validate.
+-- Existing persisted citations still read back unchanged and still validate (as table owner).
 SELECT is((SELECT citations FROM public.chat_messages WHERE id = 'eb5e0000-0000-4000-8000-000000000001'),
   (SELECT j FROM good WHERE ord = 3), 'existing persisted citations read back unchanged'); -- 13
 SELECT is((SELECT private.valid_message_citations(citations) FROM public.chat_messages WHERE id = 'eb5e0000-0000-4000-8000-000000000001'),
   true, 'existing persisted citations still validate'); -- 14
 
--- Assistant-only rule preserved; normal chat unaffected.
-SELECT throws_ok($$SELECT pg_temp.ins((SELECT j FROM good WHERE ord = 1), 'user')$$, '23514', NULL, 'user message with valid citations rejected'); -- 15
-SELECT throws_ok($$SELECT pg_temp.ins('[{}]', 'user')$$, '23514', NULL, 'user message with [{}] rejected'); -- 16
+-- Assistant-only rule preserved (the CHECK applies to every writer, even the table owner).
+SELECT throws_ok($$INSERT INTO public.chat_messages (thread_id, organization_id, role, content, citations)
+  SELECT 'eb700000-0000-4000-8000-0000000000a1','eba00000-0000-4000-8000-00000000000a','user','x', j FROM good WHERE ord = 1$$,
+  '23514', NULL, 'user message with valid citations rejected'); -- 15
+SELECT throws_ok($$INSERT INTO public.chat_messages (thread_id, organization_id, role, content, citations)
+  VALUES ('eb700000-0000-4000-8000-0000000000a1','eba00000-0000-4000-8000-00000000000a','user','x','[{}]')$$,
+  '23514', NULL, 'user message with [{}] rejected'); -- 16
+
+-- The server path (the only writer of assistant/tool rows since 20261120200003).
+-- Runs the server RPC AS sso_control (EXECUTE is checked for that role), then
+-- restores the caller's role. pgTAP itself is not resolvable by sso_control (no
+-- USAGE on extensions), so the assertions stay outside the role switch; on error
+-- the enclosing subtransaction restores the role.
+CREATE FUNCTION pg_temp.ctl(p_org uuid, p_user uuid, p_thread uuid, p_role text, p_content text, p jsonb DEFAULT '[]', p_ku boolean DEFAULT false)
+RETURNS jsonb LANGUAGE plpgsql AS $f$
+DECLARE v_prev text := current_user; v jsonb;
+BEGIN
+  PERFORM set_config('role', 'sso_control', true);
+  v := public.append_chat_message_server(p_org, p_user, p_thread, p_role, p_content, 'complete', NULL, '[]'::jsonb, NULL, p, p_ku);
+  PERFORM set_config('role', v_prev, true);
+  RETURN v;
+END $f$;
+CREATE FUNCTION pg_temp.ins(p jsonb, p_role text DEFAULT 'assistant', p_ku boolean DEFAULT false) RETURNS jsonb LANGUAGE sql AS $f$
+  SELECT pg_temp.ctl('eba00000-0000-4000-8000-00000000000a', 'eb222222-2222-4222-8222-222222222222',
+    'eb700000-0000-4000-8000-0000000000a1', p_role, 'x', p, p_ku) $f$;
 SELECT throws_ok($$SELECT pg_temp.ins('[]', 'tool', true)$$, '23514', NULL, 'tool message with knowledge_unavailable rejected'); -- 17
-SELECT lives_ok($$INSERT INTO public.chat_messages (id, thread_id, organization_id, role, content) VALUES
-  ('eb5e0000-0000-4000-8000-000000000010','eb700000-0000-4000-8000-0000000000a2','eba00000-0000-4000-8000-00000000000a','user','plain hello'),
-  ('eb5e0000-0000-4000-8000-000000000011','eb700000-0000-4000-8000-0000000000a2','eba00000-0000-4000-8000-00000000000a','assistant','plain answer')$$,
-  'normal chat: user and assistant messages without citations'); -- 18
+SET LOCAL ROLE authenticated;
+SELECT set_config('request.jwt.claims','{"sub":"eb222222-2222-4222-8222-222222222222","role":"authenticated"}',true);
+SELECT lives_ok($$INSERT INTO public.chat_messages (thread_id, organization_id, role, content) VALUES
+  ('eb700000-0000-4000-8000-0000000000a2','eba00000-0000-4000-8000-00000000000a','user','plain hello');
+  SELECT set_config('t.u', (SELECT id::text FROM public.chat_messages WHERE content = 'plain hello'), true);
+  SELECT set_config('t.a', pg_temp.ctl('eba00000-0000-4000-8000-00000000000a', 'eb222222-2222-4222-8222-222222222222',
+    'eb700000-0000-4000-8000-0000000000a2', 'assistant', 'plain answer')->>'id', true)$$,
+  'normal chat: user message by the owner, assistant answer by the server, both without citations'); -- 18
+RESET ROLE;
 SELECT is((SELECT string_agg(role || ':' || citations::text || ':' || knowledge_unavailable, ',' ORDER BY role DESC) FROM public.chat_messages
-  WHERE id IN ('eb5e0000-0000-4000-8000-000000000010','eb5e0000-0000-4000-8000-000000000011')),
+  WHERE id IN (current_setting('t.u')::uuid, current_setting('t.a')::uuid)),
   'user:[]:false,assistant:[]:false', 'normal chat messages get [] / false'); -- 19
 SELECT lives_ok($$SELECT pg_temp.ins('[]', 'assistant', true)$$, 'assistant answer with knowledge_unavailable and no citations'); -- 20
 SELECT is((SELECT count(*)::int FROM bad), 67, '67 malformed cases are checked'); -- 21
 SELECT is((SELECT count(*)::int FROM good), 9, '9 valid cases are checked'); -- 22
 
--- Every malformed case: the function says false, and the owner's INSERT fails with 23514.
+-- Every malformed case: the function says false, and the server INSERT fails with 23514.
 SELECT is(private.valid_message_citations(j), false, 'validator rejects: ' || label) FROM bad ORDER BY ord;
 SELECT throws_ok(format('SELECT pg_temp.ins(%L::jsonb)', j::text), '23514', NULL, 'INSERT rejects: ' || label) FROM bad ORDER BY ord;
 
