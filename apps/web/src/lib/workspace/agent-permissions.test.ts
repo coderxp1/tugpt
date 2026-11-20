@@ -22,7 +22,7 @@ describe('frontend permissions against backend agent serialization', () => {
       instructions: 'Private instructions', visibility, version: 1,
       created_at: '2026-01-01', updated_at: '2026-01-01',
     }, 'me', role, []);
-    const expectedEdit = roles[role].create && ownedByMe;
+    const expectedEdit = roles[role].create && ownedByMe && (visibility === 'private' || roles[role].share);
     const expectedDelete = roles[role].create && (ownedByMe || (visibility === 'organization' && roles[role].share));
     expect(resource.canEdit).toBe(expectedEdit);
     expect(resource.canDelete).toBe(expectedDelete);

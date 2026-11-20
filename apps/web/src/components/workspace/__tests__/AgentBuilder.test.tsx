@@ -1,6 +1,8 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { I18nProvider } from '@/i18n/provider';
+import { createTranslator } from '@/i18n';
 import { AgentsView } from '../AgentsView';
 import { fakeApi } from './fake-api';
 
@@ -23,13 +25,13 @@ describe('Agent builder', () => {
   it('does not infer write compatibility from an empty actual Agents API list', async () => {
     const api = fakeApi({ 'GET /api/v1/agents': () => ({ body: { agents: [] } }) });
     render(<AgentsView models={models} />);
-    await screen.findByText('No custom agents are shown here. You can preview the builder, but saving is not connected yet.');
+    await screen.findByText('No custom agents are shown here.');
     fireEvent.click(screen.getByRole('button', { name: 'Preview agent builder' }));
     const dialog = screen.getByRole('dialog', { name: 'New agent' });
     fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: 'Shipping helper' } });
     fireEvent.change(within(dialog).getByLabelText(/^Instructions/), { target: { value: 'Answer shipping questions.' } });
     expect((within(dialog).getByRole('button', { name: 'Create agent' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(within(dialog).getByText(/Its write adapter is not yet compatible/)).toBeTruthy();
+    expect(within(dialog).getByText(/This builder is a preview; changes will not be saved/)).toBeTruthy();
     fireEvent.submit(dialog.querySelector('form')!);
     expect(api.calls.some((c) => c.method === 'POST')).toBe(false);
   });
@@ -56,6 +58,7 @@ describe('compatible C-1 responses do not enable unverified features', () => {
     }] } }) });
     render(<AgentsView models={models} role={role} />);
     const heading = await screen.findByRole('heading', { name: 'Shipping helper' });
+    expect(screen.getByText(/Custom-agent actions are disabled in this workspace/)).toBeTruthy();
     const card = heading.closest('li')!;
     expect(within(card).queryByRole('button')).toBeNull();
     expect(within(card).queryByRole('link')).toBeNull();
@@ -69,4 +72,18 @@ describe('compatible C-1 responses do not enable unverified features', () => {
     expect(api.calls.every((c) => c.method === 'GET')).toBe(true);
     expect(api.calls.some((c) => c.path.endsWith('/run') || c.path.endsWith('/messages'))).toBe(false);
   });
+});
+
+
+it.each(['en', 'es'] as const)('explains the release gate in %s without claiming API incompatibility', async (locale) => {
+  const t = createTranslator(locale);
+  const api = fakeApi({ 'GET /api/v1/agents': () => ({ body: { agents: [] } }) });
+  render(<I18nProvider locale={locale}><AgentsView models={models} /></I18nProvider>);
+  await screen.findByText(t('workspace.agents.previewNotice'));
+  fireEvent.click(screen.getByRole('button', { name: t('workspace.agents.create') }));
+  const dialog = screen.getByRole('dialog');
+  expect(within(dialog).getByText(t('workspace.agents.saveUnavailableBody'))).toBeTruthy();
+  expect((within(dialog).getByRole('button', { name: t('workspace.agents.createButton') }) as HTMLButtonElement).disabled).toBe(true);
+  fireEvent.submit(dialog.querySelector('form')!);
+  expect(api.calls.every((call) => call.method === 'GET')).toBe(true);
 });

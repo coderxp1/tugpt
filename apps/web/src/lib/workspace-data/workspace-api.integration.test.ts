@@ -1545,4 +1545,68 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
       });
     });
   });
+  it('F-4: visibility-aware flags match RLS through role changes, without widening edit or moderation rights', async () => {
+    const db = svc as unknown as PostgrestClient;
+    const role = async (value: string) => {
+      const changed = await db.from('organization_members').update({ role: value }).eq('organization_id', ORG_A).eq('user_id', U.memberA.id);
+      expect(changed.error).toBeNull();
+      as({ ...U.memberA, role: value });
+    };
+    const get = (agentId: string) => call('agent', 'GET', { params: { agentId } });
+    const patch = (agentId: string, body: unknown) => call('agent', 'PATCH', { params: { agentId }, body });
+    try {
+      // Legitimate organization agent creation before demotion, not a bypassed fixture.
+      await role('admin');
+      const org = await call('agents', 'POST', { body: { name: 'F4 demotion', instructions: 'Retain these instructions', visibility: 'organization' } });
+      expect(org.status).toBe(201);
+      const id: string = org.json.agent.id;
+      expect(org.json.agent.canEdit).toBe(true);
+      const priv = await call('agents', 'POST', { body: { name: 'F4 private', instructions: 'Private rules' } });
+      expect(priv.status).toBe(201);
+      const privateId: string = priv.json.agent.id;
+      as(U.ownerA);
+      const foreign = await call('agents', 'POST', { body: { name: 'F4 other owner', instructions: 'Other rules', visibility: 'organization' } });
+      expect(foreign.status).toBe(201);
+      const otherId: string = foreign.json.agent.id;
+      await role('manager');
+      expect((await get(id)).json.agent).toMatchObject({ ownedByMe: true, canEdit: false, canDelete: true, instructions: '' });
+      const list = await call('agents', 'GET');
+      expect(list.json.agents.find((a: { id: string }) => a.id === id).canEdit).toBe(false);
+      expect((await patch(id, { name: 'Denied ordinary edit' })).status).toBe(403);
+      expect((await patch(id, { name: 'Denied explicit org', visibility: 'organization' })).status).toBe(403);
+      // Bypass the API: unchanged database rejects the same resulting organization row.
+      const raw = await (current!.db as PostgrestClient).from('custom_agents').update({ name: 'Denied direct write' }).eq('id', id);
+      expect(raw.error?.code).toBe('42501');
+      expect((await get(id)).json.agent.name).toBe('F4 demotion');
+      expect((await get(privateId)).json.agent.canEdit).toBe(true);
+      expect((await patch(privateId, { name: 'Allowed private edit' })).status).toBe(200);
+      expect((await patch(privateId, { visibility: 'organization' })).status).toBe(403);
+      expect((await get(otherId)).json.agent).toMatchObject({ ownedByMe: false, canEdit: false, canDelete: false });
+      expect((await patch(otherId, { name: 'Denied other owner' })).status).toBe(404);
+      expect((await call('agent', 'DELETE', { params: { agentId: otherId } })).status).toBe(403);
+      // Knowledge-link policy stays owner/non-viewer, independently of field visibility.
+      const col = await call('collections', 'POST', { body: { name: 'F4 private source' } });
+      expect(col.status).toBe(201);
+      expect((await call('agentCollections', 'POST', { params: { agentId: id }, body: { collectionId: col.json.collection.id } })).status).toBe(201);
+      await role('viewer');
+      expect((await get(id)).json.agent).toMatchObject({ canEdit: false, canDelete: false });
+      expect((await get(privateId)).json.agent).toMatchObject({ canEdit: false, canDelete: false });
+      expect((await patch(privateId, { name: 'Viewer denied' })).status).toBe(403);
+      expect((await patch(id, { visibility: 'private' })).status).toBe(403);
+      expect((await call('agent', 'DELETE', { params: { agentId: privateId } })).status).toBe(403);
+      expect((await call('agents', 'POST', { body: { name: 'Denied', instructions: 'x' } })).status).toBe(403);
+      await role('manager');
+      const unshared = await patch(id, { visibility: 'private' });
+      expect(unshared.status).toBe(200);
+      expect(unshared.json.agent).toMatchObject({ canEdit: true, visibility: 'private', instructions: 'Retain these instructions' });
+      await role('admin');
+      expect((await get(otherId)).json.agent).toMatchObject({ canEdit: false, canDelete: true });
+      expect((await patch(otherId, { name: 'Admin cannot hijack' })).status).toBe(404);
+      expect((await call('agentCollections', 'POST', { params: { agentId: otherId }, body: { collectionId: col.json.collection.id } })).status).toBe(403);
+      expect((await call('agent', 'DELETE', { params: { agentId: otherId } })).status).toBe(200);
+      as(U.ownerB);
+      expect((await get(id)).status).toBe(404);
+    } finally { await role('agent'); }
+  });
+
 });

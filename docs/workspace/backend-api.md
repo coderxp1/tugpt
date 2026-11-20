@@ -332,3 +332,22 @@ further change needs a **new** migration ID.
 | Unit | `pnpm --filter web test` (includes `workspace-data.test.ts`, `agents.test.ts`); `pnpm --filter @tugpt/workspace-core test`; `pnpm --filter worker test` | Hermetic. SigV4 AWS vectors, path traversal, validation, DOCX/XLSX/PDF extraction and zip bombs, embeddings client, worker retry/lease logic, maintenance, agent prompt fencing and retrieval query, CSRF and the client |
 | pgTAP | `supabase/tests/database/workspace_{conversations,approval_requests,files,library,document_jobs,rate_limits,custom_agents,storage_maintenance}.test.sql` | RLS, grants, RPCs, job state machine, hybrid search isolation, cross-tenant rules, audit |
 | Integration (real PostgREST and RLS) | see `apps/web/tests/workspace-it/README.md` | Skipped unless `WS_IT_POSTGREST_URL` is set. Disposable DB only. Runs the real knowledge worker as `service_role`, a loopback fake embeddings server (hashed trigrams) and a loopback fake LLM (SSE) |
+
+
+### F-4: edit permission and resulting visibility
+
+`CustomAgent.canEdit` describes an owner save that **preserves current visibility**.
+A known non-viewer owner can edit a private agent; an organization-visible agent
+also requires organization role `owner` or `admin`, matching `agents_update`
+`WITH CHECK`. A demoted `manager`/`agent` owner therefore receives `canEdit:false`
+for an organization agent and `403` for a PATCH that leaves it organization-visible
+(including omitted `visibility`). Instructions remain redacted when `canEdit` is false.
+
+Ownership is still required: other-owner PATCH is `404`, including for admins.
+An explicit owner PATCH to `visibility: private` remains allowed for a non-viewer,
+as already permitted by RLS; it is not automatic and does not erase instructions.
+Private-to-organization publication still requires owner/admin. Viewer owners
+cannot write or delete. Admin moderation deletion remains separate from editing.
+Knowledge-link endpoints retain their existing owner/non-viewer policy; their RLS
+does not use the resulting-agent-visibility check. The current UI conservatively
+hides knowledge editing when `canEdit` is false. No database authorization was widened.

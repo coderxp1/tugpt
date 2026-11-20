@@ -50,9 +50,8 @@ export function AgentsView({ models = [], role = 'viewer' }: AgentsViewProps) {
   const [editing, setEditing] = useState<Editing>(null);
   const [remove, setRemove] = useState<CustomAgent | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  // A successful list request does not prove that the builder write contract is supported.
-  // Agent 4's C-1 alignment is source-reviewed, not live-integrated here.
-  // Keep writes off until the real API and end-to-end execution flow are verified.
+  // API availability and release authorization are separate. A successful read
+  // must not unlock writes or execution while the release gate remains closed.
   const canWrite = agentsApiAvailable && load.state === 'ready';
   const permissions = agentPermissions(role);
   const [knowledge, setKnowledge] = useState<CustomAgent | null>(null);
@@ -121,6 +120,7 @@ export function AgentsView({ models = [], role = 'viewer' }: AgentsViewProps) {
           <div className={s.sectionHead}><h2 id="agents-custom">{t('workspace.agents.yours')}</h2></div>
           {load.state === 'loading' && <LoadingRows label={t('workspace.agents.loading')} rows={1} tall />}
           {load.state === 'error' && <ServiceNotice problem={load.problem} failure={load.failure} feature={t('workspace.agents.customFeature')} detail={t('workspace.agents.customBody')} onRetry={reload} />}
+          {available && !agentsApiAvailable && <p className={s.muted}>{t('workspace.agents.previewNotice')}</p>}
           {available && custom.length === 0 && <p className={s.muted}>{t('workspace.agents.none')}</p>}
         </section>
       </div>
