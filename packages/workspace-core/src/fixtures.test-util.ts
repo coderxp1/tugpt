@@ -38,6 +38,37 @@ export function makeXlsx(sheets: [string, string][], sharedStrings: string[] = [
   return makeZip(files);
 }
 
+const REL = 'http://schemas.openxmlformats.org/officeDocument/2006/relationships';
+const RELS = (body: string) => `<?xml version="1.0"?><Relationships xmlns="http://schemas.openxmlformats.org/package/2006/relationships">${body}</Relationships>`;
+const A = 'xmlns:a="http://schemas.openxmlformats.org/drawingml/2006/main" xmlns:p="http://schemas.openxmlformats.org/presentationml/2006/main"';
+/** DrawingML paragraphs: each string becomes one <a:p> with one run per word group. */
+export const aParas = (ps: string[]) => ps.map((t) => `<a:p><a:pPr lvl="0"/>${t.split(' | ').map((r) => `<a:r><a:rPr lang="en-US"/><a:t>${r}</a:t></a:r>`).join('')}</a:p>`).join('');
+/**
+ * Minimal PPTX. Slides are listed in presentation order but stored under
+ * reversed file names (slideN.xml is the first slide), so tests prove the
+ * extractor follows presentation.xml rather than file names. `body` and
+ * `notes` are raw inner XML (use aParas).
+ */
+export function makePptx(slides: { body: string; notes?: string }[], extra: Record<string, string> = {}): Uint8Array {
+  const n = slides.length;
+  const files: Record<string, string> = {
+    '[Content_Types].xml': '<?xml version="1.0"?><Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types"/>',
+    'ppt/presentation.xml': `<?xml version="1.0"?><p:presentation ${A} xmlns:r="${REL}"><p:sldIdLst>${slides.map((_, i) => `<p:sldId id="${256 + i}" r:id="rId${i + 2}"/>`).join('')}</p:sldIdLst></p:presentation>`,
+    'ppt/_rels/presentation.xml.rels': RELS(`<Relationship Id="rId1" Type="${REL}/slideMaster" Target="slideMasters/slideMaster1.xml"/>${slides.map((_, i) =>
+      `<Relationship Id="rId${i + 2}" Type="${REL}/slide" Target="slides/slide${n - i}.xml"/>`).join('')}`),
+    ...extra,
+  };
+  slides.forEach((s, i) => {
+    const f = n - i;
+    files[`ppt/slides/slide${f}.xml`] = `<?xml version="1.0"?><p:sld ${A}><p:cSld><p:spTree><p:sp><p:txBody>${s.body}</p:txBody></p:sp></p:spTree></p:cSld></p:sld>`;
+    if (s.notes !== undefined) {
+      files[`ppt/slides/_rels/slide${f}.xml.rels`] = RELS(`<Relationship Id="rId1" Type="${REL}/slideLayout" Target="../slideLayouts/slideLayout1.xml"/><Relationship Id="rId2" Type="${REL}/notesSlide" Target="../notesSlides/notesSlide${f}.xml"/>`);
+      files[`ppt/notesSlides/notesSlide${f}.xml`] = `<?xml version="1.0"?><p:notes ${A}><p:cSld><p:spTree><p:sp><p:txBody><a:p><a:fld id="{1}" type="slidenum"><a:t>${f}</a:t></a:fld></a:p></p:txBody></p:sp><p:sp><p:txBody>${s.notes}</p:txBody></p:sp></p:spTree></p:cSld></p:notes>`;
+    }
+  });
+  return makeZip(files);
+}
+
 /** A real, minimal PDF 1.4 with one Helvetica text line per array entry, one page per inner array. */
 export function makePdf(pages: string[][]): Uint8Array {
   const esc = (s: string) => s.replace(/\\/g, '\\\\').replace(/\(/g, '\\(').replace(/\)/g, '\\)');

@@ -5,6 +5,9 @@
  *   DOCX   word/document.xml (visible text; field codes and tracked deletions dropped)
  *   XLSX   every worksheet in workbook order, shared + inline strings, one
  *          paragraph per non-empty row ("Sheet!row: a | b | c")
+ *   PPTX   every slide in presentation order: visible text (shapes, tables,
+ *          groups) one paragraph per <a:p>, then the speaker notes
+ *          ("Slide 3: ..." / "Slide 3 notes: ..."); fields (slide numbers) dropped
  *   PDF    through an injected PdfExtractor (see ./pdf, worker-only), so the
  *          web bundle never loads a PDF engine
  *
@@ -18,15 +21,17 @@ export const MAX_XML_BYTES = MAX_ENTRY_BYTES;
 export const MAX_TOTAL_INFLATE_BYTES = 100 * 1024 * 1024;
 export const MAX_XLSX_SHEETS = 100;
 export const MAX_XLSX_CELLS = 500_000;
+export const MAX_PPTX_SLIDES = 1000;
 export const CHUNK_TARGET = 1500;
 export const CHUNK_OVERLAP = 150;
 export const MAX_CHUNKS = 2000;
 
 export const DOCX_MEDIA_TYPE = 'application/vnd.openxmlformats-officedocument.wordprocessingml.document';
 export const XLSX_MEDIA_TYPE = 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+export const PPTX_MEDIA_TYPE = 'application/vnd.openxmlformats-officedocument.presentationml.presentation';
 export const PDF_MEDIA_TYPE = 'application/pdf';
 export const TEXT_MEDIA_TYPES: ReadonlySet<string> = new Set(['text/plain', 'text/markdown', 'text/csv', 'application/json']);
-export const INDEXABLE_MEDIA_TYPES: ReadonlySet<string> = new Set([...TEXT_MEDIA_TYPES, DOCX_MEDIA_TYPE, XLSX_MEDIA_TYPE, PDF_MEDIA_TYPE]);
+export const INDEXABLE_MEDIA_TYPES: ReadonlySet<string> = new Set([...TEXT_MEDIA_TYPES, DOCX_MEDIA_TYPE, XLSX_MEDIA_TYPE, PPTX_MEDIA_TYPE, PDF_MEDIA_TYPE]);
 
 export type ExtractionCode =
   | 'PDF_EXTRACTION_UNAVAILABLE' | 'PDF_ENCRYPTED' | 'PDF_NO_TEXT_LAYER' | 'UNSUPPORTED_FOR_INDEXING'
@@ -60,6 +65,7 @@ export function extractText(bytes: Uint8Array, mediaType: string): Extraction {
       return finish(docxXmlToText(zip.text('word/document.xml')));
     }
     if (mediaType === XLSX_MEDIA_TYPE) return finish(xlsxToText(openZip(bytes)));
+    if (mediaType === PPTX_MEDIA_TYPE) return finish(pptxToText(openZip(bytes)));
     if (mediaType === PDF_MEDIA_TYPE) return { kind: 'unsupported', code: 'PDF_EXTRACTION_UNAVAILABLE' };
     return { kind: 'unsupported', code: 'UNSUPPORTED_FOR_INDEXING' };
   } catch (e) {
@@ -197,6 +203,86 @@ export function xlsxToText(zip: OpenZip): string {
       if (values.length > 0) paragraphs.push(`${sheet.name}!${rowNo}: ${values.join(' | ')}`);
     }
   }
+  return paragraphs.join('\n\n');
+}
+
+// ---------------------------------------------------------------- PPTX
+/**
+ * Resolves a relationship target against the part that owns the .rels file.
+ * Package-absolute targets start with '/'. Returns null for external targets
+ * and for anything that would leave the package root.
+ */
+export function resolvePartTarget(sourcePart: string, target: string): string | null {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(target)) return null;
+  const base = target.startsWith('/') ? [] : sourcePart.split('/').slice(0, -1);
+  const out = [...base];
+  for (const seg of target.replace(/^\/+/, '').split('/')) {
+    if (seg === '' || seg === '.') continue;
+    if (seg === '..') { if (out.length === 0) return null; out.pop(); } else out.push(seg);
+  }
+  return out.length > 0 ? out.join('/') : null;
+}
+function relsPath(part: string): string {
+  const i = part.lastIndexOf('/');
+  return `${part.slice(0, i + 1)}_rels/${part.slice(i + 1)}.rels`;
+}
+/** Internal relationships of a part: id -> { type, path }. */
+function partRels(zip: OpenZip, part: string): Map<string, { type: string; path: string }> {
+  const out = new Map<string, { type: string; path: string }>();
+  const rp = relsPath(part);
+  if (!zip.has(rp)) return out;
+  for (const m of zip.text(rp).matchAll(/<Relationship\b[^>]*>/g)) {
+    const a = attrs(m[0]);
+    if (!a.Id || !a.Target || a.TargetMode === 'External') continue;
+    const path = resolvePartTarget(part, a.Target);
+    if (path) out.set(a.Id, { type: a.Type ?? '', path });
+  }
+  return out;
+}
+/** One string per non-empty <a:p>: concatenated <a:t> runs, <a:br/> as a line break, <a:fld> dropped when asked. */
+export function drawingMlParagraphs(xml: string, opts: { dropFields?: boolean } = {}): string[] {
+  const src = opts.dropFields ? xml.replace(/<a:fld\b[\s\S]*?<\/a:fld>/g, '') : xml;
+  const out: string[] = [];
+  for (const p of src.matchAll(/<a:p\b[^>]*?(?:\/>|>([\s\S]*?)<\/a:p>)/g)) {
+    let t = '';
+    for (const r of (p[1] ?? '').matchAll(/<a:t\b[^>]*>([\s\S]*?)<\/a:t>|<a:br\b[^>]*\/>/g)) t += r[1] !== undefined ? decodeXmlEntities(r[1]) : '\n';
+    t = t.replace(/[ \t]+/g, ' ').replace(/ ?\n ?/g, '\n').trim();
+    if (t) out.push(t);
+  }
+  return out;
+}
+/** Slide parts in presentation order (presentation.xml sldIdLst + its rels), falling back to file-name order. */
+function slideOrder(zip: OpenZip): string[] {
+  const num = (n: string) => Number(n.match(/(\d+)\.xml$/)![1]);
+  const fallback = zip.names().filter((n) => /^ppt\/slides\/slide\d+\.xml$/.test(n)).sort((a, b) => num(a) - num(b));
+  const pres = 'ppt/presentation.xml';
+  if (!zip.has(pres)) return fallback;
+  const rels = partRels(zip, pres);
+  const out: string[] = [];
+  const list = zip.text(pres).match(/<p:sldIdLst\b[^>]*>([\s\S]*?)<\/p:sldIdLst>/)?.[1] ?? '';
+  for (const m of list.matchAll(/<p:sldId\b[^>]*>/g)) {
+    const a = attrs(m[0]);
+    const rid = a['r:id'] ?? Object.entries(a).find(([k]) => k.endsWith(':id') && k !== 'id')?.[1];
+    const rel = rid ? rels.get(rid) : undefined;
+    if (rel && /\/slide$/.test(rel.type) && zip.has(rel.path) && !out.includes(rel.path)) out.push(rel.path);
+  }
+  return out.length > 0 ? out : fallback;
+}
+export function pptxToText(zip: OpenZip): string {
+  const slides = slideOrder(zip);
+  if (slides.length === 0) throw new Error('no slides');
+  if (slides.length > MAX_PPTX_SLIDES) throw new TooLarge();
+  const paragraphs: string[] = [];
+  slides.forEach((slide, i) => {
+    const n = i + 1;
+    const body = drawingMlParagraphs(zip.text(slide));
+    if (body.length > 0) paragraphs.push(`Slide ${n}: ${body[0]}`, ...body.slice(1));
+    const notes = [...partRels(zip, slide).values()].find((r) => /\/notesSlide$/.test(r.type) && zip.has(r.path));
+    if (notes) {
+      const lines = drawingMlParagraphs(zip.text(notes.path), { dropFields: true });
+      if (lines.length > 0) paragraphs.push(`Slide ${n} notes: ${lines[0]}`, ...lines.slice(1));
+    }
+  });
   return paragraphs.join('\n\n');
 }
 

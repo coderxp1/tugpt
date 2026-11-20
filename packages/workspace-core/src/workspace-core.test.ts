@@ -6,9 +6,10 @@ import {
   blobKey, chunkText, configuredEmbeddings, EmbeddingsClient, EmbeddingsError, embeddingsConfig, extractDocument, extractText,
   FilesystemBlobStore, MemoryBlobStore, orgPrefix, parseBlobKey, readZipEntry, S3BlobStore, StorageError, toVectorLiteral,
   XLSX_MEDIA_TYPE, zipEntries, type BlobEntry, type BlobStore,
+  drawingMlParagraphs, INDEXABLE_MEDIA_TYPES, MAX_PPTX_SLIDES, PPTX_MEDIA_TYPE, resolvePartTarget,
 } from './index';
 import { extractPdfText, pdfExtractor } from './pdf';
-import { makePdf, makeXlsx, makeZip } from './fixtures.test-util';
+import { aParas, makePdf, makePptx, makeXlsx, makeZip } from './fixtures.test-util';
 
 const ORG = '11111111-1111-4111-8111-111111111111';
 const ORG2 = '22222222-2222-4222-8222-222222222222';
@@ -60,6 +61,60 @@ describe('XLSX extraction', () => {
     const chunks = r.kind === 'text' ? chunkText(r.text) : [];
     expect(chunks.length).toBeGreaterThan(3);
     for (const c of chunks) expect(c.length).toBeLessThanOrEqual(1500 + 200);
+  });
+});
+
+describe('PPTX extraction (Q-13)', () => {
+  it('is indexable', () => { expect(INDEXABLE_MEDIA_TYPES.has(PPTX_MEDIA_TYPE)).toBe(true); });
+
+  it('reads slides in presentation order with their speaker notes; slide-number fields dropped', () => {
+    const pptx = makePptx([
+      { body: aParas(['Quarterly review', 'Revenue  | up 12%']), notes: aParas(['Mention the Berlin office']) },
+      { body: aParas(['Roadmap']) },
+      { body: aParas(['Risks &amp; mitigations']), notes: aParas(['Ask legal']) },
+    ]);
+    const r = extractText(pptx, PPTX_MEDIA_TYPE);
+    expect(r).toEqual({ kind: 'text', text: [
+      'Slide 1: Quarterly review', 'Revenue up 12%', 'Slide 1 notes: Mention the Berlin office',
+      'Slide 2: Roadmap', 'Slide 3: Risks & mitigations', 'Slide 3 notes: Ask legal',
+    ].join('\n\n') });
+  });
+
+  it('keeps table cells and line breaks, skips empty paragraphs and non-text tags', () => {
+    const table = '<a:tbl><a:tr><a:tc><a:txBody><a:p><a:r><a:t>Cell A</a:t></a:r></a:p></a:txBody></a:tc><a:tc><a:txBody><a:p><a:r><a:t>Cell B</a:t></a:r></a:p></a:txBody></a:tc></a:tr></a:tbl>';
+    expect(drawingMlParagraphs(`<a:p/><a:p><a:r><a:t>one</a:t></a:r><a:br/><a:r><a:t>two</a:t></a:r></a:p>${table}<a:p><a:endParaRPr/></a:p>`))
+      .toEqual(['one\ntwo', 'Cell A', 'Cell B']);
+  });
+
+  it('falls back to file-name order without presentation.xml', () => {
+    const pptx = makeZip({
+      'ppt/slides/slide10.xml': `<p:sld><a:p><a:r><a:t>ten</a:t></a:r></a:p></p:sld>`,
+      'ppt/slides/slide2.xml': `<p:sld><a:p><a:r><a:t>two</a:t></a:r></a:p></p:sld>`,
+    });
+    expect(extractText(pptx, PPTX_MEDIA_TYPE)).toEqual({ kind: 'text', text: 'Slide 1: two\n\nSlide 2: ten' });
+  });
+
+  it('resolves relationship targets inside the package only', () => {
+    expect(resolvePartTarget('ppt/slides/slide1.xml', '../notesSlides/notesSlide1.xml')).toBe('ppt/notesSlides/notesSlide1.xml');
+    expect(resolvePartTarget('ppt/presentation.xml', 'slides/slide1.xml')).toBe('ppt/slides/slide1.xml');
+    expect(resolvePartTarget('ppt/presentation.xml', '/ppt/slides/slide1.xml')).toBe('ppt/slides/slide1.xml');
+    expect(resolvePartTarget('ppt/slides/slide1.xml', '../../../etc/passwd')).toBeNull();
+    expect(resolvePartTarget('ppt/slides/slide1.xml', 'https://example.com/x')).toBeNull();
+  });
+
+  it('ignores external and escaping notes targets instead of failing', () => {
+    const pptx = makePptx([{ body: aParas(['Only slide']) }], {
+      'ppt/slides/_rels/slide1.xml.rels': '<Relationships><Relationship Id="r1" Type="x/notesSlide" Target="../../../../evil.xml"/><Relationship Id="r2" Type="x/notesSlide" Target="https://example.com" TargetMode="External"/></Relationships>',
+    });
+    expect(extractText(pptx, PPTX_MEDIA_TYPE)).toEqual({ kind: 'text', text: 'Slide 1: Only slide' });
+  });
+
+  it('reports empty, broken and oversized decks with specific codes', () => {
+    expect(extractText(makePptx([{ body: '<a:p/>' }]), PPTX_MEDIA_TYPE)).toEqual({ kind: 'failed', code: 'EMPTY_DOCUMENT' });
+    expect(extractText(makeZip({ 'a.txt': 'x' }), PPTX_MEDIA_TYPE)).toEqual({ kind: 'failed', code: 'EXTRACTION_FAILED' });
+    expect(extractText(new TextEncoder().encode('not a zip'), PPTX_MEDIA_TYPE)).toEqual({ kind: 'failed', code: 'EXTRACTION_FAILED' });
+    const many = makePptx(Array.from({ length: MAX_PPTX_SLIDES + 1 }, () => ({ body: '' })));
+    expect(extractText(many, PPTX_MEDIA_TYPE)).toEqual({ kind: 'failed', code: 'DOCUMENT_TOO_LARGE' });
   });
 });
 
