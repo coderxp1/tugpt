@@ -66,6 +66,25 @@ describe('approval route audit', () => {
     expect((await req(valid)).status).toBe(403);
     expect(st.calls.at(-1)).toMatchObject({ fn: 'record_mcp_approval_event', args: { p_reason: 'APPROVER_ROLE_REQUIRED' } });
   });
+  it.each([
+    ['INVALID_THREAD', 'THREAD_NOT_ACCESSIBLE'],
+    ['INVALID_ENDPOINT', 'ENDPOINT_NOT_ACTIVE'],
+  ])('an approval for a thread/endpoint outside the caller organization (%s) is a 400 and is recorded as %s in the caller organization', async (dbMessage, reason) => {
+    st.approveError = { code: '22023', message: dbMessage };
+    const res = await req(valid);
+    expect(res.status).toBe(400);
+    expect((await res.json()).error.code).toBe('INVALID_REQUEST');
+    expect(st.calls.map((c) => c.fn)).toEqual(['record_tool_approval', 'record_mcp_approval_event']);
+    expect(st.calls.at(-1)).toEqual({ fn: 'record_mcp_approval_event', args: {
+      p_organization_id: ORG, p_event: 'authorization_denied', p_reason: reason,
+      p_connection_id: EP, p_capability: 'external.create_entities', p_arguments_sha256: HASH, p_thread_id: THREAD,
+    } });
+  });
+  it('other invalid-input errors stay a 400 and record nothing', async () => {
+    st.approveError = { code: '22023', message: 'INVALID_CAPABILITY' };
+    expect((await req(valid)).status).toBe(400);
+    expect(st.calls.map((c) => c.fn)).toEqual(['record_tool_approval']);
+  });
   it('an approver records the approval (the approved event is written by the database trigger)', async () => {
     expect((await req(valid)).status).toBe(200);
     expect(st.calls.map((c) => c.fn)).toEqual(['record_tool_approval']);
