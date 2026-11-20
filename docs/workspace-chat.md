@@ -150,7 +150,12 @@ Tests: `approval.test.ts`, `ApprovalCard.test.tsx`, `approval-routes.test.ts`,
    non-read MCP tools, and executes through the Connect runtime, which claims
    the approval atomically. The model gets no tools in that turn. A refused
    claim (expired, revoked, already used, or different arguments) shows "Not
-   run". If the route refuses the request before anything runs (for example
+   run", and the model is not asked for that turn: the stored answer is the
+   fixed text "Nothing was run. ..." (`APPROVED_CALL_REFUSED_ANSWER` in
+   `lib/chat/turn.ts`), because a model can misreport a refusal as success.
+   Other failures of the approved call still go to the model, whose prompt
+   says the call was tried once and must be reported as not successful if it
+   failed. The fixed text is English only; localizing it is open. If the route refuses the request before anything runs (for example
    the MCP gate is closed, or the arguments changed), the card shows the
    server's reason and says the approval was not used; it stays approved, so
    it can be run later or revoked. No page-level error is raised for this.
