@@ -14,7 +14,7 @@
 import type { ChatDb } from './store';
 
 export type RouteDenialEvent = 'authorization_denied' | 'invalid_arguments';
-export type RouteDenialReason = 'ARGUMENTS_HASH_MISMATCH' | 'THREAD_NOT_ACCESSIBLE' | 'APPROVER_ROLE_REQUIRED';
+export type RouteDenialReason = 'ARGUMENTS_HASH_MISMATCH' | 'THREAD_NOT_ACCESSIBLE' | 'ENDPOINT_NOT_ACTIVE' | 'APPROVER_ROLE_REQUIRED';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 const CAPABILITY = /^external\.[A-Za-z0-9_.-]{1,64}$/;
