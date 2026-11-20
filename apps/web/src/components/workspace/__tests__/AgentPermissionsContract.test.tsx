@@ -82,3 +82,12 @@ it.each(['manager', 'agent'])('F-4: %s sees deletion but no edit/knowledge contr
   expect(within(menu).getAllByRole('menuitem')).toHaveLength(1);
   expect(within(menu).getByRole('menuitem', { name: 'Delete' })).toBeTruthy();
 });
+
+
+it('does not describe an enabled, empty catalogue as a disconnected preview', async () => {
+  fakeApi({ 'GET /api/v1/agents': () => ({ body: { agents: [] } }) });
+  render(<AgentsView role="owner" />);
+  await screen.findByText('No custom agents are shown here.');
+  expect(screen.queryByText(/Custom-agent actions are disabled/)).toBeNull();
+  expect((screen.getByRole('button', { name: 'Create agent' }) as HTMLButtonElement).disabled).toBe(false);
+});
