@@ -28,7 +28,7 @@ export async function deleteJson<T>(url: string, fetcher: typeof fetch = fetch):
 }
 
 /** POSTs JSON and normalises both error shapes in use: {error:{code,message}} (Connect) and {error:string} (proxy, chat). */
-export async function postJson<T>(url: string, body: unknown = {}, fetcher: typeof fetch = fetch): Promise<ApiResult<T>> {
-  try { return await settle<T>(await fetcher(url, { method: 'POST', headers: MUTATION_HEADERS, body: JSON.stringify(body), cache: 'no-store' })); }
+export async function postJson<T>(url: string, body: unknown = {}, fetcher: typeof fetch = fetch, extraHeaders: Record<string, string> = {}): Promise<ApiResult<T>> {
+  try { return await settle<T>(await fetcher(url, { method: 'POST', headers: { ...extraHeaders, ...MUTATION_HEADERS }, body: JSON.stringify(body), cache: 'no-store' })); }
   catch { return { ...NETWORK }; }
 }

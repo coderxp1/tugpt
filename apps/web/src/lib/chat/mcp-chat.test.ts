@@ -14,14 +14,16 @@ import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolAuditEvent } from '@tugpt/connect-runtime';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from './connect';
+import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch } from './mcp-egress';
-import { loadChatToolRegistry, mcpUnavailableReason, type McpAuditSink, type McpDeps } from './mcp';
+import { loadChatToolRegistry, mcpUnavailableReason, runnableEndpoints, type McpAuditSink, type McpDeps } from './mcp';
 import { argumentsSha256 } from './approval.server';
 import { canonicalJson, runTurn, type TurnEvent } from './turn';
+import type { WireMessage } from './openai-compatible';
 import { listCapabilities, type CapabilityRow } from './store';
 import { toolLabel, toolProblem } from '../connect-ui/chat-errors';
 import {
-  approve, deadPort, emptyState, fakeDb, makeCertificate, MCP_HOST, opensslAvailable, startConnectProxy, startMcpServer,
+  approve, deadPort, emptyState, fakeDb, fakeTrustedDb, makeCertificate, MCP_HOST, opensslAvailable, startConnectProxy, startMcpServer,
   type ConnectProxy, type FakeState, type McpServer,
 } from './mcp.test-harness';
 
@@ -80,6 +82,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     audits = [];
     auditFails = false;
     server.mode = 'ok';
+    server.sessionMode = 'stateful';
     server.onTool = (name, args) => ({ text: `${name}:${JSON.stringify(args)}` });
     proxy.refuse = false;
     deps = {
@@ -91,7 +94,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
 
   async function session(user: string, org = ORG_A, d: McpDeps = deps) {
     const db = fakeDb(state, user);
-    const registry = await loadChatToolRegistry(db, org, { ...d, serviceDb: db as never });
+    const registry = await loadChatToolRegistry(db, org, { ...d, serviceDb: fakeTrustedDb(state) as never });
     const rows = await listCapabilities(db, org);
     const pick = (endpoint: string, name: string) => rows.find((r) => r.connectionId === endpoint && r.capabilityKey === `external.${name}`) as CapabilityRow;
     const toolset = (attached: CapabilityRow[]) => buildChatToolset(db, { organizationId: org, userId: user, threadId: THREAD }, attached, { registry, mcp: d });
@@ -126,6 +129,28 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
 
     it('blocks endpoints that need a stored credential (not resolvable yet)', async () => {
       state.endpoints.find((e) => e.id === EP_A)!.auth_connection_id = 'f0000000-0000-4000-8000-000000000001';
+      const { registry, pick } = await session(OWNER_A);
+      expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(false);
+    });
+
+    it('decides runnability with member-granted columns only (url / auth_connection_id are hidden from members)', async () => {
+      // Regression (M5 real-PostgREST run): the member client is refused any query that touches a hidden column.
+      const db = fakeDb(state, OWNER_A);
+      const hidden = await db.from('external_tool_endpoints').select('id, auth_connection_id').eq('organization_id', ORG_A);
+      expect(hidden.error).toMatchObject({ code: '42501' });
+      expect((await db.from('external_tool_endpoints').select('id, status').eq('auth_connection_id', null)).error).toMatchObject({ code: '42501' });
+      expect([...(await runnableEndpoints(db, ORG_A))]).toContain(EP_A);
+      const { registry, pick } = await session(OWNER_A);
+      expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(true);
+    });
+
+    it('a stored credential is refused on the trusted path (resolve_mcp_execution), not by reading the hidden column', async () => {
+      state.endpoints.find((e) => e.id === EP_A)!.auth_connection_id = 'f0000000-0000-4000-8000-000000000001';
+      const db = fakeDb(state, OWNER_A);
+      expect([...(await runnableEndpoints(db, ORG_A))]).toContain(EP_A);
+      const resolved = await fakeTrustedDb(state).rpc('resolve_mcp_execution', { p_organization_id: ORG_A, p_endpoint_id: EP_A });
+      expect(resolved.error ?? null).toBeNull();
+      expect(resolved.data).toBeNull();
       const { registry, pick } = await session(OWNER_A);
       expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(false);
     });
@@ -187,7 +212,9 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(r).toEqual({ ok: true, content: JSON.stringify({ ok: true, data: { content: 'search_docs:{"q":"vpn"}' } }) });
       const last = server.toolCalls().at(-1)!;
       expect(last.params).toEqual({ name: 'search_docs', arguments: { q: 'vpn' } });
-      expect(last.sessionId).toBe('sess-1');
+      // The session id comes from the Mcp-Session-Id header of THIS call's initialize, and the server accepted it.
+      expect(last.sessionId).toBe(server.sessions.at(-1));
+      expect(last.status).toBe(200);
       expect(last.authorization).toBeNull();
       expect(proxy.connects.length).toBeGreaterThan(connectsBefore);
       expect(proxy.connects.slice(connectsBefore).every((c) => c === `${MCP_HOST}:443`)).toBe(true);
@@ -304,6 +331,203 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     });
   });
 
+  describe('MCP session contract over real sockets (spec 2025-06-18 session management)', () => {
+    /** The requests one execute made: from its initialize to the end of the log. */
+    const lastSession = () => server.calls.slice(server.calls.map((c) => c.method).lastIndexOf('initialize'));
+
+    it('the session id comes only from the Mcp-Session-Id header and is sent on every later message', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'h' }));
+      expect(r.ok).toBe(true);
+      const msgs = lastSession();
+      expect(msgs.map((c) => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call']);
+      expect(msgs[0].sessionId).toBeNull();
+      expect(msgs.slice(1).every((c) => c.sessionId === server.sessions.at(-1))).toBe(true);
+      expect(msgs.map((c) => c.status)).toEqual([200, 202, 200]);
+    });
+
+    it('the initialized notification carries no id; requests carry numeric ids', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'n' }));
+      const [init, note, tool] = lastSession();
+      expect(note.hasId).toBe(false);
+      expect([init.hasId, typeof init.id, tool.hasId, typeof tool.id]).toEqual([true, 'number', true, 'number']);
+    });
+
+    it('every execute opens its own session', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const ts = toolset([pick(EP_A, 'search_docs')]);
+      const n = server.sessions.length;
+      await ts.execute(call('search_docs', { q: '1' }));
+      await ts.execute(call('search_docs', { q: '2' }));
+      expect(server.sessions.length).toBe(n + 2);
+      const calls = server.toolCalls().slice(-2);
+      expect(calls[0].sessionId).not.toBe(calls[1].sessionId);
+    });
+
+    it('a stateless server (no Mcp-Session-Id) works and receives no session header', async () => {
+      server.sessionMode = 'stateless';
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 's' }));
+      expect(r).toEqual({ ok: true, content: JSON.stringify({ ok: true, data: { content: 'search_docs:{"q":"s"}' } }) });
+      expect(lastSession().every((c) => c.sessionId === null)).toBe(true);
+    });
+
+    it('a failed initialized notification aborts before tools/call and is audited as unavailable', async () => {
+      server.mode = 'notify500';
+      const { pick, toolset } = await session(OWNER_A);
+      const before = server.toolCalls().length;
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }));
+      expect(r.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(server.toolCalls().length).toBe(before);
+      expect(audits.map((a) => a.outcome)).toEqual(['PROVIDER_UNAVAILABLE']);
+    });
+
+    it.each(['wrongId', 'noJsonrpc'] as const)('a %s reply is not returned to the model', async (mode) => {
+      server.mode = mode;
+      server.onTool = () => ({ text: 'must-not-leak' });
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }));
+      expect(r.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(r.content).not.toContain('must-not-leak');
+    });
+
+    it('snapshot discovery uses the same contract through the real egress proxy', async () => {
+      const connects = proxy.connects.length;
+      const tools = await listExternalMcpTools({ url: URL_A, resolveHostname }, createEgressMcpFetch({ proxyUrl: proxy.url, ca: tlsMaterial.cert }));
+      expect(tools.map((t) => t.name)).toEqual(['search_docs', 'create_ticket']);
+      const msgs = lastSession();
+      expect(msgs.map((c) => [c.method, c.status])).toEqual([['initialize', 200], ['notifications/initialized', 202], ['tools/list', 200]]);
+      expect(msgs.slice(1).every((c) => c.sessionId === server.sessions.at(-1))).toBe(true);
+      expect(msgs[1].hasId).toBe(false);
+      expect(proxy.connects.slice(connects).every((c) => c === `${MCP_HOST}:443`)).toBe(true);
+    });
+  });
+
+  describe('M6: multi-call turns, call ids, session continuity, size caps, call budget, protocol', () => {
+    type Asst = Extract<WireMessage, { role: 'assistant' }>;
+    /** Runs a full turn through the REAL toolset; the model's rounds are scripted (labelled fake model). */
+    async function turnWith(attached: CapabilityRow[], rounds: { id: string; name: string; arguments: Record<string, unknown> }[][]) {
+      const { toolset } = await session(OWNER_A);
+      const ts = toolset(attached);
+      let r = 0; let final: WireMessage[] = [];
+      const events: TurnEvent[] = [];
+      const gen = runTurn({ messages: [{ role: 'user', content: 'go' }], tools: ts.specs, maxToolRounds: rounds.length + 1 }, {
+        async completeWithTools() { return { text: null, toolCalls: rounds[r++] ?? [] }; },
+        executeTool: (c) => ts.execute(c),
+        async *stream(m) { final = [...m]; yield 'done'; },
+      });
+      for (;;) { const n = await gen.next(); if (n.done) break; events.push(n.value); }
+      return { final, events };
+    }
+    function pairs(final: WireMessage[]) {
+      let pending: NonNullable<Asst['tool_calls']> = [];
+      const out: { id: string; name: string; args: Record<string, unknown>; content: string }[] = [];
+      for (const m of final) {
+        if (m.role === 'assistant' && m.tool_calls) pending = [...m.tool_calls];
+        if (m.role === 'tool') {
+          const tc = pending.find((t) => t.id === m.tool_call_id);
+          out.push({ id: m.tool_call_id, name: tc?.function.name ?? '<unpaired>', args: tc ? JSON.parse(tc.function.arguments) : null, content: m.content });
+        }
+      }
+      return out;
+    }
+
+    it('a turn with several calls and DUPLICATE model ids: each call runs once in its own session, results pair with the right call, a write without approval never reaches the server', async () => {
+      const { pick } = await session(OWNER_A);
+      const toolCallsBefore = server.toolCalls().length;
+      const callsBefore = server.calls.length;
+      const { final, events } = await turnWith([pick(EP_A, 'search_docs'), pick(EP_A, 'create_ticket')], [[
+        { id: 'dup', name: 'search_docs', arguments: { q: 'one' } },
+        { id: 'dup', name: 'search_docs', arguments: { q: 'two' } },
+        { id: 'dup', name: 'create_ticket', arguments: { q: 'needs-approval' } },
+      ]]);
+      const p = pairs(final);
+      expect(new Set(p.map((x) => x.id)).size).toBe(3);
+      expect(p.map((x) => x.name)).toEqual(['search_docs', 'search_docs', 'create_ticket']);
+      expect(JSON.parse(p[0].content)).toEqual({ ok: true, data: { content: 'search_docs:{"q":"one"}' } });
+      expect(JSON.parse(p[1].content)).toEqual({ ok: true, data: { content: 'search_docs:{"q":"two"}' } });
+      expect(p[0].args).toEqual({ q: 'one' }); expect(p[1].args).toEqual({ q: 'two' });
+      expect(JSON.parse(p[2].content)).toMatchObject({ ok: false, error: 'APPROVAL_REQUIRED' });
+      // Order on the wire: assistant(tool_calls), then one tool message per call in the same order.
+      expect(final.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'tool']);
+      // The server saw exactly the two reads; the write never left the runtime.
+      const tc = server.toolCalls().slice(toolCallsBefore);
+      expect(tc.map((c) => c.params)).toEqual([{ name: 'search_docs', arguments: { q: 'one' } }, { name: 'search_docs', arguments: { q: 'two' } }]);
+      // Session continuity: each call is initialize -> initialized -> tools/call under ONE session id, distinct per call.
+      const wire = server.calls.slice(callsBefore);
+      expect(wire.map((c) => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call', 'initialize', 'notifications/initialized', 'tools/call']);
+      expect([wire[1].sessionId, wire[2].sessionId]).toEqual([tc[0].sessionId, tc[0].sessionId]);
+      expect([wire[4].sessionId, wire[5].sessionId]).toEqual([tc[1].sessionId, tc[1].sessionId]);
+      expect(tc[0].sessionId).not.toBe(tc[1].sessionId);
+      expect(server.sessions).toEqual(expect.arrayContaining([tc[0].sessionId, tc[1].sessionId]));
+      // Events carry the same unique ids, and audits one row per call.
+      expect(events.filter((e) => e.type === 'tool_result').map((e) => (e as { callId: string }).callId)).toEqual(p.map((x) => x.id));
+      expect(audits.map((a) => [a.capability, a.outcome])).toEqual([['external.search_docs', 'ok'], ['external.search_docs', 'ok'], ['external.create_ticket', 'APPROVAL_REQUIRED']]);
+    });
+
+    it('MCP-Protocol-Version: the real server receives the negotiated version on every message after initialize', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const before = server.calls.length;
+      expect((await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'v' }))).ok).toBe(true);
+      expect(server.calls.slice(before).map((c) => [c.method, c.protocolVersion])).toEqual([
+        ['initialize', null], ['notifications/initialized', '2025-06-18'], ['tools/call', '2025-06-18'],
+      ]);
+    });
+
+    it('an unsupported negotiated protocol version aborts before tools/call (audited, nothing returned)', async () => {
+      server.mode = 'badVersion';
+      server.onTool = () => ({ text: 'must-not-run' });
+      const { pick, toolset } = await session(OWNER_A);
+      const before = server.calls.length;
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'v' }));
+      expect(r.code).toBe('PROVIDER_UNAVAILABLE');
+      expect(server.calls.slice(before).map((c) => c.method)).toEqual(['initialize']);
+      expect(audits.map((a) => a.outcome)).toEqual(['PROVIDER_UNAVAILABLE']);
+    });
+
+    it('a server->client request reusing our id (SSE) does not replace the real response', async () => {
+      server.mode = 'collide';
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'c' }));
+      expect(r).toEqual({ ok: true, content: JSON.stringify({ ok: true, data: { content: 'search_docs:{"q":"c"}' } }) });
+    });
+
+    it.each([
+      ['9 KiB (over the runtime 8 KiB model cap)', 9 * 1024],
+      ['100 KiB (over the adapter 64 KiB result cap)', 100 * 1024],
+    ])('an oversized tool result, %s, is OUTPUT_TOO_LARGE: audited, nothing of it reaches the model', async (_l, size) => {
+      server.onTool = () => ({ text: 'Q'.repeat(size) });
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'big' }));
+      expect(r.ok).toBe(false);
+      expect(r.code).toBe('OUTPUT_TOO_LARGE');
+      expect(r.content).not.toContain('QQQQ');
+      expect(Buffer.byteLength(r.content)).toBeLessThan(1024);
+      expect(audits.map((a) => a.outcome)).toEqual(['OUTPUT_TOO_LARGE']);
+    });
+
+    it('a 2 MiB reply is cut at the egress transport cap and fails closed', async () => {
+      server.mode = 'huge';
+      const { pick, toolset } = await session(OWNER_A);
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'huge' }));
+      expect(r.ok).toBe(false);
+      expect(r.content).not.toContain('xxxx');
+      expect(Buffer.byteLength(r.content)).toBeLessThan(1024);
+    });
+
+    it('the per-turn call budget (4) applies to one-at-a-time chat calls: the 5th is refused, audited, and never sent', async () => {
+      const { pick, toolset } = await session(OWNER_A);
+      const ts = toolset([pick(EP_A, 'search_docs')]);
+      const before = server.toolCalls().length;
+      const rs = [];
+      for (let i = 1; i <= 5; i++) rs.push(await ts.execute(call('search_docs', { q: `n${i}` }, `b${i}`)));
+      expect(rs.map((r) => r.code ?? 'ok')).toEqual(['ok', 'ok', 'ok', 'ok', 'CALL_BUDGET_EXCEEDED']);
+      expect(server.toolCalls().length - before).toBe(4);
+      expect(audits.map((a) => a.outcome)).toEqual(['ok', 'ok', 'ok', 'ok', 'CALL_BUDGET_EXCEEDED']);
+    });
+  });
+
   describe('streaming events', () => {
     it('emits tool_start / tool_result with the server-side provider label, then the answer', async () => {
       approve(state, { requested_by: OWNER_A, thread_id: THREAD,  organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: sha({ q: 'ok' }), expires_at: Date.now() + 60_000 });
@@ -417,7 +641,21 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(registry.mcpGate).toEqual({ open: false, reason: 'AUDIT_UNAVAILABLE' });
       expect(registry.mcp).toEqual([]);
     });
-    it('production default wires Agent 2\'s record_mcp_tool_call sink on the caller\'s client', async () => {
+    it('the member client cannot write the MCP audit or resolve endpoints (real EXECUTE grants)', async () => {
+      const member = fakeDb(state, OWNER_A);
+      const row = { p_organization_id: ORG_A, p_endpoint_id: EP_A, p_actor_user_id: OWNER_A, p_capability: 'external.search_docs', p_outcome: 'ok', p_error_code: null, p_duration_ms: 1, p_arguments_sha256: sha({}) };
+      expect((await member.rpc('record_mcp_tool_call', row)).error).toMatchObject({ code: '42501' });
+      expect((await member.rpc('resolve_mcp_execution', { p_organization_id: ORG_A, p_endpoint_id: EP_A })).error).toMatchObject({ code: '42501' });
+      expect((await fakeTrustedDb(state).rpc('record_mcp_tool_call', { ...row, p_actor_user_id: ADMIN_B })).error).toMatchObject({ code: '42501' });
+    });
+    it('without a trusted client the default audit sink is absent and the gate stays closed', async () => {
+      const { audit: _unused, ...withoutAudit } = deps;
+      void _unused;
+      const registry = await loadChatToolRegistry(fakeDb(state, OWNER_A), ORG_A, withoutAudit);
+      expect(registry.mcpGate).toEqual({ open: false, reason: 'AUDIT_UNAVAILABLE' });
+      expect(registry.mcp).toEqual([]);
+    });
+    it('production default wires Agent 2\'s record_mcp_tool_call sink on the trusted sso_control client', async () => {
       const { audit: _unused, ...withoutAudit } = deps;
       void _unused;
       const s = await session(OWNER_A, ORG_A, withoutAudit);

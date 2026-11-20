@@ -317,6 +317,16 @@ describe('turn execution', () => {
     expect(h.googleCalls).toHaveLength(2);
   });
 
+  it('executeBudgetedCall caps one-at-a-time calls (the chat path) at maxCallsPerTurn; the extra call is audited and never runs', async () => {
+    const h = harness({ maxCallsPerTurn: 2 });
+    const rs = [];
+    for (const id of ['a', 'b', 'c']) rs.push(await h.runtime.executeBudgetedCall(ctx(), call(ARGS, undefined, id)));
+    expect(rs.map((r) => r.code ?? 'ok')).toEqual(['ok', 'ok', 'CALL_BUDGET_EXCEEDED']);
+    expect(rs.map((r) => r.toolCallId)).toEqual(['a', 'b', 'c']);
+    expect(h.googleCalls).toHaveLength(2);
+    expect(h.audit.map((e) => e.outcome)).toEqual(['ok', 'ok', 'CALL_BUDGET_EXCEEDED']);
+  });
+
   it('one refused call does not abort the others', async () => {
     const h = harness();
     const rs = await h.runtime.executeTurn(ctx(), [call({ bogus: 1 }, undefined, 'a'), call(ARGS, undefined, 'b')]);

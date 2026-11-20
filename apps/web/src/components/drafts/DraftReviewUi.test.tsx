@@ -45,6 +45,12 @@ vi.mock('next/link', () => ({
 // about, so stub them to render nothing.
 vi.mock('./DraftRevisionHistory', () => ({ DraftRevisionHistory: () => null }));
 vi.mock('./DraftEventHistory', () => ({ DraftEventHistory: () => null }));
+// The delivery panel fetches /delivery from its own effect once the draft has loaded. Left real, that fetch
+// occasionally ran AFTER renderDetail returned and a test had queued the one response meant for its action,
+// so the panel took it and /approve got `undefined` (captured in a failing full-suite run: detail 200,
+// /delivery <- 422, /approve <- undefined; F-M9-4). The expected message could then never appear, which is
+// why a longer wait did not help. Delivery status is not what these tests are about.
+vi.mock('./DeliveryStatus', () => ({ DeliveryStatusPanel: () => null }));
 
 const mockFetch = vi.fn();
 vi.stubGlobal('fetch', mockFetch);

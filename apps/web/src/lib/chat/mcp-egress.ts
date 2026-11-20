@@ -149,7 +149,15 @@ export function createEgressMcpFetch(options: EgressFetchOptions): ExternalMcpFe
           res.once('end', () => {
             const text = Buffer.concat(chunks).toString('utf8');
             // Redirects are returned as-is and never followed (init.redirect is ignored on purpose).
-            resolve({ status: res.statusCode ?? 0, text: async () => text });
+            const headers = res.headers;
+            resolve({
+              status: res.statusCode ?? 0,
+              text: async () => text,
+              headers: { get: (name: string) => {
+                const v = headers[name.toLowerCase()];
+                return Array.isArray(v) ? v.join(', ') : (v ?? null);
+              } },
+            });
           });
           res.once('error', () => reject(new EgressError(controller.signal.aborted ? 'EGRESS_TIMEOUT' : 'EGRESS_UNREACHABLE')));
         });

@@ -277,7 +277,8 @@ export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: rea
     async execute(call) {
       const entry = chosen.get(call.name);
       if (!entry?.row.connectionId) return { ok: false, code: 'UNKNOWN_TOOL', content: '{"error":"UNKNOWN_TOOL"}' };
-      const result = await runtime.executeCall(
+      // Budgeted: one toolset (= one runtime) per request, so maxCallsPerTurn caps the whole turn.
+      const result = await runtime.executeBudgetedCall(
         { organizationId: ctx.organizationId, actorUserId: ctx.userId, agentId: null, connectionId: entry.row.connectionId, requestId },
         { id: call.id, name: call.name, arguments: call.arguments },
       );

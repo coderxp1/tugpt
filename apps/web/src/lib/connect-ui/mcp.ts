@@ -74,6 +74,14 @@ export function mcpProblem(r: Extract<ApiResult<unknown>, { ok: false }>): strin
 }
 
 const enc = encodeURIComponent;
+/** A fresh snapshot Idempotency-Key (a UUID; matches the server's 16-128 [A-Za-z0-9_-] rule). */
+export function newIdempotencyKey(): string {
+  return globalThis.crypto.randomUUID();
+}
+
+/** Snapshot failures after which a retry must reuse the same Idempotency-Key (the outcome may be pending). */
+export const SNAPSHOT_RETRY_SAME_KEY = new Set(['DATABASE_TIMEOUT', 'IN_PROGRESS', 'ENDPOINT_BUSY', 'SNAPSHOT_STORE_BUSY', 'SNAPSHOT_DEADLINE_EXCEEDED', 'NETWORK']);
+
 export const mcpApi = {
   list: async (f?: typeof fetch): Promise<ApiResult<McpEndpoint[]>> => {
     const r = await getJson<unknown>(`${base}/endpoints`, f);
@@ -89,7 +97,11 @@ export const mcpApi = {
   },
   register: (url: string, displayName: string, f?: typeof fetch) =>
     postJson<{ endpoint: McpEndpoint }>(`${base}/endpoints`, { url: url.trim(), displayName: displayName.trim() }, f),
-  snapshot: (endpointId: string, f?: typeof fetch) => postJson<{ snapshotId: string; toolCount: number }>(`${base}/endpoints/${enc(endpointId)}/snapshot`, {}, f),
+  /** M9: every snapshot POST carries an Idempotency-Key. Pass the SAME key when retrying a failed or timed-out
+   * attempt: the server then returns the original snapshot instead of creating a second one. */
+  snapshot: (endpointId: string, f?: typeof fetch, idempotencyKey: string = newIdempotencyKey()) =>
+    postJson<{ snapshotId: string; version: number; toolCount: number; replayed: boolean }>(
+      `${base}/endpoints/${enc(endpointId)}/snapshot`, {}, f, { 'idempotency-key': idempotencyKey }),
   approve: (snapshotId: string, permissions: Record<string, PermissionLevel>, f?: typeof fetch) =>
     postJson<{ snapshotId: string; permissionCount: number }>(`${base}/snapshots/${enc(snapshotId)}/approve`, { permissions }, f),
   activate: (endpointId: string, f?: typeof fetch) => postJson<{ endpointId: string; status: EndpointStatus }>(`${base}/endpoints/${enc(endpointId)}/activate`, {}, f),

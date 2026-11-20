@@ -263,6 +263,7 @@ The following is expected output for this candidate checkout after an approved d
 
 ```
   [ok]   all 117 migration(s) in this checkout are applied (database has 117, latest 20261120200003)
+  [ok]   all 106 migration(s) in this checkout are applied (database has 106, latest 20261120000007)
   [ok]   20260819000001: failed_jobs.provider_error_detail column — column is selectable
   [ok]   20260819000001: archive_draft_failed_job 4-argument overload (extended error-code allowlist) — signature present, returned P3B07 DRAFT_JOB_NOT_FOUND
   [ok]   database schema matches this checkout

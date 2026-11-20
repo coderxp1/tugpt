@@ -10,6 +10,13 @@
  *   - At most `maxToolRounds` rounds, then the model must answer.
  *   - Tool output is data. It goes back to the model as a tool message and
  *     the system prompt says it is untrusted; it is never executed.
+ *   - Every call in a turn has a UNIQUE id (assignCallIds). The id pairs the
+ *     assistant tool_call with its tool message, the tool_start/tool_result
+ *     events, the audit-failure set and the approval card, so a model id that
+ *     repeats (in a round or across rounds, including the parser's call_<i>
+ *     fallback) or is not a valid call id is replaced by a server-made one.
+ *   - Message order per round: one assistant message listing the calls, then
+ *     exactly one tool message per call, in the same order.
  */
 import type { ParsedToolCall, ToolSpec, WireMessage } from './openai-compatible';
 
@@ -53,14 +60,40 @@ export function dedupeCalls(calls: readonly ParsedToolCall[]): ParsedToolCall[] 
   });
 }
 
+/** Same pattern the approval card and approved-call route accept. */
+const CALL_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+
+/**
+ * Give every call a turn-unique id. A model id is kept when it is a valid call id not yet used in this
+ * turn; otherwise a server id `tugpt_r<round>_<index>` (suffixed until unused) replaces it. `used` is
+ * shared across the rounds of one turn and is updated in place.
+ */
+export function assignCallIds(calls: readonly ParsedToolCall[], used: Set<string>, round: number): ParsedToolCall[] {
+  return calls.map((c, i) => {
+    let id = c.id;
+    if (typeof id !== 'string' || !CALL_ID.test(id) || used.has(id)) {
+      const base = `tugpt_r${round}_${i}`;
+      id = base;
+      for (let n = 1; used.has(id); n++) id = `${base}_${n}`;
+    }
+    used.add(id);
+    return id === c.id ? c : { ...c, id };
+  });
+}
+
 export async function* runTurn(input: TurnInput, ports: TurnPorts): AsyncGenerator<TurnEvent, string> {
   const messages: WireMessage[] = [...input.messages];
+  const usedIds = new Set<string>();
+  for (const m of input.messages) {
+    if (m.role === 'assistant') for (const tc of m.tool_calls ?? []) usedIds.add(tc.id);
+    if (m.role === 'tool') usedIds.add(m.tool_call_id);
+  }
   let answer = '';
   if (input.tools.length > 0) {
     const rounds = input.maxToolRounds ?? 2;
     for (let round = 0; round < rounds; round++) {
       const r = await ports.completeWithTools(messages, input.tools);
-      const calls = dedupeCalls(r.toolCalls);
+      const calls = assignCallIds(dedupeCalls(r.toolCalls), usedIds, round);
       if (calls.length === 0) {
         if (r.text) {
           yield { type: 'delta', text: r.text };

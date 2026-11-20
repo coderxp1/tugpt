@@ -7,7 +7,7 @@
  * claimed call ends in PROVIDER_UNAVAILABLE: that is asserted, not hidden.
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { approve, emptyState, fakeDb, type FakeState } from '@/lib/chat/mcp.test-harness';
+import { approve, emptyState, fakeDb, fakeTrustedDb, type FakeState } from '@/lib/chat/mcp.test-harness';
 import { argumentsSha256 } from '@/lib/chat/approval.server';
 
 const ORG = 'a0000000-0000-4000-8000-000000000000';
@@ -27,7 +27,8 @@ vi.mock('@/lib/chat/request', async (orig) => ({
 }));
 vi.mock('@/lib/supabase/server', async (orig) => ({
   ...(await orig<typeof import('@/lib/supabase/server')>()),
-  createSsoControlClient: async () => fakeDb(state, OWNER),
+  // In production this is the sso_control client: trusted RPCs only, no table grants.
+  createSsoControlClient: async () => fakeTrustedDb(state),
 }));
 vi.mock('@/lib/chat/store', async (orig) => ({
   ...(await orig<typeof import('@/lib/chat/store')>()),

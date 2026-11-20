@@ -1,0 +1,20 @@
+# Code owners. GitHub requests a review from the listed owner for any pull request touching these paths.
+#
+# ENFORCEMENT IS NOT AUTOMATIC. This file only takes effect as a gate when branch protection (or a ruleset)
+# on the target branch enables "Require review from Code Owners", and the `migration-integrity` CI job is a
+# required status check. Both are repository-admin settings; see docs/connect/migration-integrity.md.
+#
+# Later rules override earlier ones for the same path, so keep narrower rules below broader ones, and never
+# add a later rule without an owner for any path below - that would remove the review requirement.
+
+# Forward-only migration policy: the migrations, their manifest, the tooling and the tests that enforce it.
+/supabase/migrations/                           @coderxp1
+/supabase/migrations/checksums.json             @coderxp1
+/scripts/migration-integrity.cjs                @coderxp1
+/scripts/update-migration-checksums.cjs         @coderxp1
+/apps/worker/tests/migration-integrity*.test.ts @coderxp1
+/docs/connect/migration-integrity.md            @coderxp1
+
+# CI definitions and their helper scripts, and this file itself: whoever can edit these can switch the
+# checks above off.
+/.github/                                       @coderxp1

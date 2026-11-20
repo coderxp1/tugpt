@@ -57,31 +57,63 @@ customer-mcp-egress-int (--internal, no default route)   <-- app containers (web
 - If the proxy is unreachable at runtime, the tool call fails closed
   (`PROVIDER_UNAVAILABLE`), never falls back to direct egress.
 
-## 6. Automated tests (prepared; run against a deployed proxy)
+## 6. Acceptance probe (prepared; NOT yet run against a real proxy)
 
-`tests/egress-probe.cjs` asserts each hostile target is refused:
+`docs/connect/egress-proxy/egress-probe.cjs` is the acceptance gate for customer MCP. Run it from a
+container on the web tier's internal network against the **digest-pinned** proxy:
 
-| Case | Target | Expected |
+```
+PROBE_REBIND_HOST=<rebinding name> PROBE_CANARY_PORT=443 node egress-probe.cjs http://egress-proxy:3128
+```
+
+It is fail-closed. It prints `ALL_BLOCKED` and exits 0 **only** when every check below holds;
+anything else is a non-zero exit with a named reason.
+
+| Check | Pass condition | Otherwise |
 |---|---|---|
-| direct egress (bypass) | any host from the app network | `ENETUNREACH` (no route) |
-| DNS rebinding | host resolving to private after public TTL | refused (pin to first resolution) |
-| private IPv4 | `10.0.0.1:443`, `172.16.0.1:443`, `192.168.1.1:443` | 403 |
-| loopback | `127.0.0.1:8080`, `[::1]:8080` | 403 |
-| link-local | `169.254.169.254:80` (cloud metadata) | 403 |
-| CGNAT / ULA | `100.64.0.1:443`, `[fc00::1]:443` | 403 |
-| internal service | this host's own address (`82.165.50.109`) | 403 |
-| plain HTTP forward | non-CONNECT request | 405 |
+| preflight | proxy accepts TCP | exit 2 `PROXY_UNREACHABLE` |
+| positive control | `CONNECT <control>:443` → 200 (proxy is live and forwarding) | exit 3 `NO_POSITIVE_CONTROL` |
+| direct-egress bypass | a direct TCP connection to the control host (no proxy) fails | FAIL |
+| IPv4 literals | 10/8, 172.16/12, 192.168/16, 127/8, 0/8, 169.254.169.254, 100.64/10, 198.18/15, 192.0.0/24, TEST-NET-1, multicast, 240/4 → non-2xx HTTP answer | FAIL |
+| loopback encodings | `2130706433`, `0x7f.0.0.1`, `127.1`, `0177.0.0.1` → non-2xx | FAIL |
+| IPv6 literals | `::1`, `::`, `fc00::/7`, `fe80::/10`, `::ffff:127.0.0.1`, `::ffff:169.254.169.254`, NAT64 `64:ff9b::a9fe:a9fe`, `2001:db8::/32` → non-2xx | FAIL |
+| names the proxy resolves | `localhost`, `localtest.me` (→127.0.0.1), `10.0.0.1.nip.io`, `169.254.169.254.nip.io` → non-2xx | FAIL |
+| plain HTTP forward / non-443 port | non-2xx | FAIL |
+| DNS rebinding | name alternating public / *this probe container's* private IP, 20 tries; the probe listens there as a canary — **zero canary connections** (a 200 alone is fine: it resolved public that time) | FAIL, or exit 4 `REBINDING_NOT_TESTED` if no host given |
 
-**Distinction:** the 14/14 smoke test in `docs/connect/broker-egress.md` ran
-against a throwaway harness on 2026-11-14 (the allowlist refused everything, so
-rule 3's DNS check was never triggered). These tests are **prepared but not yet
-run against a deployed production-configured proxy** â€” that requires the
-deployment step below, which is owner-gated.
+A socket error or timeout after a good preflight is **ambiguous** and counts as FAIL: an unreachable
+target looks identical to a policy denial. (The previous probe counted refused/timeout as blocked, so a
+dead proxy printed `ALL_BLOCKED` and exited 0 — reproduced on 2026-11-19; regression tests in
+`apps/worker/tests/egress-probe.test.ts`, which exercise the probe's verdict logic against local stub
+proxies only.)
+
+**Known configuration defects fixed here, still to be verified on the pinned image:**
+
+- The deny list used to be passed as a `DENY_RANGES` environment variable. Smokescreen reads deny ranges
+  only from `--deny-range` (repeatable) or `--config-file` — none of its flags has an environment source
+  (`cmd/smokescreen.go`, upstream `master`) — so that list was silently ignored. Smokescreen's built-in
+  private-range default still applied, but the extra ranges (e.g. NAT64 `64:ff9b::/96`, documentation
+  and benchmark ranges) were not enforced as written. `docker-compose.yml` now passes `--deny-range`.
+- **Superseded (M5):** the image was `stripe/smokescreen:latest`, a name with no official image (Docker Hub 404).
+  `docker-compose.yml` now holds a non-pullable placeholder. See `proxy-recommendation.md` for the
+  build-from-commit, digest-only plan and the bypass tests required before deployment.
+
+**Web-tier ordering (verified 2026-11-19 over real HTTP, isolated harness):** with no
+`CONNECT_EGRESS_PROXY` the snapshot route answers 503 `EGRESS_UNAVAILABLE` before any DNS or socket. With
+a proxy configured, the web tier first runs its own pre-check (`assertPublicEndpoint`, defence in depth)
+and refuses private or unresolvable targets with one uniform 422 — deliberately uniform, so it is not an
+oracle for which internal names exist. Only then does it send `CONNECT <hostname>:443`; the proxy does the
+final resolution. Consequence for deployment: the web tier needs working public DNS. On a network where
+it has none, every discovery fails with 422 rather than 503.
+
+The 14/14 smoke test in `docs/connect/broker-egress.md` ran against a throwaway harness on 2026-11-14
+(the allowlist refused everything, so rule 3's DNS check was never triggered). It is not acceptance.
 
 ## 7. Deployment steps (NOT executed â€” owner approval required)
 
 1. Build/run the Smokescreen container (read-only, `--cap-drop ALL`,
    `no-new-privileges`, non-root, no published ports) on the internal network.
 2. Set `CONNECT_EGRESS_PROXY=http://egress-proxy:3128` for the app containers.
-3. Run `egress-probe.cjs` and confirm every case passes.
+3. Pin the image by digest, then run `egress-probe.cjs` (with `PROBE_REBIND_HOST`) and confirm it
+   prints `ALL_BLOCKED` and exits 0. Any other exit code blocks activation.
 4. Only then enable customer-MCP activation for real endpoints.

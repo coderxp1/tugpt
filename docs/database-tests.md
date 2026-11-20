@@ -29,6 +29,7 @@ Original SQL regression files remain unchanged, including approval/enqueue, outb
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
 **Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 71 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
+**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 59 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
 
 ## Why this document exists
 
@@ -126,6 +127,11 @@ is unavailable — there is no skip path. Current races:
 | `conversation_assignment_and_handoff.test.sql` | that `needs_human` actually stops AI drafting — proved end to end through `process_inbound_message` with positive controls in both directions, since a status column that no code reads would look identical — plus assignment compare-and-set, the `conversation_events` record of who switched it, and that erasing a reviewer releases their conversations instead of blocking the delete |
 | `provider_usage_and_cost.test.sql` | token and cost accounting — that an event's cost equals the sum of its components (tampering with either side is refused), that an unpriced call is recorded with a NULL cost rather than dropped or valued at zero, that a later price change does not re-price history, and that audio bills on the provider's `billing_time` (duration x channels) rather than on the duration we measured |
 | `table_privilege_hygiene.test.sql` | the one privilege rule that row policies cannot enforce — that no table in `public` grants TRUNCATE, TRIGGER or REFERENCES to `anon` or `authenticated`, checked as a query over the catalogue rather than a list of table names so a table added tomorrow is covered; with positive controls that the DML those roles need is still present, that `service_role` was left alone, and — by creating a table inside the test — that a brand-new table arrives holding all three for both roles, which is why the guard exists rather than a one-time revoke |
+| `connect_mcp_privilege_hygiene.test.sql` | the MCP approval/audit privileges of migration `20261120000001` — that `anon` and PUBLIC hold nothing on `tool_approvals` / `mcp_tool_calls`, `authenticated` and `service_role` hold exactly SELECT, every writer RPC is SECURITY DEFINER and not executable by `anon` (while `sso_control` keeps EXECUTE on `record_mcp_tool_call`); that TRUNCATE / DELETE / UPDATE / INSERT by `authenticated` are refused (no self-approval, no un-consuming, audit undeletable and unforgeable) and `service_role` cannot TRUNCATE or DELETE the audit; and that `claim_tool_approval` still consumes an approval single-use while a foreign tenant neither sees nor claims it |
+| `mcp_snapshot_versioning.test.sql` | MCP tool-snapshot versioning in `create_mcp_snapshot` (migrations `20261120000002`, `20261120000004`, `20261120000005`) — v1, v2, v3 accepted strictly in order; a replay, a stale v1 (the old hard-coded value), a skip to v5, NULL and 0 each refused with `PT409` SNAPSHOT_VERSION_CONFLICT (PostgREST answers HTTP 409 and never retries it; the earlier `40001` made PostgREST re-run the transaction until the bridge JWT expired); the function carries `lock_timeout=2s` (C3; C7 checks it is at most 3 s, leaving 2 s of the app's 5 s PostgREST request timeout) and maps `lock_not_available` on the endpoint row to `PT409` (C5) and on any other lock to `PT503` SNAPSHOT_STORE_BUSY (C6), and no function in `public`/`private`/`sso` raises a retryable SQLSTATE (`40001`/`40P01`); non-array / NULL `p_tools` refused with `22023`; an invalid tool name, a duplicate name or an over-long description aborts the whole snapshot so no row and no partial tools persist and no version is consumed; new tools default to least-privilege; another tenant's endpoint is `P0002` and another tenant's org or a `manager` (highest non-admin role) is `42501`. Since `20261120000007` the function is no longer executable by any API role, so this file grants `authenticated` EXECUTE inside its own transaction (rolled back) to keep exercising the body; C2 asserts `anon` and `service_role` cannot execute it. The concurrent race (row lock, then conflict) is exercised separately through real PostgREST (`N` = 2/5/10 parallel callers: one 200, the rest 409, contiguous versions), not in this file |
+| `mcp_snapshot_idempotency.test.sql` | Idempotent snapshot creation (migration `20261120000006`): `create_mcp_snapshot_idempotent` creates one snapshot per (endpoint, `Idempotency-Key`) — a replay of a committed key returns the original id/version with `replayed=true` and writes nothing; a different key gets the next version (assigned by the database, max + 1 under the endpoint row lock); `get_mcp_snapshot_request` reports `committed` (with the snapshot) / `not_found`; malformed keys `22023`; the snapshot, its tools and the idempotency record commit or roll back together; a deadline in the past raises the non-retryable `PT504` and writes nothing; the deadline is capped at statement start + 3 s and checked as the last step; `lock_timeout=2s`; `SECURITY DEFINER`; a `manager` and another tenant are `42501`, another tenant's endpoint `P0002`; the same key on another endpoint is independent; `external_tool_snapshot_requests` has RLS on, no policies and no direct table privileges for `anon`/`authenticated`/`service_role`; `UNIQUE (endpoint_id, idempotency_key)`. `IN_PROGRESS` (`PT409`, a second session holding the key), `ENDPOINT_BUSY` and the lock/timeout matrix need concurrent sessions and are exercised through the real route by `scripts/regression/snapshot-idempotency.py`, not in this file |
+| `mcp_snapshot_legacy_and_tenant.test.sql` | Migration `20261120000007` (M9 follow-up; renumbered from `20261120200001` to resolve collision B-2 with the Workspace migration of the same version, SQL byte-identical — the header comment and the stored `COMMENT ON FUNCTION` text still say `20261120200001`). Legacy (L1–L10): no overload of the keyless `create_mcp_snapshot` is executable by PUBLIC, `anon`, `authenticated` or `service_role`; a real org owner and `service_role` calling it are refused by the grant and nothing is written, while the same owner still creates v1 through `create_mcp_snapshot_idempotent`, which stays executable by `authenticated` and not `anon` (the migration also marks the legacy function DEPRECATED; that comment is not asserted). Ownership first (O1–O6): the bodies of `create_mcp_snapshot_idempotent` and `get_mcp_snapshot_request` check endpoint ownership before `pg_advisory_xact_lock` / the try-lock; an owner of another org naming this org's endpoint gets `P0002` NOT_FOUND from both, naming this org itself is `42501` FORBIDDEN, and those calls write nothing. Endpoint lookup (E1–E5): `get_mcp_endpoint_url` has `lock_timeout` ≤ 2 s (below the app's 5 s PostgREST timeout); an owner gets their URL; a missing endpoint and another tenant's endpoint are NULL (the only results the app may turn into 404); a `manager` is `42501` (403 in the app). That a foreign tenant does not wait on, or learn about, an in-flight key needs two sessions and is measured through the real route by `scripts/regression/snapshot-idempotency.py cross-tenant-in-progress` |
+| `mcp_resolve_requires_no_credential.test.sql` | the MCP execution resolver of migration `20261120000003` — that `sso_control` keeps EXECUTE on `resolve_mcp_execution` and `authenticated` has none; that members still cannot read `auth_connection_id` or `url`, so the old app query that selected `auth_connection_id` is refused (`42501`, the production bug that made every MCP tool unrunnable) while the new shape (`id, organization_id, status`) works; and that an endpoint resolves only for its own organization and only while it has no stored credential, removing the credential being the only difference |
 | `secret_storage.test.sql` | encrypted credential storage — that `authenticated` and `anon` hold *nothing* on either table (not even SELECT, and specifically not TRIGGER or REFERENCES), that the metadata reader returns an exact column set carrying no ciphertext, iv, auth_tag or key_id, that a wrong-length GCM nonce or truncated tag is refused at the write, and that a nonce reused under one key is refused |
 | `voice_transcription.test.sql` | the Gladia seeds — that the `voice_transcription` flag ships false and that `is_feature_enabled` ANDs its global and per-org rows in both directions (an organization opting in while the global switch is off stays off; flipping the global switch alone enables nobody), and that the seeded audio rate is USD 0.61 per hour rather than the literal the migration inserted |
 | `multi_currency.test.sql` | two currencies in the price book — that an event's currency is derived from the prices resolved for it rather than taken from a column default (the bug 20260903000005 fixes), that currency is NULL exactly when cost is, that components disagreeing on currency are refused, that the cost meter raises rather than under-reporting when a period holds spend it cannot convert, and that the eight Langdock rates recover to the EUR-per-1M figures they were read from |
@@ -213,6 +219,51 @@ Dropping and recreating a function to change its arity deserves a
 `hasnt_function` assertion on the old signature as well as a `has_function` on
 the new one. Otherwise a `CREATE OR REPLACE` that accidentally leaves the old
 overload callable still passes.
+
+## Route-level lock regression (snapshot route)
+
+`scripts/regression/snapshot-route-lock.py` drives the real chain Next → PostgREST → Postgres on a
+**disposable** database (it re-creates one endpoint row and, in `slow-write` mode, a temporary trigger).
+A real psql session holds the endpoint row lock, a table lock, or slows the insert, for a chosen number
+of seconds after one `POST …/snapshot` is sent. Expected results (`lock_timeout=2s`, app timeout 5 s):
+
+| Case | Expected |
+|---|---|
+| `row` / `tools-ddl` held < 2 s | 201, next version |
+| `row` held ≥ 2 s (also just below 5 s) | 409 `SNAPSHOT_VERSION_CONFLICT` after ~2 s, nothing written |
+| `tools-ddl` held ≥ 2 s | 503 `SNAPSHOT_STORE_BUSY` + `Retry-After: 2` after ~2 s, nothing written |
+| `snap-read` held < 5 s, `slow-write` < 5 s | 201, next version |
+| `slow-write` > 5 s | 503 `DATABASE_TIMEOUT` after ~5 s; the outcome is unknown to the app and the snapshot can still commit, complete (all tool rows), after the response |
+
+Every case also asserts no idle-in-transaction sessions, no ungranted locks, contiguous versions,
+no snapshot without its tool rows, and that a follow-up request gets the next version. Never 500.
+Required environment: `SNAP_BASE_URL`, `SNAP_ORIGIN`, `SNAP_ORG_ID`, `SNAP_ENDPOINT_ID`,
+`SNAP_ENDPOINT_URL`, `SNAP_COOKIE_FILE`, `SNAP_PG_CONTAINER`, `SNAP_PG_PW_FILE`.
+
+## Route-level idempotency / timeout regression (snapshot route, M9)
+
+`scripts/regression/snapshot-idempotency.py CASE [ARGS]` drives the real chain Next → PostgREST → Postgres on a
+**disposable** database with an `Idempotency-Key` on every POST (same environment as above). Since M9 the route
+calls `create_mcp_snapshot_idempotent` with a deadline of now + 3 s; the database rolls back a write that runs past
+it, so a snapshot never commits after the app (5 s) has given up, except for commit + response taking > 2 s.
+
+| Case | Expected |
+|---|---|
+| `slow-timeout 6` / `slow-timeout 9` | 503 `DATABASE_TIMEOUT` at ~5 s; replays while it runs → 409 `IN_PROGRESS`; the write rolls back (deadline / `statement_timeout`); the next replay → 201, exactly one snapshot; the replay after that → 200, same id |
+| `lost-response` | client gives up at 0.5 s, the 1.5 s write commits; `GET ?idempotencyKey=` → `committed`; replay → 200 with the original id/version (`Idempotent-Replayed: true`), no duplicate |
+| `in-progress` | replay during a 2 s write → 409 `IN_PROGRESS` + `Retry-After: 2`; original → 201 |
+| `same-key N` (2/5/10) | one 201, the rest 200 replay or 409 `IN_PROGRESS`; exactly one snapshot |
+| `diff-keys N ROUNDS` | all 201, contiguous versions, one record per key |
+| `lock row` ≥ 2 s | 503 `ENDPOINT_BUSY` after ~2 s, nothing written; replay → 201 |
+| `lock tools-ddl` ≥ 2 s | 503 `SNAPSHOT_STORE_BUSY` after ~2 s, nothing written; replay → 201 |
+| `slow-write` ≤ 2.5 s / 4.5 s | 201 / 503 `SNAPSHOT_DEADLINE_EXCEEDED` before 5 s, rolled back; replay → 201 |
+| `replay-under-ddl` | replay of a committed key during DDL on `external_tools` → 503 `SNAPSHOT_STORE_BUSY` (never 500) |
+| `read-timeout 9` | `GET /snapshots/{id}/tools` with `external_tool_snapshots` locked 9 s → 503 `DATABASE_TIMEOUT` at ~5 s, exactly one database attempt (postgrest-js no longer retries a timed-out GET) |
+| `endpoint-lookup-locked post\|get SECS` (M9 follow-up, F-M9-1) | `external_tool_endpoints` locked `ACCESS EXCLUSIVE` for SECS: ≥ 2 s → 503 `DATABASE_TIMEOUT` + `Retry-After: 2` at ~2 s (`get_mcp_endpoint_url` `lock_timeout=2s`), the `Idempotency-Key` echoed, nothing written — never 404 `NOT_FOUND`; a retry with the same key → 201 (POST) / `committed` (GET). 1 s → waits, then 201 / 200 |
+| `cross-tenant-in-progress` (M9 follow-up, F-M9-3) | while org A's request for key K is in flight, an owner of org B calling `create_mcp_snapshot_idempotent` / `get_mcp_snapshot_request` with A's endpoint and K gets `P0002` NOT_FOUND in < 1 s (not `PT409` IN_PROGRESS after waiting on A's advisory lock); naming org A is `42501`; A is still in flight after the probes and then 201, exactly one snapshot; nothing written for B. Uses a persistent harness fixture (org `a3100000-…0b`, owner `…b1`) that the case upserts and never deletes (organizations are soft-deleted and the last owner cannot be removed) |
+
+Every case also asserts: no 500, no idle-in-transaction sessions, no ungranted locks, contiguous versions, no
+partial snapshots, one idempotency record per snapshot, no `40001` in the Postgres log.
 
 ## Known gap
 

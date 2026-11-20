@@ -80,6 +80,96 @@ describe('runTurn', () => {
   });
 });
 
+describe('call ids and message order (M6)', () => {
+  const CALL_ID = /^[A-Za-z0-9_.:-]{1,128}$/;
+  type Asst = Extract<WireMessage, { role: 'assistant' }>;
+  type Tool = Extract<WireMessage, { role: 'tool' }>;
+  /** Every tool message answers the assistant tool_call with its id; each id is used once in the turn. */
+  function pairing(msgs: readonly WireMessage[]) {
+    const ids: string[] = []; const pairs: { id: string; args: string; content: string }[] = [];
+    let pending: Asst['tool_calls'] = [];
+    for (const m of msgs) {
+      if (m.role === 'assistant' && m.tool_calls) { pending = m.tool_calls; ids.push(...m.tool_calls.map((t) => t.id)); }
+      if (m.role === 'tool') {
+        const tc = (pending ?? []).find((t) => t.id === (m as Tool).tool_call_id);
+        pairs.push({ id: m.tool_call_id, args: tc ? tc.function.arguments : '<unpaired>', content: m.content });
+      }
+    }
+    return { ids, pairs };
+  }
+  /** Echoes arguments as the result and records the ids it was asked to execute. */
+  const echo = (ran: string[] = []): Partial<TurnPorts> => ({ async executeTool(c) { ran.push(c.id); return { ok: true, content: `r:${JSON.stringify(c.arguments)}` }; } });
+
+  it('two calls with the SAME model id in one round get distinct ids, and each result pairs with its own call', async () => {
+    let round = 0; const ran: string[] = [];
+    const p = ports({ ...echo(ran), async completeWithTools() { round++; return { text: null, toolCalls: round === 1 ? [call('dup', { n: 1 }), call('dup', { n: 2 })] : [] }; } });
+    const { events } = await collect(runTurn({ messages: [{ role: 'user', content: 'x' }], tools: [tool] }, p));
+    const { ids, pairs } = pairing(p.streamed[0]);
+    expect(ids[0]).toBe('dup');
+    expect(new Set(ids).size).toBe(2);
+    expect(ids.every((id) => CALL_ID.test(id))).toBe(true);
+    expect(pairs).toEqual([{ id: ids[0], args: '{"n":1}', content: 'r:{"n":1}' }, { id: ids[1], args: '{"n":2}', content: 'r:{"n":2}' }]);
+    expect(events.filter((e) => e.type === 'tool_start').map((e) => (e as { callId: string }).callId)).toEqual(ids);
+    expect(events.filter((e) => e.type === 'tool_result').map((e) => (e as { callId: string }).callId)).toEqual(ids);
+    expect(ran).toEqual(ids);
+  });
+
+  it('the parser fallback id (call_0) repeated in every round stays unique within the turn', async () => {
+    let round = 0;
+    const p = ports({ ...echo(), async completeWithTools() { round++; return { text: null, toolCalls: round <= 2 ? [call('call_0', { n: round })] : [] }; } });
+    await collect(runTurn({ messages: [{ role: 'user', content: 'x' }], tools: [tool], maxToolRounds: 3 }, p));
+    const { ids, pairs } = pairing(p.streamed[0]);
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(pairs.map((x) => [x.args, x.content])).toEqual([['{"n":1}', 'r:{"n":1}'], ['{"n":2}', 'r:{"n":2}']]);
+  });
+
+  it('an invalid model id is replaced by a server id the approval route accepts', async () => {
+    let round = 0;
+    const p = ports({ ...echo(), async completeWithTools() { round++; return { text: null, toolCalls: round === 1 ? [call('has space', { n: 1 }), call('\u00fcml\u00e4ut', { n: 2 }), call('', { n: 3 })] : [] }; } });
+    await collect(runTurn({ messages: [{ role: 'user', content: 'x' }], tools: [tool] }, p));
+    const { ids } = pairing(p.streamed[0]);
+    expect(ids).toHaveLength(3);
+    expect(new Set(ids).size).toBe(3);
+    expect(ids.every((id) => CALL_ID.test(id))).toBe(true);
+  });
+
+  it('an id already used earlier in the thread is not reused', async () => {
+    const history: WireMessage[] = [
+      { role: 'user', content: 'before' },
+      { role: 'assistant', content: null, tool_calls: [{ id: 'old', type: 'function', function: { name: tool.name, arguments: '{}' } }] },
+      { role: 'tool', tool_call_id: 'old', content: 'old result' },
+      { role: 'user', content: 'now' },
+    ];
+    let round = 0; const ran: string[] = [];
+    const p = ports({ ...echo(ran), async completeWithTools() { round++; return { text: null, toolCalls: round === 1 ? [call('old', { n: 1 })] : [] }; } });
+    await collect(runTurn({ messages: history, tools: [tool] }, p));
+    expect(ran).toHaveLength(1);
+    expect(ran[0]).not.toBe('old');
+    const last = p.streamed[0];
+    expect(last.at(-2)).toMatchObject({ role: 'assistant', tool_calls: [{ id: ran[0] }] });
+    expect(last.at(-1)).toMatchObject({ role: 'tool', tool_call_id: ran[0], content: 'r:{"n":1}' });
+  });
+
+  it('multiple calls per round: one assistant message, then one tool message per call, in model order, every round', async () => {
+    let round = 0;
+    const order: string[] = [];
+    const p = ports({
+      async completeWithTools() { round++; return { text: null, toolCalls: round === 1 ? [call('a', { n: 1 }), call('b', { n: 2 }), call('c', { n: 3 })] : round === 2 ? [call('d', { n: 4 })] : [] }; },
+      async executeTool(c) { order.push(c.id); return { ok: c.id !== 'b', ...(c.id === 'b' ? { code: 'PROVIDER_UNAVAILABLE' } : {}), content: `r-${c.id}` }; },
+    });
+    const { events } = await collect(runTurn({ messages: [{ role: 'user', content: 'x' }], tools: [tool], maxToolRounds: 3 }, p));
+    const final = p.streamed[0];
+    expect(final.map((m) => m.role)).toEqual(['user', 'assistant', 'tool', 'tool', 'tool', 'assistant', 'tool']);
+    expect(order).toEqual(['a', 'b', 'c', 'd']);
+    expect(pairing(final).pairs.map((x) => [x.id, x.content])).toEqual([['a', 'r-a'], ['b', 'r-b'], ['c', 'r-c'], ['d', 'r-d']]);
+    expect(events.filter((e) => e.type !== 'delta').map((e) => `${e.type}:${(e as { callId: string }).callId}`)).toEqual([
+      'tool_start:a', 'tool_result:a', 'tool_start:b', 'tool_result:b', 'tool_start:c', 'tool_result:c', 'tool_start:d', 'tool_result:d',
+    ]);
+    expect(events).toContainEqual({ type: 'tool_result', tool: tool.name, callId: 'b', ok: false, code: 'PROVIDER_UNAVAILABLE' });
+  });
+});
+
 describe('runApprovedCall', () => {
   it('runs exactly the approved call once, then streams an answer without offering tools', async () => {
     let toolRounds = 0;

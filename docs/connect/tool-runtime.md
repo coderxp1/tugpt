@@ -71,3 +71,52 @@ Multiple calls in one turn run **serially**, capped at 8 per turn (`CALL_BUDGET_
 - **Postgres `CredentialStore`** for the broker (currently `InMemoryCredentialStore`).
 - **Live test.** Needs an owner-provisioned **staging** Google OAuth client and a dedicated test Google account. The production credential stays untouched (owner decision #4).
 - **Seeded capability row.** `calendar.find_availability` is seeded with `is_available=false`. Flip it only after the live staging test.
+
+## Customer MCP transport contract (chat execution and snapshot discovery)
+
+`packages/connect-runtime/src/external-mcp-tool.ts` speaks MCP Streamable HTTP (spec 2025-06-18) through
+one routine, `openMcpSession`, used by both `createExternalMcpTool` (chat) and `listExternalMcpTools`
+(snapshot discovery):
+
+| Step | Rule |
+|---|---|
+| Transport | `endpoint.fetchFn` (the egress-proxy fetch) is **required**. `createExternalMcpTool` throws at construction without it; there is no default or global fetch. Redirects are never followed. |
+| `initialize` | Request id 1; only HTTP 200 is accepted. |
+| Session id | **Only** the `Mcp-Session-Id` response header of `initialize`. It must be visible ASCII (1-256 chars). It is sent on every later message. Without the header the server is stateless and no session header is sent. Nothing in the result body is ever used: before M5, `createExternalMcpTool` read `result.sessionId` (never the header), so it sent no session to spec-compliant servers, which reject that with 400. Discovery fell back to the body value. |
+| `notifications/initialized` | A notification: **no `id`**. Must be answered 2xx (202 per spec); anything else aborts the call before `tools/call`. It was previously sent with `id: 2` and its failure was swallowed. |
+| Replies | JSON or SSE. SSE events are split on blank lines, multi-line `data:` is joined, and server notifications in the stream are skipped. The response must be `jsonrpc: "2.0"` with **this request's id** and an object `result`. A JSON-RPC `error`, `isError: true`, or non-array `content` fails the call. |
+| Result | Only `type: "text"` parts with string `text` are returned to the model. Every failure is `PROVIDER_UNAVAILABLE`, and the chat layer audits it as such. |
+| Protocol version (M6) | The negotiated `protocolVersion` in the `initialize` result must be one of `SUPPORTED_MCP_PROTOCOL_VERSIONS` (`2025-06-18`, `2025-03-26`); an unsupported or missing value aborts before any other message. The negotiated value is sent as `MCP-Protocol-Version` on every message after `initialize` (not on `initialize` itself). |
+| Id collision (M6) | A message carrying a `method` (a server->client request or notification) is never taken as our response, even when it reuses our request id. |
+| Size caps (M6) | Reply body over `MAX_MCP_REPLY_BYTES` (1 MiB) or returned text over `MAX_MCP_RESULT_TEXT_BYTES` (64 KiB): `OUTPUT_TOO_LARGE` on `tools/call`, `DISCOVERY_TOO_LARGE` (HTTP 502) on discovery; nothing of the body is returned. These sit under the egress transport cap (1 MiB, cuts the stream) and above the runtime model cap (8 KiB, `OUTPUT_TOO_LARGE`). |
+
+### Chat turn rules (M6)
+
+| Rule | Where |
+|---|---|
+| **Unique call ids.** After de-duplication, `assignCallIds` keeps a model id only if it matches `^[A-Za-z0-9_.:-]{1,128}$` and is unused in this turn and in the thread history; otherwise it becomes `tugpt_r<round>_<i>`. Before M6, two calls with the same id (or the parser fallback `call_0` repeated each round) made `tool_call_id` pairing, the audit-failure set and the approval card ambiguous. | `apps/web/src/lib/chat/turn.ts` |
+| **Call budget.** Chat calls go through `ConnectToolRuntime.executeBudgetedCall`; one toolset (one runtime) per request, so `maxCallsPerTurn` (4) is enforced for one-at-a-time calls. The extra call is refused as `CALL_BUDGET_EXCEEDED`, audited, and never sent. Before M6 the budget only applied to `executeCalls` batches, which chat did not use. | `packages/connect-runtime/src/runtime.ts`, `apps/web/src/lib/chat/connect.ts` |
+| **Ordering.** For every round: one `assistant` message with all `tool_calls`, then exactly one `tool` message per call in the same order (failed or refused calls included). | `turn.ts`; tested in `turn.test.ts` and `mcp-chat.test.ts` |
+
+Execution remains **disabled** (customer MCP and chat tool execution are fenced; `proxy.ts` returns 503). These tests use a scripted fake model: no real model provider has been exercised.
+
+Each chat tool call opens a fresh session. Tests: `external-mcp-session.test.ts` (in-memory transport
+double implementing the server side strictly) and `apps/web/src/lib/chat/mcp-chat.test.ts` ("MCP
+session contract over real sockets": real TLS, the real CONNECT egress path through the proxy double,
+and the harness server that enforces the contract).
+
+### Which database identity does what (chat MCP path)
+
+Found by the M5 real-PostgREST chat run (`agent2-takeover/evidence/m5/http-chat-run1-before-fixes.txt`):
+with the unit-test fake, both of these passed; against the real database every customer MCP tool was
+unusable.
+
+| Step | Client | Why |
+| --- | --- | --- |
+| Runnable endpoints (`runnableEndpoints`) | member (`authenticated`) | reads only `id, organization_id, status`; `url` and `auth_connection_id` are hidden from members (20261115000012) and selecting them is a 42501 for the whole query |
+| Endpoint URL + tool list (`resolve_mcp_execution`) | trusted (`sso_control`) | SECURITY DEFINER; since 20261120000003 it also requires `auth_connection_id IS NULL` (no stored credential), so that rule lives on the trusted path, not in a member read |
+| Audit (`record_mcp_tool_call`) | trusted (`sso_control`) | the actor is a parameter (20261115000013+), so only the trusted identity may execute it; the actor is the server-resolved session user. No trusted client means no sink and the gate stays closed (`AUDIT_UNAVAILABLE`) |
+| Approvals (`record_tool_approval`, `claim_tool_approval`) and capabilities | member | `auth.uid()` decides; owner/admin only for recording |
+
+The test fake (`mcp.test-harness.ts`) mirrors these grants (`AUTHENTICATED_COLUMN_GRANTS`, trusted-only
+RPCs, `fakeTrustedDb`) so a regression fails in unit tests, not only against a real database.

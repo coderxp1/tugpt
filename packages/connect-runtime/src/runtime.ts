@@ -122,6 +122,23 @@ export class ConnectToolRuntime {
     return results;
   }
 
+  /** Calls started through executeBudgetedCall on this instance (one instance = one turn). */
+  private budgetedCallsUsed = 0;
+
+  /**
+   * Execute ONE call against this instance's per-turn budget (maxCallsPerTurn), for callers that run
+   * calls one at a time (the chat turn loop) rather than as one executeTurn batch. Budget-exceeding
+   * calls are refused with CALL_BUDGET_EXCEEDED (audited) and never reach the tool. A runtime instance
+   * is one turn: construct a new one per request. executeCall stays unbudgeted for single-shot callers.
+   */
+  async executeBudgetedCall(ctx: ToolExecutionContext, call: ProposedToolCall): Promise<ToolExecutionResult> {
+    this.budgetedCallsUsed += 1;
+    if (this.budgetedCallsUsed > this.maxCallsPerTurn) {
+      return this.refuse(ctx, call, this.byModelName.get(call.name)?.capability ?? null, 'CALL_BUDGET_EXCEEDED', this.now());
+    }
+    return this.executeCall(ctx, call);
+  }
+
   static toToolMessages(results: readonly ToolExecutionResult[]): ToolLoopMessage[] {
     return results.map((r) => ({ role: 'tool', toolCallId: r.toolCallId, content: r.content }));
   }

@@ -48,6 +48,36 @@ jobs:
       - name: Build
         run: pnpm build
 
+  # Forward-only migrations (docs/connect/migration-integrity.md). checksums.json alone only proves the
+  # manifest and the files agree - an edit plus a recomputed checksum passes it, and so does deleting a
+  # file together with its entry. This job compares against git instead: every migration at the merge
+  # base must be byte-identical here, its manifest entry unchanged, new versions must sort after the base,
+  # and every commit since the manifest anchor may only have added migrations. Needs full history.
+  # Make it a REQUIRED status check in branch protection, or it only advises.
+  migration-integrity:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout repository (full history)
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.12.0
+
+      - name: Verify migrations are forward-only
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          PR_BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PUSH_BEFORE: ${{ github.event.before }}
+        run: sh .github/scripts/migration-integrity-ci.sh
+
   # The pgTAP suite in supabase/tests/database. Until 2026-08-20 these 19 files
   # (~360 assertions) ran nowhere: CI had only the pnpm gate and the image
   # build, and nothing invoked `supabase test db`. Every guarantee TuGPT makes

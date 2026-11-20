@@ -6,6 +6,7 @@
  */
 
 import { NextResponse } from 'next/server';
+import { crossOriginMutationResponse } from '@/lib/http/mutations';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { createAdminSupabaseClient } from '@tugpt/database';
 import { AuthService } from '@tugpt/auth';
@@ -15,6 +16,10 @@ import { settingsIntegrationsUrl } from '@/lib/google-integrations/redirect-uri'
 const PROVIDER = 'microsoft';
 
 export async function POST(request: Request) {
+  // CSRF/origin guard first: no session, DB, broker or egress work for a
+  // cross-origin or non-JSON mutation (Agent 1 findings D7/X6).
+  const csrf = crossOriginMutationResponse(request);
+  if (csrf) return csrf;
   const fail = () => NextResponse.redirect(settingsIntegrationsUrl(request, { [PROVIDER]: 'error', reason: 'disconnect_failed' }));
   try {
     const supabase = await createAuthenticatedServerClient();
