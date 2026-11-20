@@ -6,18 +6,18 @@ import { parseAgentIdentity, parseAgentCitations } from './agent-events';
 
 const own = { ownedByMe: true, canEdit: true, canDelete: true };
 describe('Q678 permissions', () => {
-  it.each(['owner', 'admin', 'member'])('allows %s only with resource permission', (role) => {
+  it.each(['owner', 'admin', 'manager', 'agent'])('allows %s only with resource permission', (role) => {
     expect(agentPermissions(role, own).edit).toBe(true);
     expect(agentPermissions(role, { ...own, canEdit: false }).edit).toBe(false);
     expect(agentPermissions(role, { ...own, ownedByMe: false }).edit).toBe(false);
     expect(agentPermissions(role, { ...own, canDelete: false }).delete).toBe(false);
   });
-  it.each(['viewer', 'reader', undefined, 'unknown'])('fails closed for %s', (role) => {
+  it.each(['viewer', 'member', 'reader', undefined, 'unknown', '', 'OWNER', 'constructor'])('fails closed for %s', (role) => {
     expect(agentPermissions(role, own)).toEqual({ create: false, share: false, edit: false, delete: false });
   });
   it('allows admin deletion of nonowned organization resource when server grants it', () => {
     expect(agentPermissions('admin', { ...own, ownedByMe: false, canEdit: false })).toEqual({ create: true, share: true, edit: false, delete: true });
-    expect(agentPermissions('member').share).toBe(false);
+    expect(agentPermissions('agent').share).toBe(false);
   });
 });
 const row = (id: string): Conversation => ({ id, title: id, modelKey: 'scout', folderId: null, archivedAt: null, createdAt: '2026-01-01', updatedAt: '2026-01-01', matchSource: null, snippet: null });

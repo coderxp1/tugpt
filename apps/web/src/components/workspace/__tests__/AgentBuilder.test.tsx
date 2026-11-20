@@ -46,7 +46,7 @@ describe('Agent builder', () => {
 
 // Shape from Agent 4 Q-6 cb0c8e4: additive response fields must not unlock writes/runs.
 describe('compatible C-1 responses do not enable unverified features', () => {
-  it.each([true, false])('keeps saving/editing/deletion/execution off (ownedByMe=%s)', async (ownedByMe) => {
+  it.each(['owner', 'admin', 'manager', 'agent', 'viewer'].flatMap((role) => [true, false].map((ownedByMe) => ({ role, ownedByMe }))))('keeps saving/editing/deletion/execution off for $role (ownedByMe=$ownedByMe)', async ({ role, ownedByMe }) => {
     const api = fakeApi({ 'GET /api/v1/agents': () => ({ body: { agents: [{
       id: 'a1', name: 'Shipping helper', description: 'Approved shipping advice',
       instructions: ownedByMe ? 'Use approved shipping policies.' : '', modelKey: null,
@@ -54,7 +54,7 @@ describe('compatible C-1 responses do not enable unverified features', () => {
       ownedByMe, canEdit: ownedByMe, canDelete: ownedByMe, version: 3, tools: [],
       createdAt: '2026-01-01T00:00:00Z', updatedAt: '2026-01-01T00:00:00Z',
     }] } }) });
-    render(<AgentsView models={models} />);
+    render(<AgentsView models={models} role={role} />);
     const heading = await screen.findByRole('heading', { name: 'Shipping helper' });
     const card = heading.closest('li')!;
     expect(within(card).queryByRole('button')).toBeNull();

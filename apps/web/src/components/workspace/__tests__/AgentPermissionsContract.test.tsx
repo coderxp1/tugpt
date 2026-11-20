@@ -17,8 +17,8 @@ function setup(role: string, value = agent) {
   });
   render(<AgentsView role={role} />); return api;
 }
-it.each(['owner', 'admin', 'member'])('owner resource is editable by writer role %s and PATCH contains only editable fields', async (role) => {
-  const api = setup(role);
+it.each(['owner', 'admin', 'manager', 'agent'])('owner resource is editable by writer role %s and PATCH contains only editable fields', async (role) => {
+  const api = setup(role, { ...agent, visibility: 'private' });
   fireEvent.click(await screen.findByRole('button', { name: 'Options for agent Research' }));
   fireEvent.click(screen.getByRole('menuitem', { name: 'Edit' }));
   const dialog = screen.getByRole('dialog');
@@ -26,14 +26,14 @@ it.each(['owner', 'admin', 'member'])('owner resource is editable by writer role
   await waitFor(() => expect(api.calls.some((c) => c.method === 'PATCH')).toBe(true));
   expect(Object.keys(api.calls.find((c) => c.method === 'PATCH')!.body as object).sort()).toEqual(['collectionIds', 'description', 'instructions', 'modelKey', 'name', 'starters', 'visibility']);
 });
-it('viewer cannot create or edit even if the resource permission is true', async () => {
-  const api = setup('viewer'); await screen.findByText('Research');
+it.each(['viewer', 'member', 'unknown', ''])('%s cannot create or edit even if the resource permission is true', async (role) => {
+  const api = setup(role); await screen.findByText('Research');
   expect((screen.getByRole('button', { name: 'Create agent' }) as HTMLButtonElement).disabled).toBe(true);
   expect(screen.queryByRole('button', { name: 'Options for agent Research' })).toBeNull();
   expect(api.calls.some((c) => c.method !== 'GET')).toBe(false);
 });
-it('admin can delete but cannot edit a nonowned organization resource', async () => {
-  const api = setup('admin', { ...agent, ownedByMe: false, canEdit: false });
+it.each(['owner', 'admin'])('%s can moderate deletion but cannot edit a nonowned organization resource', async (role) => {
+  const api = setup(role, { ...agent, ownedByMe: false, canEdit: false });
   fireEvent.click(await screen.findByRole('button', { name: 'Options for agent Research' }));
   expect(screen.queryByRole('menuitem', { name: 'Edit' })).toBeNull();
   fireEvent.click(screen.getByRole('menuitem', { name: 'Delete' }));
@@ -44,8 +44,8 @@ it('does not expose mutations when server denies both resource permissions', asy
   setup('owner', { ...agent, canEdit: false, canDelete: false }); await screen.findByText('Research');
   expect(screen.queryByRole('button', { name: 'Options for agent Research' })).toBeNull();
 });
-it('creates through 201 with starters and inline collectionIds', async () => {
-  const api = setup('member'); await screen.findByText('Research');
+it.each(['owner', 'admin', 'manager', 'agent'])('%s creates privately through 201 with starters and inline collectionIds', async (role) => {
+  const api = setup(role); await screen.findByText('Research');
   fireEvent.click(screen.getByRole('button', { name: 'Create agent' }));
   const dialog = screen.getByRole('dialog');
   fireEvent.change(within(dialog).getByLabelText(/^Name/), { target: { value: 'New helper' } });
@@ -53,4 +53,23 @@ it('creates through 201 with starters and inline collectionIds', async () => {
   fireEvent.click(within(dialog).getByRole('button', { name: 'Create agent' }));
   await waitFor(() => expect(api.calls.some((c) => c.method === 'POST')).toBe(true));
   expect(api.calls.find((c) => c.method === 'POST')?.body).toMatchObject({ name: 'New helper', starters: [], collectionIds: [], visibility: 'private' });
+});
+
+it.each(['owner', 'admin', 'manager', 'agent'])('%s cannot edit or link knowledge for another owner even with an inconsistent edit flag', async (role) => {
+  const api = setup(role, { ...agent, ownedByMe: false, canEdit: true, canDelete: false });
+  await screen.findByText('Research');
+  expect(screen.queryByRole('button', { name: 'Options for agent Research' })).toBeNull();
+  expect(api.calls.every((c) => c.method === 'GET')).toBe(true);
+});
+it.each(['manager', 'agent'])('%s cannot moderate another user agent', async (role) => {
+  setup(role, { ...agent, ownedByMe: false, canEdit: false, canDelete: false });
+  await screen.findByText('Research');
+  expect(screen.queryByRole('button', { name: 'Options for agent Research' })).toBeNull();
+});
+it.each(['owner', 'admin', 'manager', 'agent'])('%s receives only its allowed visibility choice', async (role) => {
+  setup(role); await screen.findByText('Research');
+  fireEvent.click(screen.getByRole('button', { name: 'Create agent' }));
+  const radios = within(screen.getByRole('dialog')).getAllByRole('radio') as HTMLInputElement[];
+  expect(radios[0].disabled).toBe(false);
+  expect(radios[1].disabled).toBe(role === 'manager' || role === 'agent');
 });
