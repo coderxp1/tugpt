@@ -67,6 +67,68 @@ Roles: `owner`, `admin`, `agent` (member) and `viewer`. "Admin" below means owne
 - Another user, another tenant or a forged tenant claim gets `404` for the thread; there is no oracle for
   `agentId` or citations.
 
+### Idempotent turns: retry and recovery without re-sending (Q-12, migration `20261121100001`)
+
+A **turn** is one user message plus the assistant (and tool) messages written for it. The client creates
+the turn id (`crypto.randomUUID()`) **before** sending and keeps it until the turn settles. Every field is
+optional: a client that sends no `turnId` behaves exactly as before.
+
+| Method & path | Body | Result |
+|---|---|---|
+| `POST /api/v1/chat/threads/{threadId}/messages` | `{content, modelKey, mentions?, timeZone?, turnId?, retry?}` | `200` NDJSON stream; or `409 {error, code, turn}` (no model call, no write) |
+| `POST /api/v1/agents/{agentId}/run` | `{content, threadId?, modelKey?, timeZone?, turnId?, retry?}` | same; retrying needs the thread, so a run started without `threadId` is retried with the `threadId` from its `agent` event |
+| `GET /api/v1/chat/threads/{threadId}/turns/{turnId}` | none | `200 {turn}`; `404` = the turn was never stored (or not your thread) |
+
+`turn` = `{id, status, latest, userMessage, assistantMessage}`. `status`:
+
+| status | meaning | client action |
+|---|---|---|
+| `complete` | answered | show `assistantMessage` |
+| `error` | the model call failed; the error answer is stored | offer **Retry** |
+| `stopped` | the stream ended early (client disconnected or pressed stop); the partial answer is stored | offer **Retry** / **Continue** |
+| `pending` | stored user message, no answer yet, younger than 150 s (`maxDuration` is 120 s) | poll the GET (e.g. every 1–2 s) |
+| `interrupted` | no answer and older than 150 s (the server died mid-turn) | offer **Retry** |
+
+**Stream changes (additive):** the `user` event gains `turnId` and `retried`; `done` and `error` gain `turnId`;
+every message carries `turnId` (`null` when sent without one). `GET /chat/threads/{id}` returns `turnId` on
+each message too.
+
+**POST with a `turnId` that already exists** never writes a second user message:
+
+| situation | response |
+|---|---|
+| no `retry` (a re-send after an ambiguous failure) | `409 TURN_EXISTS` + `turn` (any status) |
+| `retry: true`, status `error` / `stopped` / `interrupted`, latest turn, same content | **re-runs** the turn on the existing user message (`user` event has `retried: true`, same message id) |
+| `retry: true`, status `complete` | `409 TURN_EXISTS` |
+| `retry: true`, status `pending` | `409 TURN_IN_PROGRESS` |
+| `retry: true`, not the thread's latest user turn | `409 TURN_NOT_LATEST` |
+| different `content` for the same `turnId` | `409 TURN_CONFLICT` |
+| `retry: true` for a turn the server never stored | treated as a fresh send |
+| two identical sends at the same moment | one stream; the other gets `409 TURN_EXISTS` or `TURN_IN_PROGRESS` (unique index) |
+
+`400 "Invalid request"`: a malformed `turnId` (not a UUID), a non-boolean `retry`, or `retry` without a `turnId`.
+
+**Recommended client flow after an ambiguous failure** (network error, 5xx, stream ended without `done`/`error`):
+1. `GET .../turns/{turnId}`. `404` means send again with the **same** `turnId`. `pending` means poll.
+   `complete` means render it. `error` / `stopped` / `interrupted` means show Retry.
+2. Retry = `POST .../messages {content, modelKey, turnId, retry: true}`.
+3. Never re-send a prompt with a **new** `turnId` unless the person asks to.
+
+**Persistence:**
+- The user message is written before the stream starts.
+- The answer is written when the stream ends: `complete`, `error` or `stopped` (with the text streamed so far).
+- If the process dies in between, there is no answer row; the turn reads `pending`, then `interrupted`.
+- A retried turn keeps its earlier answer rows. The thread shows each attempt in order; the turn's status
+  and `assistantMessage` are the **latest** attempt. Render one bubble per `turnId` (the last assistant
+  row), or show earlier attempts collapsed.
+- The model is sent only the latest answer of each turn, never failed answers, and the retried prompt once.
+
+**Security:**
+- `turn_id` is writable by the owner only on their own `role = 'user'` messages.
+- Assistant and tool rows get it only through the server-only `append_chat_turn_message_server`, which
+  also requires the turn to have been opened in that very thread.
+- Other users and tenants get `404`.
+
 ## 3. Approvals (persistent)
 
 These extend Agent 2's MCP approvals; they don't replace them. A **request** can exist before anyone
@@ -113,6 +175,30 @@ approves it. Approving calls Agent 2's `record_tool_approval`, so the runtime's 
 2. Filename is reduced to a safe final segment (path, control and bidi characters stripped; ≤255 characters).
 3. The extension must be on the allowlist: txt, log, md, markdown, csv, json, pdf, docx, xlsx, pptx, png, jpg/jpeg, gif and webp. **SVG, HTML and scripts are refused** with `415 UNSUPPORTED_MEDIA_TYPE`.
 4. The declared type must be compatible, and the **content is sniffed** (magic bytes; ZIP containers for Office files; UTF-8 without NULs for text). A mismatch returns `415 MEDIA_TYPE_MISMATCH`.
+
+**What gets read for knowledge (indexing / RAG)**: uploading accepts every allowlisted type, but only these
+are extracted into searchable text when a file is added to a knowledge collection
+(`packages/workspace-core/src/extract.ts`):
+
+| Type | Indexed | Notes / document error codes |
+|---|---|---|
+| txt, log, md, markdown, csv, json | yes | strict UTF-8 |
+| docx | yes | visible text of `word/document.xml`; field codes and tracked deletions dropped |
+| xlsx | yes | every sheet, one paragraph per non-empty row; ≤100 sheets, ≤500 000 cells (`DOCUMENT_TOO_LARGE`) |
+| pdf | yes, if it has a text layer | worker-side extractor; `PDF_ENCRYPTED`, `PDF_NO_TEXT_LAYER` (scans; no OCR yet), `PDF_EXTRACTION_UNAVAILABLE` |
+| pptx, png, jpg/jpeg, gif, webp | **no** | stored and attachable, but not searchable: `UNSUPPORTED_FOR_INDEXING` |
+
+Text is capped at 2 000 000 characters and 2 000 chunks. Other outcomes: `EMPTY_DOCUMENT` and `EXTRACTION_FAILED`.
+
+**Upload retries:** `POST /api/v1/files` is **not** idempotent; every successful call creates a new file.
+- Failures roll back: if storage or the database fails, the row and blob are removed, and you get
+  `503 STORAGE_UNAVAILABLE` / `STORE_UNAVAILABLE`. Nothing is left visible as `ready`.
+- After an **ambiguous** failure (network error, timeout), do not blindly re-upload. Call
+  `GET /api/v1/files?scope=mine` and look for a `ready` file with the same `filename`, `sizeBytes` and
+  `sha256`. The client can compute SHA-256 with `crypto.subtle.digest`. Re-upload only if none matches.
+- Adding the same content to the same collection twice is de-duplicated by the database (one document
+  per content per collection).
+- There are no file folders in the API yet; files are listed per owner (`scope=mine`) or per organization.
 
 **Downloads:** always `Content-Disposition: attachment`, plus `X-Content-Type-Options: nosniff`,
 `Content-Security-Policy: default-src 'none'; sandbox`, `Cross-Origin-Resource-Policy: same-origin`,
@@ -322,7 +408,7 @@ Details hold IDs, hashes and classes only: no arguments, file content, filenames
 `…100004_workspace_library` (frozen), then `20261120100001_workspace_knowledge_vectors` ·
 `…100002_workspace_document_jobs` · `…100003_workspace_rate_limits` · `…100004_workspace_custom_agents` ·
 `…100005_workspace_storage_maintenance` · `…100006_workspace_document_dedupe` (one document per content per collection) ·
-`…100007_workspace_conversation_cursor` (composite thread cursor) · `…100008_workspace_agent_save` (atomic agent save) · `…100009_workspace_agent_owner_edit` (owner-only editing in the database, atomic single link) · `…100010_workspace_message_citations` (persisted citations and `knowledge_unavailable` on assistant messages, Q-9) · `…100011_workspace_message_citations_strict` (validator fix: `[{}]` and every other NULL-producing input were accepted by 100010; the function now never returns NULL, existing rows are re-validated, Q-9b), then the Q-9c security fixes `20261120200001_workspace_agent_instructions_confidential` (no column read of `custom_agents.instructions`; editors read it via `custom_agent_instructions`, runs via the server-only `custom_agent_run_instructions`, F-1) · `…200002_workspace_message_citations_confidential` (no column read of `chat_messages.citations`; `chat_message_citations` returns each entry only while the reader can still read that document in the same collection and file, F-2) · `…200003_workspace_server_authored_messages` (clients insert `role = 'user'` rows with seven columns only; assistant/tool rows only via the server-only `append_chat_message_server`, which re-checks thread owner, tenant, membership and that the thread is not archived, F-3). All are registered in `supabase/migrations/checksums.json`. Any
+`…100007_workspace_conversation_cursor` (composite thread cursor) · `…100008_workspace_agent_save` (atomic agent save) · `…100009_workspace_agent_owner_edit` (owner-only editing in the database, atomic single link) · `…100010_workspace_message_citations` (persisted citations and `knowledge_unavailable` on assistant messages, Q-9) · `…100011_workspace_message_citations_strict` (validator fix: `[{}]` and every other NULL-producing input were accepted by 100010; the function now never returns NULL, existing rows are re-validated, Q-9b), then the Q-9c security fixes `20261120200001_workspace_agent_instructions_confidential` (no column read of `custom_agents.instructions`; editors read it via `custom_agent_instructions`, runs via the server-only `custom_agent_run_instructions`, F-1) · `…200002_workspace_message_citations_confidential` (no column read of `chat_messages.citations`; `chat_message_citations` returns each entry only while the reader can still read that document in the same collection and file, F-2) · `…200003_workspace_server_authored_messages` (clients insert `role = 'user'` rows with seven columns only; assistant/tool rows only via the server-only `append_chat_message_server`, which re-checks thread owner, tenant, membership and that the thread is not archived, F-3), then `20261121100001_workspace_chat_turns` (Q-12: nullable `chat_messages.turn_id`, one user message per thread and turn, owner-writable on user messages only, assistant/tool rows stamped via the server-only `append_chat_turn_message_server`; additive). All are registered in `supabase/migrations/checksums.json`. Any
 further change needs a **new** migration ID.
 
 ## 10. Tests

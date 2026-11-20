@@ -159,6 +159,21 @@ change: `schema-compat.ts`, its four call sites, the `legacy` parameter of
 `appendServerMessage`, `WS_IT_EXPECT_SCHEMA`, and `agents-compat.test.ts`.
 After that, the app again requires the Q-9c schema.
 
+## 1b. Q-12 chat turns rollout (`20261121100001`, additive)
+
+**Order: migration, then app.** Both mixed states were measured on disposable stacks:
+
+| App | Database | Result |
+|---|---|---|
+| Q-11 app (before Q-12) | with `20261121100001` | IT suite 54/54. The old app never touches `turn_id`; existing grants and `append_chat_message_server` are unchanged. |
+| Q-12 app | with `20261121100001` | IT 54/54, HTTP turn runner 10/10 |
+| Q-12 app | without it (124 migrations) | turn-less sends unchanged (signing e2e 14/14). A send *with* `turnId` degrades to a turn-less send: `200`, `turnId: null` in the events, no de-duplication (two identical sends both get `200`). `GET .../turns/{id}` answers 404. No 5xx in the HTTP turn runner (2/10 pass by design: turn-less sends and isolation). Reads fall back on `42703`, inserts on `PGRST204` (`schema-compat.ts`, `isMissingColumn`). |
+
+There is nothing to back-fill: existing messages keep `turn_id = NULL`.
+
+**Rollback:** roll back the app first. The column, indexes and the new function can stay; the old app
+ignores them. Dropping them would need a new forward migration; do not edit `20261121100001`.
+
 ## 2. Database grants (verified with `has_function_privilege`)
 
 | Function | authenticated | anon | service_role |

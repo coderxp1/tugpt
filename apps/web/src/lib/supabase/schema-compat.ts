@@ -25,3 +25,13 @@ export const MISSING_FUNCTION_CODE = 'PGRST202';
 export function isMissingFunction(error: { code?: string } | null | undefined): boolean {
   return error?.code === MISSING_FUNCTION_CODE;
 }
+
+/**
+ * Expand/contract window for 20261121100001 (Q-12 chat turns): on a database
+ * without chat_messages.turn_id, PostgREST reports the column as unknown
+ * (42703 on select, PGRST204 on insert). Callers then behave exactly as before
+ * Q-12 (no turn ids, no de-duplication). Every other error still fails closed.
+ */
+export function isMissingColumn(error: { code?: string } | null | undefined): boolean {
+  return error?.code === '42703' || error?.code === 'PGRST204';
+}

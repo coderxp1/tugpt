@@ -42,7 +42,7 @@ SELECT ok((SELECT with_check LIKE '%role = ''user''::text%' FROM pg_policies WHE
   'INSERT policy requires role = user'); -- 1
 SELECT is((SELECT string_agg(column_name, ',' ORDER BY column_name) FROM information_schema.column_privileges
   WHERE table_schema = 'public' AND table_name = 'chat_messages' AND grantee = 'authenticated' AND privilege_type = 'INSERT'),
-  'content,mentions,model_key,organization_id,role,status,thread_id', 'authenticated INSERT limited to the user-message columns'); -- 2
+  'content,mentions,model_key,organization_id,role,status,thread_id,turn_id', 'authenticated INSERT limited to the user-message columns (turn_id: 20261121100001)'); -- 2
 SELECT ok((SELECT prosecdef AND provolatile = 'v' AND proconfig @> ARRAY['search_path=pg_catalog'] FROM pg_proc
   WHERE oid = 'public.append_chat_message_server(uuid,uuid,uuid,text,text,text,text,jsonb,text,jsonb,boolean)'::regprocedure),
   'server RPC: SECURITY DEFINER, VOLATILE, pinned search_path'); -- 3

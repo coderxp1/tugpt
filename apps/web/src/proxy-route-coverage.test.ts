@@ -545,6 +545,12 @@ const ROUTES: RouteExpectation[] = [
     why: 'Proxy requires a session first (401 JSON). Then: handler resolves the tenant strictly via chatContext (stale hint = 403); owner-only link RLS; same-origin check on DELETE.',
   },
   {
+    path: '/api/v1/chat/threads/[threadId]/turns/[turnId]',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: GET only; handler resolves the tenant strictly via chatContext (stale hint = 403); thread must be the caller\'s open thread (getThread under RLS, else 404); messages read under the caller RLS, citations re-authorised (Q-12).',
+  },
+  {
     path: '/api/v1/approvals',
     kind: 'api',
     type: 'protected',

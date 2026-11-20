@@ -17,6 +17,13 @@
  * from them on every turn, on the caller's session (permissions at retrieval
  * time), add a 'citations' event and store the citations on the answer.
  * Without linked collections the stream is unchanged.
+ *
+ * Idempotent turns (Q-12, lib/chat/turns.ts): an optional turnId (UUID) is
+ * stamped on the user, tool and assistant messages and echoed in the 'user'
+ * and 'done'/'error' events. A repeated turnId never writes a second user
+ * message: 409 {code: TURN_EXISTS | TURN_IN_PROGRESS | TURN_NOT_LATEST |
+ * TURN_CONFLICT, turn}. retry: true re-runs a stopped/error/interrupted latest
+ * turn on its existing user message. GET .../turns/{turnId} reports a turn.
  */
 import { NextResponse } from 'next/server';
 import { createSsoControlClient } from '@/lib/supabase/server';
@@ -29,8 +36,10 @@ import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
-  appendMessage, appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
+  appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
+import { decideTurn, openTurn } from '@/lib/chat/turn-send';
+import { modelHistory, parseTurnRequest } from '@/lib/chat/turns';
 import { runAgentTurn, threadAgentId } from '@/lib/workspace-data/agent-turn';
 import { knowledgeSystemPrompt, retrieveForThread, toCitations } from '@/lib/workspace-data/agents';
 import type { SearchHit } from '@/lib/workspace-data/contracts';
@@ -48,7 +57,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   const { threadId } = await params;
   if (!isUuid(threadId)) return jsonError(404, 'Not found');
   let body: Record<string, unknown>;
-  try { body = await readJsonRecord(request, ['content', 'modelKey', 'mentions', 'timeZone']); } catch { return jsonError(400, 'Invalid request'); }
+  try { body = await readJsonRecord(request, ['content', 'modelKey', 'mentions', 'timeZone', 'turnId', 'retry']); } catch { return jsonError(400, 'Invalid request'); }
   const content = typeof body.content === 'string' ? body.content.trim() : '';
   if (!content || content.length > MAX_CONTENT) return jsonError(400, 'Message must be 1-8000 characters');
   const models = configuredModels();
@@ -56,6 +65,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   const endpoint = model ? endpointFor(model) : null;
   if (!model || !endpoint) return jsonError(400, 'Unknown model');
   const requested = parseMentions(body.mentions);
+  const turnRequest = parseTurnRequest(body);
+  if (!turnRequest) return jsonError(400, 'Invalid request');
 
   const ctx = await chatContext(request);
   if (ctx instanceof NextResponse) return ctx;
@@ -66,14 +77,13 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   if (agentId) {
     return runAgentTurn({
       request, ctx, agentId, threadId, content, modelKey: model.key, modelPrecedence: 'agent', timeZone: body.timeZone,
-      mentions: requested, unreadableAgent: 'unavailable', errorStyle: 'chat',
+      mentions: requested, unreadableAgent: 'unavailable', errorStyle: 'chat', turn: turnRequest,
     });
   }
 
   let attached: CapabilityRow[];
   let registry: ChatToolRegistry = builtinRegistry();
   let history: Awaited<ReturnType<typeof listMessages>>;
-  let isFirst: boolean;
   // Assistant/tool messages are server-authored through sso_control (Q-9c F-3); created before the stream starts.
   let control: ReturnType<typeof asChatDb>;
   try {
@@ -94,8 +104,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
         : 'Two attached integrations offer the same tool. Attach one of them per message');
     }
     history = await listMessages(ctx.db, orgId, threadId);
-    isFirst = history.length === 0;
   } catch (e) { return storeErrorResponse(e); }
+  // A repeated turn is answered before retrieval or any write; a retry runs on the messages before it.
+  const retry = decideTurn(history, turnRequest, content);
+  if (retry instanceof NextResponse) return retry;
+  if (retry) history = [...retry.before];
+  const isFirst = history.length === 0;
 
   // Linked knowledge: degrade to "no excerpts" (flagged to the user) rather than failing the turn.
   let linked = false;
@@ -105,19 +119,20 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   catch { linked = true; knowledgeUnavailable = true; }
   const citations = toCitations(hits);
 
-  let userMessage;
+  let opened;
   try {
-    userMessage = await appendMessage(ctx.db, {
-      organizationId: orgId, threadId, role: 'user', content,
+    opened = await openTurn(ctx.db, {
+      organizationId: orgId, threadId, content,
       mentions: attached.map((c) => ({ capability: c.capabilityKey, provider: c.providerKey })),
-    });
+    }, turnRequest, retry, () => listMessages(ctx.db, orgId, threadId));
   } catch (e) { return storeErrorResponse(e); }
+  if (opened instanceof NextResponse) return opened;
+  const { userMessage, turnId, retried } = opened;
 
   const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached, { registry });
   const wire: WireMessage[] = [
     { role: 'system', content: knowledgeSystemPrompt(systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(body.timeZone), attached: toolset.labels }), hits) },
-    ...history.filter((m) => m.role !== 'tool' && m.status !== 'error').slice(-HISTORY)
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    ...modelHistory(history, HISTORY),
     { role: 'user', content },
   ];
 
@@ -126,7 +141,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (e: object) => controller.enqueue(encoder.encode(`${JSON.stringify(e)}\n`));
-      send({ type: 'user', message: userMessage });
+      send({ type: 'user', message: userMessage, turnId, retried });
       if (linked) send({ type: 'citations', citations, knowledgeUnavailable });
       let answer = '';
       let status: 'complete' | 'error' | 'stopped' = 'complete';
@@ -149,7 +164,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
               // chat_messages.capability_key references the built-in catalogue; MCP tools are not in it.
               organizationId: orgId, userId: ctx.userId, threadId, role: 'tool', capabilityKey: cap?.providerKey === MCP_PROVIDER ? undefined : cap?.capabilityKey,
               content: ev.ok ? `${cap?.providerName ?? 'Integration'} responded` : `${cap?.providerName ?? 'Integration'} failed: ${ev.code ?? 'ERROR'}`,
-              status: ev.ok ? 'complete' : 'error',
+              status: ev.ok ? 'complete' : 'error', turnId,
             }, ctx.db).catch(() => undefined);
           }
           // Provider name for the UI label; comes from the server-side capability row, never from the model.
@@ -171,12 +186,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
           organizationId: orgId, userId: ctx.userId, threadId, role: 'assistant', modelKey: model.key, status,
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
           // Re-authorised on read by chat_message_citations, as for agent answers.
-          ...(linked ? { citations, knowledgeUnavailable } : {}),
+          ...(linked ? { citations, knowledgeUnavailable } : {}), turnId,
         }, ctx.db);
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key, ...(isFirst ? { title: titleFrom(content) } : {}) });
-        if (!signal.aborted) send(errorCode ? { type: 'error', code: errorCode, message: saved } : { type: 'done', message: saved });
+        if (!signal.aborted) send(errorCode ? { type: 'error', code: errorCode, message: saved, turnId } : { type: 'done', message: saved, turnId });
       } catch {
-        if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE' });
+        if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE', turnId });
       }
       try { controller.close(); } catch { /* client went away */ }
     },

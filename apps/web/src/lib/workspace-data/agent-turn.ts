@@ -28,7 +28,7 @@ import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
-  appendMessage, appendServerMessage, asChatDb, ChatStoreError, listCapabilities, listMessages, titleFrom, touchThread, type CapabilityRow, type Mention, type StoredMessage,
+  appendServerMessage, asChatDb, ChatStoreError, listCapabilities, listMessages, titleFrom, touchThread, type CapabilityRow, type Mention, type StoredMessage,
 } from '@/lib/chat/store';
 import { agentSystemPrompt, loadAgentForRun, retrieveForAgent, toCitations, type AgentTool } from './agents';
 import type { SearchHit } from './contracts';
@@ -37,6 +37,9 @@ import { configuredQueryEmbedder } from './embeddings';
 import { WorkspaceError } from './errors';
 import { toErrorResponse } from './http';
 import { consumeRateLimit } from './rate-limit';
+
+import { decideTurn, openTurn, type TurnRequest } from '@/lib/chat/turn-send';
+import { modelHistory, type TurnView } from '@/lib/chat/turns';
 
 const HISTORY = 30;
 const THREAD_COLS = 'id,title,model_key,updated_at,agent_id';
@@ -66,6 +69,8 @@ export interface AgentTurnOptions {
   readonly unreadableAgent: 'not_found' | 'unavailable';
   /** {error: CODE} (Workspace API) or the plain chat route's {error: text}. */
   readonly errorStyle: 'workspace' | 'chat';
+  /** Q-12 idempotent turn (lib/chat/turns.ts); omitted = turn-less, as before. */
+  readonly turn?: TurnRequest;
 }
 
 const CHAT_TEXT: Record<string, string> = {
@@ -182,6 +187,14 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
     }
     if (thread) history = await listMessages(ctx.db, orgId, thread.id);
   } catch (e) { return fail(e, o.errorStyle); }
+  // A repeated turn is answered before retrieval or any write (a new thread has no turns yet).
+  const turnRequest: TurnRequest = o.turn ?? { turnId: null, retry: false };
+  let retry: TurnView | null = null;
+  if (thread) {
+    const d = decideTurn(history, turnRequest, content);
+    if (d instanceof NextResponse) return d;
+    if (d) { retry = d; history = [...d.before]; }
+  }
 
   // Knowledge: degrade to "no excerpts" rather than failing the turn.
   let hits: SearchHit[] = [];
@@ -190,6 +203,8 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
   catch { knowledgeUnavailable = true; }
 
   let userMessage: StoredMessage;
+  let turnId: string | null;
+  let retried: boolean;
   const isFirst = history.length === 0;
   try {
     if (!thread) {
@@ -198,10 +213,13 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
       }).select(THREAD_COLS).single()) as Record<string, unknown>;
       thread = { id: String(row.id), title: String(row.title), modelKey: String(row.model_key), updatedAt: String(row.updated_at) };
     }
-    userMessage = await appendMessage(ctx.db, {
-      organizationId: orgId, threadId: thread.id, role: 'user', content,
+    const tid = thread.id;
+    const opened = await openTurn(ctx.db, {
+      organizationId: orgId, threadId: tid, content,
       mentions: attached.map((c) => ({ capability: c.capabilityKey, provider: c.providerKey })),
-    });
+    }, turnRequest, retry, () => listMessages(ctx.db, orgId, tid));
+    if (opened instanceof NextResponse) return opened;
+    ({ userMessage, turnId, retried } = opened);
   } catch (e) { return fail(e, o.errorStyle); }
   const threadId = thread.id;
 
@@ -209,8 +227,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
   const base = systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(o.timeZone), attached: toolset.labels });
   const wire: WireMessage[] = [
     { role: 'system', content: agentSystemPrompt(base, agent, hits) },
-    ...history.filter((m) => m.role !== 'tool' && m.status !== 'error').slice(-HISTORY)
-      .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
+    ...modelHistory(history, HISTORY),
     { role: 'user', content },
   ];
 
@@ -220,7 +237,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
     async start(controller) {
       const send = (e: object) => controller.enqueue(encoder.encode(`${JSON.stringify(e)}\n`));
       send({ type: 'agent', agent: { id: agent.id, name: agent.name, version: agent.version }, thread, unavailableTools: unavailable });
-      send({ type: 'user', message: userMessage });
+      send({ type: 'user', message: userMessage, turnId, retried });
       const citations = toCitations(hits);
       send({ type: 'citations', citations, knowledgeUnavailable });
       let answer = '';
@@ -243,7 +260,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
             await appendServerMessage(control, {
               organizationId: orgId, userId: ctx.userId, threadId, role: 'tool', capabilityKey: cap?.providerKey === MCP_PROVIDER ? undefined : cap?.capabilityKey,
               content: ev.ok ? `${cap?.providerName ?? 'Integration'} responded` : `${cap?.providerName ?? 'Integration'} failed: ${ev.code ?? 'ERROR'}`,
-              status: ev.ok ? 'complete' : 'error',
+              status: ev.ok ? 'complete' : 'error', turnId,
             }, ctx.db).catch(() => undefined);
           }
           send(ev.type === 'tool_start' || ev.type === 'tool_result' ? { ...ev, provider: toolset.describe(ev.tool)?.providerName ?? null } : ev);
@@ -262,12 +279,12 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
           organizationId: orgId, userId: ctx.userId, threadId, role: 'assistant', modelKey: model.key, status,
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
           // Persist what was streamed, so a reloaded thread shows the same sources (re-authorised on read by chat_message_citations).
-          citations, knowledgeUnavailable,
+          citations, knowledgeUnavailable, turnId,
         }, ctx.db);
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key, ...(isFirst ? { title: titleFrom(content) } : {}) });
-        if (!signal.aborted) send(errorCode ? { type: 'error', code: errorCode, message: saved } : { type: 'done', message: saved });
+        if (!signal.aborted) send(errorCode ? { type: 'error', code: errorCode, message: saved, turnId } : { type: 'done', message: saved, turnId });
       } catch {
-        if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE' });
+        if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE', turnId });
       }
       try { controller.close(); } catch { /* client went away */ }
     },

@@ -1,4 +1,4 @@
-import { isMissingFunction } from '@/lib/supabase/schema-compat';
+import { isMissingColumn, isMissingFunction } from '@/lib/supabase/schema-compat';
 
 /**
  * Chat persistence through the caller's own RLS-bound client.
@@ -32,7 +32,7 @@ export interface ChatDb {
 export function asChatDb(client: unknown): ChatDb { return client as ChatDb; }
 
 export class ChatStoreError extends Error {
-  constructor(readonly code: 'STORE_UNAVAILABLE' | 'NOT_FOUND' | 'FORBIDDEN') { super(code); this.name = 'ChatStoreError'; }
+  constructor(readonly code: 'STORE_UNAVAILABLE' | 'NOT_FOUND' | 'FORBIDDEN' | 'TURN_EXISTS' | 'TURNS_UNSUPPORTED') { super(code); this.name = 'ChatStoreError'; }
 }
 
 /** agentId: the custom agent the thread was started with; null for plain chat or once that agent was deleted. */
@@ -46,6 +46,8 @@ export interface StoredMessage {
   readonly createdAt: string; readonly status: 'complete' | 'error' | 'stopped';
   readonly mentions: readonly Mention[]; readonly capabilityKey: string | null;
   readonly citations: readonly MessageCitation[]; readonly knowledgeUnavailable: boolean;
+  /** The turn this message belongs to (Q-12, 20261121100001); null for messages sent without a turn id. */
+  readonly turnId?: string | null;
 }
 /** The streamed Citation contract (lib/workspace-data/agents.ts re-exports it as Citation). */
 export interface MessageCitation {
@@ -113,6 +115,7 @@ function toMessage(row: unknown): StoredMessage {
   return {
     id: str(r.id), role, content: str(r.content), createdAt: str(r.created_at), status, mentions: parseMentions(r.mentions), capabilityKey: optStr(r.capability_key),
     citations: role === 'assistant' ? parseCitations(r.citations) : [], knowledgeUnavailable: role === 'assistant' && r.knowledge_unavailable === true,
+    turnId: optStr(r.turn_id),
   };
 }
 
@@ -129,6 +132,8 @@ export function toCapability(row: unknown): CapabilityRow {
 const THREAD_COLS = 'id,title,model_key,updated_at,agent_id';
 /** No `citations`: authenticated has no column SELECT on it (20261120200002). */
 const MESSAGE_COLS = 'id,role,content,created_at,status,mentions,capability_key,knowledge_unavailable';
+/** MESSAGE_COLS plus turn_id (20261121100001); see isMissingColumn for databases without it. */
+const MESSAGE_TURN_COLS = `${MESSAGE_COLS},turn_id`;
 /** PostgREST puts in.(...) into the URL; 100 uuids stay well below proxy URL limits. */
 const CITATION_CHECK_BATCH = 100;
 
@@ -162,8 +167,11 @@ export async function getThread(db: ChatDb, organizationId: string, threadId: st
  * markers in the answer still point at the right source.
  */
 export async function listMessages(db: ChatDb, organizationId: string, threadId: string): Promise<StoredMessage[]> {
-  const data = check(await db.from('chat_messages').select(MESSAGE_COLS)
-    .eq('thread_id', threadId).eq('organization_id', organizationId).order('created_at', { ascending: true }).limit(400));
+  const page = (cols: string) => db.from('chat_messages').select(cols)
+    .eq('thread_id', threadId).eq('organization_id', organizationId).order('created_at', { ascending: true }).limit(400);
+  let res = await page(MESSAGE_TURN_COLS);
+  if (isMissingColumn(res.error)) res = await page(MESSAGE_COLS); // pre-Q-12 schema: no turn ids
+  const data = check(res);
   const raw = (Array.isArray(data) ? data : []) as Record<string, unknown>[];
   // Only assistant messages can carry citations; the limit above (400) is the RPC's id cap.
   const cited = raw.filter((r) => r.role === 'assistant').map((r) => str(r.id));
@@ -211,13 +219,19 @@ export async function authorizeCitations(db: ChatDb, organizationId: string, mes
 export async function appendMessage(db: ChatDb, input: {
   organizationId: string; threadId: string; role: 'user'; content: string; modelKey?: string;
   mentions?: readonly Mention[]; status?: 'complete' | 'error' | 'stopped';
+  /** Opens this turn (Q-12). A second user message for the same turn fails with TURN_EXISTS (unique index). */
+  turnId?: string;
 }): Promise<StoredMessage> {
   // Exactly the columns authenticated may INSERT; citations/knowledge_unavailable/capability_key take their defaults.
-  const data = check(await db.from('chat_messages').insert({
+  const row = {
     organization_id: input.organizationId, thread_id: input.threadId, role: 'user', content: input.content,
     model_key: input.modelKey ?? null, mentions: input.mentions ?? [], status: input.status ?? 'complete',
-  }).select(MESSAGE_COLS).single());
-  return toMessage(data);
+  };
+  if (!input.turnId) return toMessage(check(await db.from('chat_messages').insert(row).select(MESSAGE_COLS).single()));
+  const r = await db.from('chat_messages').insert({ ...row, turn_id: input.turnId }).select(MESSAGE_TURN_COLS).single();
+  if (r.error?.code === '23505') throw new ChatStoreError('TURN_EXISTS');
+  if (isMissingColumn(r.error)) throw new ChatStoreError('TURNS_UNSUPPORTED');
+  return toMessage(check(r));
 }
 
 /**
@@ -231,15 +245,22 @@ export async function appendServerMessage(control: ChatDb, input: {
   mentions?: readonly Mention[]; status?: 'complete' | 'error' | 'stopped'; capabilityKey?: string;
   /** Assistant messages only (ignored otherwise): the citations streamed with this turn. */
   citations?: readonly MessageCitation[]; knowledgeUnavailable?: boolean;
+  /** The turn this message answers (Q-12); its user message must already exist in the thread. */
+  turnId?: string | null;
 }, legacy?: ChatDb): Promise<StoredMessage> {
   const assistant = input.role === 'assistant';
-  const r = await control.rpc('append_chat_message_server', {
+  const args = {
     p_organization_id: input.organizationId, p_user_id: input.userId, p_thread_id: input.threadId, p_role: input.role,
     p_content: input.content, p_status: input.status ?? 'complete', p_model_key: input.modelKey ?? null, p_mentions: input.mentions ?? [],
     p_capability_key: input.role === 'tool' ? input.capabilityKey ?? null : null,
     p_citations: assistant ? citationsForStorage(input.citations) : [],
     p_knowledge_unavailable: assistant && input.knowledgeUnavailable === true,
-  });
+  };
+  let r = input.turnId
+    ? await control.rpc('append_chat_turn_message_server', { ...args, p_turn_id: input.turnId })
+    : await control.rpc('append_chat_message_server', args);
+  // A turn id only exists where 20261121100001 is applied, so this is unreachable in practice; stay turn-less if it happens.
+  if (input.turnId && isMissingFunction(r.error)) r = await control.rpc('append_chat_message_server', args);
   if (r.error?.code === 'P0002') throw new ChatStoreError('NOT_FOUND');
   if (isMissingFunction(r.error) && legacy) {
     // Pre-Q-9c schema only (see schema-compat): there the owner's own client may still insert these rows.
