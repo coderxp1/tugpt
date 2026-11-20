@@ -444,7 +444,6 @@ export const en: Dictionary = {
   'analytics.range.7d': '7 days',
   'analytics.range.30d': '30 days',
   'analytics.range.90d': '90 days',
-  'analytics.window': 'From {from} to {to}',
   'analytics.empty': 'No recorded usage in this period. Chat, image generation and MCP tool use are not tracked yet, so this does not mean your team used nothing.',
   'analytics.totalsTitle': 'Period summary',
   'analytics.events': 'Recorded calls',

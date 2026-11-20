@@ -93,6 +93,14 @@ describe('loading the report', () => {
     expect(lastUrl()).toBe('/api/v1/analytics/usage?range=30d');
   });
 
+  it('A1b: states the period as a rolling window that ends now, in days from the response', async () => {
+    mockFetch.mockResolvedValueOnce(resp());
+    render(<UsageAnalytics />);
+    const w = await screen.findByTestId('analytics-window');
+    expect(w.textContent).toMatch(/^Últimos 30 días: desde el .*2026.* hasta ahora \(.*2026.*\)/);
+    expect(w.textContent).toContain('El período se mueve');
+  });
+
   it('A2: renders the recorded totals', async () => {
     mockFetch.mockResolvedValueOnce(resp());
     render(<UsageAnalytics />);

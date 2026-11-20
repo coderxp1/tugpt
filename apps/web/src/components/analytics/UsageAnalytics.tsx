@@ -36,11 +36,16 @@ import {
 import { formatMicroCost, formatQuantity } from '@/lib/analytics/format';
 import s from '@/components/connect/connect.module.css';
 
-/** Date only: the period is whole days, so a clock time adds noise. */
-function formatDay(value: string, locale: string): string {
+/**
+ * The period is rolling: `to` is the moment of the request and `from` is N days
+ * before it, so both ends carry a time. A date-only label would read as whole days.
+ */
+function formatInstant(value: string, locale: string): string {
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleString(locale, { dateStyle: 'medium', timeStyle: 'short' });
 }
+
+const RANGE_DAYS: Record<UsageRange, number> = { '7d': 7, '30d': 30, '90d': 90 };
 
 interface UsageResponse {
   range: UsageRange;
@@ -134,10 +139,11 @@ export function UsageAnalytics({ intro }: { intro?: ReactNode } = {}) {
 
       {summary !== null && totals !== null && !loading && error === null && (
         <>
-          <p className={s.muted}>
-            {t('analytics.window', {
-              from: formatDay(summary.window.from, t.locale),
-              to: formatDay(summary.window.to, t.locale),
+          <p className={s.muted} data-testid="analytics-window">
+            {t('usage.window', {
+              days: RANGE_DAYS[data?.range ?? range],
+              from: formatInstant(summary.window.from, t.locale),
+              to: formatInstant(summary.window.to, t.locale),
             })}
           </p>
 

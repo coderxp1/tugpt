@@ -2,6 +2,7 @@
 import { connectEn, connectEs } from './connect';
 import { teamEn, teamEs } from './team';
 import { shellEn, shellEs } from './shell';
+import { usageEn, usageEs } from './usage';
 
-export const areasEs = { ...connectEs, ...teamEs, ...shellEs } as const;
-export const areasEn: Record<keyof typeof areasEs, string> = { ...connectEn, ...teamEn, ...shellEn };
+export const areasEs = { ...connectEs, ...teamEs, ...shellEs, ...usageEs } as const;
+export const areasEn: Record<keyof typeof areasEs, string> = { ...connectEn, ...teamEn, ...shellEn, ...usageEn };

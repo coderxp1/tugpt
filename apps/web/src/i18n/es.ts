@@ -27,7 +27,7 @@ import { areasEs } from "./areas";
 
 export const es = {
   ...areasEs,
-  'app.description': 'Tu empleado con IA para WhatsApp, llamadas y clientes.',
+  'app.description': 'Su empleado con IA para WhatsApp, llamadas y clientes.',
 
   'common.loading': 'Cargando…',
   'common.retry': 'Reintentar',
@@ -448,8 +448,8 @@ export const es = {
   // Analytics v1 — uso y costos. Los totales de costo desconocido se dicen
   // como desconocidos: nunca se muestra un cero donde falta un precio.
   'analytics.title': 'Uso y costos',
-  'analytics.eyebrow': 'Tu organización',
-  'analytics.lead': 'Consulta qué llamadas de IA ha registrado TuGPT para tu organización y, cuando se conoce el precio, cuánto han costado.',
+  'analytics.eyebrow': 'Su organización',
+  'analytics.lead': 'Consulte qué llamadas de IA ha registrado TuGPT para su organización y, cuando se conoce el precio, cuánto han costado.',
   'analytics.loading': 'Cargando uso…',
   'analytics.loadFailed': 'No se pudo cargar el uso',
   'analytics.retry': 'Reintentar',
@@ -457,8 +457,7 @@ export const es = {
   'analytics.range.7d': '7 días',
   'analytics.range.30d': '30 días',
   'analytics.range.90d': '90 días',
-  'analytics.window': 'Del {from} al {to}',
-  'analytics.empty': 'No hay uso registrado en este período. El chat, la generación de imágenes y el uso de herramientas MCP aún no se registran, así que esto no significa que tu equipo no haya usado nada.',
+  'analytics.empty': 'No hay uso registrado en este período. El chat, la generación de imágenes y el uso de herramientas MCP aún no se registran, así que esto no significa que su equipo no haya usado nada.',
   'analytics.totalsTitle': 'Resumen del período',
   'analytics.events': 'Llamadas registradas',
   'analytics.pricedEvents': 'Con precio conocido',
@@ -554,7 +553,7 @@ export const es = {
   'errors.MEDIA_JOB_NOT_FOUND': 'No se encontró el trabajo de medios',
   'errors.INVALID_MEDIA_JOB_STATE': 'Este trabajo de medios no se puede modificar en su estado actual',
   'errors.MEDIA_RESULT_NOT_FOUND': 'Este trabajo de medios aún no tiene resultado',
-  'errors.FEATURE_UNAVAILABLE': 'Esta función no está habilitada para tu organización',
+  'errors.FEATURE_UNAVAILABLE': 'Esta función no está habilitada para su organización',
   'errors.INVALID_REQUEST': 'La solicitud de medios no es válida',
   // Dashboard hub (/dashboard)
   'hub.metaTitle': 'Panel',
@@ -562,8 +561,8 @@ export const es = {
   'hub.back': 'Panel',
   'hub.eyebrow': 'Panel',
   'hub.title.line1': 'Qué bueno verte.',
-  'hub.title.line2': 'Tu negocio avanza.',
-  'hub.lede': 'Todos los productos de TuGPT para tu negocio, en un solo lugar. Lo que necesita a una persona aparece primero.',
+  'hub.title.line2': 'Su negocio avanza.',
+  'hub.lede': 'Todos los productos de TuGPT para su negocio, en un solo lugar. Lo que necesita a una persona aparece primero.',
   'hub.pulse.eyebrow': 'Necesita a una persona',
   'hub.pulse.some': 'Productos con algo pendiente de revisión o respuesta.',
   'hub.pulse.none': 'Nada espera a una persona en este momento.',
@@ -598,7 +597,7 @@ export const es = {
   'hub.product.analytics': 'Uso y costos',
   'hub.product.analytics.desc': 'Lo que TuGPT hace por el negocio y lo que cuesta.',
   'hub.product.workspace': 'Chat',
-  'hub.product.workspace.desc': 'Chat privado con IA, con tus aplicaciones y conocimiento.',
+  'hub.product.workspace.desc': 'Chat privado con IA, con sus aplicaciones y conocimiento.',
   'hub.state.live': 'Activo',
   'hub.state.attention': 'Requiere atención',
   'hub.state.connected': 'Conectado',
