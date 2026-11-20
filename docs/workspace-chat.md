@@ -172,6 +172,57 @@ the approval before it executes, so a call that then fails (for example, the
 proxy is down) still uses up the approval.
 
 
+## Approval audit (migration `20261120000010_mcp_approval_audit.sql`)
+
+Every decision about an approval-bound MCP call writes exactly one row in
+`public.mcp_approval_events`. The row holds the organization, actor, endpoint,
+thread, capability, the canonical **argument hash**, the approval id when there
+is one, the event and a short reason code. It never holds arguments, provider
+output, tokens or credentials.
+
+| Event | Reason | Written by |
+|---|---|---|
+| `approval_requested` | `APPROVAL_REQUIRED` | `claim_tool_approval_audited` (chat turn, no usable approval) |
+| `approved` | - | trigger on `tool_approvals` insert (actor = approver) |
+| `claimed` | - | `claim_tool_approval_audited` (atomic consume, names the approval) |
+| `executed` / `execution_failed` | runtime outcome | trigger on `mcp_tool_calls` (trusted writer only), only for an open claim |
+| `replayed` | `ALREADY_USED` | audited claim, approved-call |
+| `expired` | `EXPIRED` | audited claim, approved-call |
+| `revoked` | `REVOKED_BY_ADMIN`, `REJECTED_BY_USER`, `CLAIM_AFTER_REVOKE` | trigger on `revoked_at`; audited claim |
+| `rejected_by_user` | `REJECTED_BY_USER`, `CLAIM_AFTER_REJECT` | `reject_tool_call`; audited claim |
+| `invalid_arguments` | `ARGUMENTS_MISMATCH`, `ARGUMENTS_HASH_MISMATCH` | audited claim; approved-call route (409) |
+| `authorization_denied` | `NOT_REQUESTER`, `NO_APPROVAL`, `THREAD_NOT_ACCESSIBLE`, `ENDPOINT_NOT_ACTIVE`, `TOOL_NOT_APPROVAL_BOUND`, `APPROVER_ROLE_REQUIRED` | audited claim; routes |
+
+Rules:
+
+- The refusal reason is decided in the database, in the claim's transaction.
+  `claim_tool_approval` is no longer executable by users; the runtime port
+  (`dbApprovals`) calls `claim_tool_approval_audited` with `p_source`
+  `chat_turn` (default) or `approved_call` (the approved-call route).
+- The table is append-only (UPDATE raises), has no write grants, FORCE RLS,
+  and only owners/admins of the same organization can read it.
+- `record_mcp_approval_event` accepts only `authorization_denied` and
+  `invalid_arguments`, only as the caller and only in an organization the
+  caller belongs to. Endpoint and thread ids that are not in that
+  organization are stored as NULL, so a foreign-tenant attempt is recorded in
+  the actor's own organization without any id from the other tenant.
+- The audit write never changes a route's response.
+
+### Reject is binding
+
+`POST /api/v1/chat/threads/[threadId]/rejected-call` with
+`{ connectionId, capability, argumentsSha256 }` (same-origin; thread loaded
+through RLS) calls `reject_tool_call`: the requester or an owner/admin records
+`rejected_by_user`, every open approval for exactly that call on that thread is
+revoked, an approved-call for it is refused (`CLAIM_AFTER_REJECT`), and
+`record_tool_approval` raises `CALL_REJECTED` (route: 409) until a newer
+`approval_requested` event (a new request) exists. The chat UI must call this
+route from the card's Reject; see `docs/connect/approval-reject-ui-spec.md`.
+
+Verified: pgTAP `supabase/tests/database/mcp_approval_audit.test.sql`
+(44 assertions, run against the isolated database), Vitest route and port
+tests.
+
 ## Model text is not a tool result
 
 Only results produced by the server's own tool execution (`tool_result`
