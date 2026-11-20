@@ -80,7 +80,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   } catch (e) { return storeErrorResponse(e); }
 
   const wire: WireMessage[] = [
-    { role: 'system', content: systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(body.timeZone), attached: toolset.labels }) },
+    { role: 'system', content: systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(body.timeZone), attached: toolset.labels, approvedCall: true }) },
     ...history.filter((m) => m.role !== 'tool' && m.status !== 'error').slice(-HISTORY)
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
   ];
