@@ -12,6 +12,11 @@
  * agent's turn instead (lib/workspace-data/agent-turn.ts): its instructions,
  * model (which wins over modelKey), tools and knowledge apply, checked
  * against the caller's own access; it adds 'agent' and 'citations' events.
+ *
+ * Plain threads with linked collections (POST .../collections, Q-11) retrieve
+ * from them on every turn, on the caller's session (permissions at retrieval
+ * time), add a 'citations' event and store the citations on the answer.
+ * Without linked collections the stream is unchanged.
  */
 import { NextResponse } from 'next/server';
 import { createSsoControlClient } from '@/lib/supabase/server';
@@ -27,6 +32,9 @@ import {
   appendMessage, appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
 import { runAgentTurn, threadAgentId } from '@/lib/workspace-data/agent-turn';
+import { knowledgeSystemPrompt, retrieveForThread, toCitations } from '@/lib/workspace-data/agents';
+import type { SearchHit } from '@/lib/workspace-data/contracts';
+import { configuredQueryEmbedder } from '@/lib/workspace-data/embeddings';
 import { asWorkspaceDb } from '@/lib/workspace-data/db';
 
 export const dynamic = 'force-dynamic';
@@ -89,6 +97,14 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     isFirst = history.length === 0;
   } catch (e) { return storeErrorResponse(e); }
 
+  // Linked knowledge: degrade to "no excerpts" (flagged to the user) rather than failing the turn.
+  let linked = false;
+  let hits: SearchHit[] = [];
+  let knowledgeUnavailable = false;
+  try { ({ linked, hits } = await retrieveForThread(asWorkspaceDb(ctx.db), orgId, threadId, content, configuredQueryEmbedder(), request.signal)); }
+  catch { linked = true; knowledgeUnavailable = true; }
+  const citations = toCitations(hits);
+
   let userMessage;
   try {
     userMessage = await appendMessage(ctx.db, {
@@ -99,7 +115,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
 
   const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached, { registry });
   const wire: WireMessage[] = [
-    { role: 'system', content: systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(body.timeZone), attached: toolset.labels }) },
+    { role: 'system', content: knowledgeSystemPrompt(systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(body.timeZone), attached: toolset.labels }), hits) },
     ...history.filter((m) => m.role !== 'tool' && m.status !== 'error').slice(-HISTORY)
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
     { role: 'user', content },
@@ -111,6 +127,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     async start(controller) {
       const send = (e: object) => controller.enqueue(encoder.encode(`${JSON.stringify(e)}\n`));
       send({ type: 'user', message: userMessage });
+      if (linked) send({ type: 'citations', citations, knowledgeUnavailable });
       let answer = '';
       let status: 'complete' | 'error' | 'stopped' = 'complete';
       let errorCode: string | null = null;
@@ -153,6 +170,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
         const saved = await appendServerMessage(control, {
           organizationId: orgId, userId: ctx.userId, threadId, role: 'assistant', modelKey: model.key, status,
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
+          // Re-authorised on read by chat_message_citations, as for agent answers.
+          ...(linked ? { citations, knowledgeUnavailable } : {}),
         }, ctx.db);
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key, ...(isFirst ? { title: titleFrom(content) } : {}) });
         if (!signal.aborted) send(errorCode ? { type: 'error', code: errorCode, message: saved } : { type: 'done', message: saved });
