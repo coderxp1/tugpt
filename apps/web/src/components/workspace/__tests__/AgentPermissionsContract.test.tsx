@@ -73,3 +73,12 @@ it.each(['owner', 'admin', 'manager', 'agent'])('%s receives only its allowed vi
   expect(radios[0].disabled).toBe(false);
   expect(radios[1].disabled).toBe(role === 'manager' || role === 'agent');
 });
+
+it.each(['manager', 'agent'])('F-4: %s sees deletion but no edit/knowledge controls for its organization agent', async (role) => {
+  setup(role, { ...agent, ownedByMe: true, canEdit: false, canDelete: true, instructions: '' });
+  fireEvent.click(await screen.findByRole('button', { name: 'Options for agent Research' }));
+  const menu = screen.getByRole('menu');
+  expect(within(menu).queryByRole('menuitem', { name: 'Edit' })).toBeNull();
+  expect(within(menu).getAllByRole('menuitem')).toHaveLength(1);
+  expect(within(menu).getByRole('menuitem', { name: 'Delete' })).toBeTruthy();
+});

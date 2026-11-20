@@ -67,8 +67,17 @@ const KEY = /^[a-z0-9][a-z0-9._:-]{0,79}$/;
 const AGENT_COLS = 'id,owner_user_id,name,description,instructions,model_key,visibility,tools,conversation_starters,version,created_at,updated_at';
 const bad = (code: 'INVALID_REQUEST' | 'INVALID_MODEL' | 'INVALID_COLLECTION' | 'LIMIT_EXCEEDED' = 'INVALID_REQUEST') => new WorkspaceError(400, code);
 
-/** C-1: only the owner edits (and never as a viewer). */
-const canEditAgent = (ownerId: string, userId: string, role: string): boolean => role !== 'viewer' && ownerId === userId;
+/** C-1 / agents_update USING: only a known non-viewer owner may mutate. */
+const ownsWritableAgent = (ownerId: string, userId: string, role: string): boolean =>
+  ownerId === userId && (role === 'owner' || role === 'admin' || role === 'manager' || role === 'agent');
+/**
+ * F-4: canEdit advertises a save preserving the current visibility, including
+ * agents_update WITH CHECK. A demoted manager/agent may still explicitly make
+ * their own organization agent private, but may not save it as organization.
+ */
+const canEditAgent = (ownerId: string, visibility: string, userId: string, role: string): boolean =>
+  ownsWritableAgent(ownerId, userId, role)
+  && (visibility === 'private' || (visibility === 'organization' && (role === 'owner' || role === 'admin')));
 /** Delete: owner, or org owner/admin for organization agents (RLS agents_delete). */
 const canDeleteAgent = (ownerId: string, visibility: string, userId: string, role: string): boolean =>
   role !== 'viewer' && (ownerId === userId || (visibility === 'organization' && (role === 'owner' || role === 'admin')));
@@ -84,7 +93,7 @@ export function toAgent(row: unknown, userId: string, role: string, collectionId
   const r = row as Record<string, unknown>;
   const owner = str(r.owner_user_id);
   const visibility = oneOf(r.visibility, ['private', 'organization'] as const);
-  const canEdit = canEditAgent(owner, userId, role);
+  const canEdit = canEditAgent(owner, visibility, userId, role);
   return {
     id: str(r.id), name: str(r.name), description: optStr(r.description), instructions: canEdit ? str(r.instructions) : '',
     modelKey: optStr(r.model_key), starters: Array.isArray(r.conversation_starters) ? r.conversation_starters.map(str) : [],
@@ -231,6 +240,11 @@ export async function createAgent(db: WorkspaceDb, tenant: TenantContext, userId
 export async function updateAgent(db: WorkspaceDb, tenant: TenantContext, userId: string, id: string, input: AgentInput): Promise<CustomAgent> {
   const current = await readAgentRow(db, tenant.organizationId, id);
   if (str(current.owner_user_id) !== userId) throw new WorkspaceError(404, 'NOT_FOUND');
+  // Match the database's resulting-row visibility rule; never allow a stale
+  // canEdit flag or an omitted visibility field to bypass it. RLS stays final.
+  if (!canEditAgent(str(current.owner_user_id), input.visibility ?? str(current.visibility), userId, tenant.role)) {
+    throw new WorkspaceError(403, 'FORBIDDEN');
+  }
   assertModel(input.modelKey, optStr(current.model_key));
   await save(db, tenant.organizationId, id, input);
   return getAgent(db, tenant, userId, id);
@@ -263,7 +277,9 @@ export async function listAgentCollections(db: WorkspaceDb, organizationId: stri
 /** True when the caller may change the agent's links (the owner, as for PATCH); 404 when not readable at all. */
 async function assertEditable(db: WorkspaceDb, tenant: TenantContext, userId: string, agentId: string): Promise<boolean> {
   const row = await readAgentRow(db, tenant.organizationId, agentId);
-  return canEditAgent(str(row.owner_user_id), userId, tenant.role);
+  // Knowledge-link policies use ownership/non-viewer status, not the agent's
+  // visibility WITH CHECK. Preserve that existing, independently enforced rule.
+  return ownsWritableAgent(str(row.owner_user_id), userId, tenant.role);
 }
 
 /**

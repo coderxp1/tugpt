@@ -182,3 +182,19 @@ describe('retrievalQuery', () => {
     expect(Array.from(retrievalQuery(long)).length).toBeLessThanOrEqual(200);
   });
 });
+
+
+describe('F-4 visibility-aware edit permissions', () => {
+  it.each(['manager', 'agent'])('%s owner cannot edit an organization-visible agent in place', (role) => {
+    expect(toAgent(row(ME, 'organization'), ME, role, [])).toMatchObject({ ownedByMe: true, canEdit: false, canDelete: true, instructions: '' });
+    expect(toAgent(row(ME, 'private'), ME, role, [])).toMatchObject({ ownedByMe: true, canEdit: true, canDelete: true, instructions: 'secret sauce' });
+  });
+  it.each(['owner', 'admin'])('%s needs ownership to edit, but may moderate organization agents', (role) => {
+    expect(toAgent(row(ME, 'organization'), ME, role, [])).toMatchObject({ canEdit: true, canDelete: true });
+    expect(toAgent(row(OTHER, 'organization'), ME, role, [])).toMatchObject({ canEdit: false, canDelete: true, instructions: '' });
+  });
+  it.each(['viewer', 'member', 'unknown'])('%s never gets an edit grant even as owner', (role) => {
+    expect(toAgent(row(ME, 'private'), ME, role, []).canEdit).toBe(false);
+    expect(toAgent(row(ME, 'organization'), ME, role, []).canEdit).toBe(false);
+  });
+});
