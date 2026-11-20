@@ -822,6 +822,7 @@ export const es = {
   'workspace.lib.st.ready': 'Listo',
   'workspace.lib.st.failed': 'Error',
   'workspace.lib.st.unsupported': 'No indexable',
+  'workspace.lib.err.noText': 'Este PDF no tiene una capa de texto legible. Está almacenado, pero no se puede buscar. Suba una versión con texto; OCR no está disponible.',
   'workspace.lib.err.pdf': 'La extracción de texto de PDF todavía no está disponible. El archivo está guardado, pero no aparece en la búsqueda.',
   'workspace.lib.err.type': 'Este tipo de archivo se guarda, pero todavía no se indexa.',
   'workspace.lib.err.tooBig': 'El documento es demasiado extenso para indexarlo.',

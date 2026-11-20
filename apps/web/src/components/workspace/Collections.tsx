@@ -20,6 +20,8 @@ const NAME_MAX = 120;
 const DESC_MAX = 500;
 const POLL_MS = 5000;
 const DOC_ERRORS: Record<string, MessageKey> = {
+  PDF_NO_TEXT_LAYER: 'workspace.lib.err.noText',
+  UNSUPPORTED_FOR_INDEXING: 'workspace.lib.err.type',
   PDF_EXTRACTION_UNAVAILABLE: 'workspace.lib.err.pdf',
   UNSUPPORTED_MEDIA_TYPE: 'workspace.lib.err.type',
   TOO_MANY_CHUNKS: 'workspace.lib.err.tooBig',

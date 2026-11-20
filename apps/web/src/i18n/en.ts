@@ -804,6 +804,7 @@ export const en: Dictionary = {
   'workspace.lib.st.ready': 'Ready',
   'workspace.lib.st.failed': 'Failed',
   'workspace.lib.st.unsupported': 'Not indexed',
+  'workspace.lib.err.noText': 'This PDF has no readable text layer. It is stored, but not searchable. Upload a text-based version; OCR is not available.',
   'workspace.lib.err.pdf': 'PDF text extraction is not available yet. The file is stored but does not appear in search.',
   'workspace.lib.err.type': 'This file type is stored but not indexed yet.',
   'workspace.lib.err.tooBig': 'The document is too long to index.',

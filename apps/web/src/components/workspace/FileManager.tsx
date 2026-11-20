@@ -1,10 +1,11 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useRef, useState } from 'react';
 import { useT } from '@/i18n/provider';
 import type { WorkspaceFile } from '@/lib/workspace-data/contracts';
 import { hasArray, messageKeyFor, workspaceApi } from '@/lib/workspace/service';
 import { UPLOAD_ACCEPT, UPLOAD_MAX_BYTES, formatBytes, isUploadable, mediaTypeFor } from '@/lib/workspace/uploads';
+import { FilePreview, previewKind } from './FilePreview';
 import { Dialog } from './Dialog';
 import { LoadingRows, ServiceNotice } from './states';
 import { useLoad } from './useLoad';
@@ -28,22 +29,11 @@ export function FileManager({ role }: { role?: string }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false); const lock = useRef(false);
   const [notice, setNotice] = useState(''); const [error, setError] = useState('');
-  const [preview, setPreview] = useState('');
   const [collectionId, setCollectionId] = useState('');
   const api = workspaceApi();
   const { load, reload } = useLoad(`${scope}:${cursor ?? ''}`, () => api.listFiles({ scope, before: cursor, limit: 20 }), (v) => hasArray(v, 'files'));
   const collections = useLoad(action?.kind === 'link' ? action.file.id : null, () => api.listCollections(), (v) => hasArray(v, 'collections'));
-  useEffect(() => {
-    if (action?.kind !== 'preview') return;
-    const controller = new AbortController();
-    void fetch(api.fileContentUrl(action.file.id), { cache: 'no-store', signal: controller.signal }).then(async (r) => {
-      if (!r.ok) throw new Error('preview');
-      const blob = await r.blob(); if (blob.size > 1024 * 1024) throw new Error('size');
-      const body = await blob.text(); if (!controller.signal.aborted) setPreview(body);
-    }).catch(() => { if (!controller.signal.aborted) setPreview(text.previewError); });
-    return () => controller.abort();
-  }, [action, api, text.previewError]);
-  function open(file: WorkspaceFile, kind: NonNullable<Action>['kind']) { setError(''); setName(file.filename); setPreview(text.loading); setCollectionId(''); setAction({ file, kind }); }
+  function open(file: WorkspaceFile, kind: NonNullable<Action>['kind']) { setError(''); setName(file.filename); setCollectionId(''); setAction({ file, kind }); }
   async function upload(file?: File) {
     if (!file || lock.current || !writable) return;
     if (!isUploadable(file.name) || !file.size || file.size > UPLOAD_MAX_BYTES) { setError(text.unsupported); return; }
@@ -83,7 +73,7 @@ export function FileManager({ role }: { role?: string }) {
         <strong>{file.filename}</strong><p>{formatBytes(file.sizeBytes, t.locale)} · {file.visibility === 'private' ? t('workspace.lib.visPrivate') : t('workspace.lib.visOrg')} · {file.status === 'ready' ? text.ready : file.status === 'failed' ? text.failed : text.uploading}</p>
         <div className={f.controls}>
           {file.status === 'ready' && <a className={u.button} href={api.fileContentUrl(file.id)} download>{text.download}</a>}
-          {file.status === 'ready' && file.sizeBytes <= 1024 * 1024 && /^(text\/|application\/json$)/.test(file.mediaType) && <button className={u.button} onClick={() => open(file, 'preview')}>{text.preview}</button>}
+          {file.status === 'ready' && previewKind(file) && <button className={u.button} onClick={() => open(file, 'preview')}>{previewKind(file) === 'image' ? (t.locale === 'es' ? 'Vista previa de imagen' : 'Preview image') : text.preview}</button>}
           {writable && file.ownedByMe && <><button className={u.button} disabled={busy} onClick={() => open(file, 'rename')}>{text.rename}</button>{file.status === 'ready' && <button className={u.button} disabled={busy} onClick={() => open(file, 'link')}>{text.linking}</button>}</>}
           {writable && (file.ownedByMe || (file.visibility === 'organization' && ['owner', 'admin'].includes(role ?? ''))) && <button className={u.button} disabled={busy} onClick={() => open(file, 'delete')}>{text.remove}</button>}
         </div>
@@ -91,11 +81,11 @@ export function FileManager({ role }: { role?: string }) {
       {!load.value.files.some((file) => file.filename.toLocaleLowerCase().includes(query.toLocaleLowerCase())) && <p>{text.empty}</p>}
       <div className={f.controls}>{cursor && <button className={u.button} onClick={() => setCursor(undefined)}>{text.first}</button>}{load.value.nextCursor && <button className={u.button} onClick={() => setCursor(load.value.nextCursor ?? undefined)}>{text.next}</button>}</div>
     </>}
-    {action && <Dialog title={action.kind === 'delete' ? text.confirm : action.kind === 'rename' ? text.rename : action.kind === 'link' ? text.linking : text.preview} tone={action.kind === 'delete' ? 'alert' : 'default'} onClose={() => { if (!busy) { setAction(null); setError(''); } }} footer={action.kind !== 'preview' && <><button className={u.button} disabled={busy} onClick={() => setAction(null)}>{text.cancel}</button><button className={action.kind === 'delete' ? u.buttonDanger : u.buttonPrimary} disabled={busy || (action.kind === 'rename' && !name.trim()) || (action.kind === 'link' && !collectionId)} onClick={() => void mutate()}>{action.kind === 'delete' ? text.remove : text.save}</button></>}>
+    {action && <Dialog title={action.kind === 'delete' ? text.confirm : action.kind === 'rename' ? text.rename : action.kind === 'link' ? text.linking : previewKind(action.file) === 'image' ? (t.locale === 'es' ? 'Vista previa de imagen' : 'Preview image') : text.preview} tone={action.kind === 'delete' ? 'alert' : 'default'} onClose={() => { if (!busy) { setAction(null); setError(''); } }} footer={action.kind !== 'preview' && <><button className={u.button} disabled={busy} onClick={() => setAction(null)}>{text.cancel}</button><button className={action.kind === 'delete' ? u.buttonDanger : u.buttonPrimary} disabled={busy || (action.kind === 'rename' && !name.trim()) || (action.kind === 'link' && !collectionId)} onClick={() => void mutate()}>{action.kind === 'delete' ? text.remove : text.save}</button></>}>
       <p className={f.filename}>{action.file.filename}</p>
       {action.kind === 'delete' && <p>{text.warning}</p>}
       {action.kind === 'rename' && <label className={u.field}>{text.name}<input maxLength={240} value={name} onChange={(e) => setName(e.target.value)} /></label>}
-      {action.kind === 'preview' && <><p>{text.previewNote}</p><pre className={f.preview}>{preview}</pre></>}
+      {action.kind === 'preview' && <FilePreview key={action.file.id} file={action.file} url={api.fileContentUrl(action.file.id)} />}
       {action.kind === 'link' && <>{collections.load.state === 'error' && <ServiceNotice problem={collections.load.problem} failure={collections.load.failure} feature={text.collection} onRetry={collections.reload} />}<label className={u.field}>{text.collection}<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">{text.collection}</option>{collections.load.state === 'ready' && collections.load.value.collections.filter((c) => c.ownedByMe).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label></>}
       {error && <p className={u.error} role="alert">{error}</p>}
     </Dialog>}
