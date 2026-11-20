@@ -1,3 +1,4 @@
+import { I18nProvider } from '@/i18n/provider';
 // @vitest-environment jsdom
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
@@ -121,7 +122,8 @@ describe('McpToolReview', () => {
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
     expect(screen.getByText('Approving is switched off.')).toBeTruthy();
-    expect(screen.getByRole('status').textContent).toContain('Not approved');
+    expect(screen.getByText(/^Not approved\./)).toBeTruthy();
+    expect(within(screen.getByRole('table')).getAllByText('Waiting for review')).toHaveLength(2);
   });
   it('requires an explicit level for every tool (no preselected default) and a review before approving', async () => {
     const onApprove = vi.fn().mockResolvedValue(null);
@@ -139,10 +141,22 @@ describe('McpToolReview', () => {
     await waitFor(() => expect(onApprove).toHaveBeenCalledWith({ search: 'read', refund: 'financial' }));
   });
   it('shows an approved list as frozen, with no way to change it', () => {
-    render(<McpToolReview tools={[{ ...TOOLS[0], permissionClass: 'read' }]} approved onApprove={vi.fn()} />);
-    expect(screen.getByRole('status').textContent).toContain('Approved');
+    render(<McpToolReview tools={[{ ...TOOLS[0], permissionClass: 'read' }]} approved serverStatus="pending" onApprove={vi.fn()} />);
+    expect(screen.getByText(/^Approved\. This list no longer changes/)).toBeTruthy();
+    expect(screen.getByText('Approved · server not switched on')).toBeTruthy();
     expect(screen.queryByRole('combobox')).toBeNull();
     expect(screen.queryByRole('button', { name: /Approve/ })).toBeNull();
+  });
+  it('names each approved tool\u2019s real status from the server status', () => {
+    const { rerender } = render(<McpToolReview tools={[{ ...TOOLS[0], permissionClass: 'read' }]} approved serverStatus="active" />);
+    expect(screen.getByText('Active')).toBeTruthy();
+    rerender(<McpToolReview tools={[{ ...TOOLS[0], permissionClass: 'read' }]} approved serverStatus="disabled" />);
+    expect(screen.getByText('Turned off with the server')).toBeTruthy();
+  });
+  it('renders fully in Spanish, with no English chrome', () => {
+    render(<I18nProvider locale="es"><McpToolReview tools={TOOLS} approved={false} onApprove={vi.fn()} /></I18nProvider>);
+    expect(screen.getByRole('button', { name: /Aprobar/ })).toBeTruthy();
+    expect(screen.queryByText(/Approve|Permission level|Not approved/)).toBeNull();
   });
 });
 
@@ -257,12 +271,12 @@ describe('McpPanel', () => {
   });
 
   it('with customer MCP switched on: discover, show stored tools, approve, and surface an activation denial', async () => {
-    let approved = false;
+    let snap: { id: string; approved: boolean; toolCount: number } | null = null;
     const f = api((url, init) => {
-      if (url === '/api/v1/connect/mcp/endpoints') return json({ endpoints: [EP] });
-      if (url === '/api/v1/connect/mcp/endpoints/e1/snapshot') return json({ snapshotId: 's1', toolCount: 2 }, 201);
-      if (url === '/api/v1/connect/mcp/snapshots/s1/tools') return json({ tools: TOOLS.map((t) => ({ ...t, inputSchema: {}, permissionClass: approved ? (t.name === 'search' ? 'read' : 'financial') : 'write' })) });
-      if (url === '/api/v1/connect/mcp/snapshots/s1/approve') { approved = true; expect(JSON.parse(String(init.body))).toEqual({ permissions: { search: 'read', refund: 'financial' } }); return json({ snapshotId: 's1', permissionCount: 2 }); }
+      if (url === '/api/v1/connect/mcp/endpoints') return json({ endpoints: [{ ...EP, snapshot: snap }] });
+      if (url === '/api/v1/connect/mcp/endpoints/e1/snapshot') { snap = { id: 's1', approved: false, toolCount: 2 }; return json({ snapshotId: 's1', toolCount: 2 }, 201); }
+      if (url === '/api/v1/connect/mcp/snapshots/s1/tools') return json({ tools: TOOLS.map((t) => ({ ...t, inputSchema: {}, permissionClass: snap?.approved ? (t.name === 'search' ? 'read' : 'financial') : 'write' })) });
+      if (url === '/api/v1/connect/mcp/snapshots/s1/approve') { snap = { id: 's1', approved: true, toolCount: 2 }; expect(JSON.parse(String(init.body))).toEqual({ permissions: { search: 'read', refund: 'financial' } }); return json({ snapshotId: 's1', permissionCount: 2 }); }
       if (url === '/api/v1/connect/mcp/endpoints/e1/activate') return json({ error: { code: 'ACTIVATION_DENIED', message: 'egress proxy not reachable' } }, 409);
       throw new Error(`unexpected ${init.method} ${url}`);
     });
@@ -271,19 +285,44 @@ describe('McpPanel', () => {
     expect((within(card).getByRole('button', { name: 'Switch on' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(card).getByRole('button', { name: 'Discover tools' }));
     expect(await within(card).findByText('Refund an order')).toBeTruthy();
+    expect(screen.getByTestId('mcp-notice').textContent).toContain('Found 2 tools on Docs');
     expect(within(within(card).getByRole('table')).getAllByText('safe default until you choose')).toHaveLength(2);
     fireEvent.change(within(card).getByLabelText('Permission level for search'), { target: { value: 'read' } });
     fireEvent.change(within(card).getByLabelText('Permission level for refund'), { target: { value: 'financial' } });
     fireEvent.click(within(card).getByRole('checkbox'));
     fireEvent.click(within(card).getByRole('button', { name: 'Approve these tools' }));
-    expect(await within(card).findByText('Approved. This list is frozen.')).toBeTruthy();
-    expect(within(within(card).getByRole('table')).getByText('Moves money')).toBeTruthy();
-    expect(within(within(card).getByRole('table')).getByText('Read only')).toBeTruthy();
+    await waitFor(() => expect(screen.getByTestId('mcp-notice').textContent).toContain('The tools of Docs are approved.'));
+    expect(card.getAttribute('data-approved')).toBe('true');
+    // Approved tools sit in a collapsed "Show tools" disclosure; the stored levels come from the server.
+    const table = within(card).getByRole('table', { hidden: true });
+    expect(within(table).getByText('Moves money')).toBeTruthy();
+    expect(within(table).getByText('Read only')).toBeTruthy();
     const activate = within(card).getByRole('button', { name: 'Switch on' }) as HTMLButtonElement;
     expect(activate.disabled).toBe(false);
     fireEvent.click(activate);
-    expect((await within(card).findByRole('alert')).textContent).toContain('egress proxy not reachable');
+    const alert = await within(card).findByRole('alert');
+    expect(alert.textContent).toContain('TuGPT refused to switch this server on.');
+    expect(alert.textContent).toContain('How to fix it:');
+    expect(alert.textContent).toContain('egress proxy not reachable');
     expect(within(card).getByText('Not switched on')).toBeTruthy();
+  });
+
+  it('after a reload shows the stored review from the backend, never a fresh "not reviewed" state', async () => {
+    const f = api((url, init) => {
+      if (url === '/api/v1/connect/mcp/endpoints') return json({ endpoints: [{ ...EP, snapshot: { id: 's7', approved: true, toolCount: 2 } }, { ...ACTIVE, snapshot: { id: 's8', approved: false, toolCount: 1 } }] });
+      if (url === '/api/v1/connect/mcp/snapshots/s7/tools') return json({ tools: TOOLS.map((t) => ({ ...t, inputSchema: {}, permissionClass: 'read' })) });
+      if (url === '/api/v1/connect/mcp/snapshots/s8/tools') return json({ tools: [{ name: 'lookup', description: 'Look up', inputSchema: {}, permissionClass: 'write' }] });
+      throw new Error(`unexpected ${init.method} ${url}`);
+    });
+    render(<McpPanel canManage routes={all('available')} enabled fetcher={f as unknown as typeof fetch} />);
+    const docs = (await screen.findByRole('heading', { name: 'Docs' })).closest('li')!;
+    await waitFor(() => expect(f).toHaveBeenCalledWith('/api/v1/connect/mcp/snapshots/s7/tools', expect.anything()));
+    expect(docs.getAttribute('data-approved')).toBe('true');
+    expect(await within(docs).findByText(/Show tools \(2\)/)).toBeTruthy();
+    expect(within(docs).queryByRole('button', { name: 'Approve these tools' })).toBeNull();
+    const kb = screen.getByRole('heading', { name: 'Knowledge base' }).closest('li')!;
+    expect(await within(kb).findByLabelText('Permission level for lookup')).toBeTruthy();
+    expect(within(screen.getByTestId('mcp-summary')).getByText(/2/)).toBeTruthy();
   });
 
   it('keeps the same Idempotency-Key across retryable failures and starts a new one only after an outcome (F-M9-1)', async () => {
@@ -328,11 +367,12 @@ describe('McpPanel', () => {
   });
 
   it('treats ALREADY_APPROVED as approved, based on the backend answer', async () => {
+    let snap: { id: string; approved: boolean; toolCount: number } | null = null;
     const f = api((url) => {
-      if (url === '/api/v1/connect/mcp/endpoints') return json({ endpoints: [EP] });
-      if (url.endsWith('/snapshot')) return json({ snapshotId: 's9', toolCount: 1 }, 201);
+      if (url === '/api/v1/connect/mcp/endpoints') return json({ endpoints: [{ ...EP, snapshot: snap }] });
+      if (url.endsWith('/snapshot')) { snap = { id: 's9', approved: false, toolCount: 1 }; return json({ snapshotId: 's9', toolCount: 1 }, 201); }
       if (url.endsWith('/tools')) return json({ tools: [{ name: 'search', description: '', inputSchema: {}, permissionClass: 'read' }] });
-      if (url.endsWith('/approve')) return json({ error: { code: 'ALREADY_APPROVED', message: '' } }, 409);
+      if (url.endsWith('/approve')) { snap = { id: 's9', approved: true, toolCount: 1 }; return json({ error: { code: 'ALREADY_APPROVED', message: '' } }, 409); }
       throw new Error(url);
     });
     render(<McpPanel canManage routes={all('available')} enabled fetcher={f as unknown as typeof fetch} />);
@@ -340,6 +380,7 @@ describe('McpPanel', () => {
     fireEvent.change(await screen.findByLabelText('Permission level for search'), { target: { value: 'read' } });
     fireEvent.click(screen.getByRole('checkbox'));
     fireEvent.click(screen.getByRole('button', { name: 'Approve these tools' }));
-    expect(await screen.findByText('Approved. This list is frozen.')).toBeTruthy();
+    await waitFor(() => expect(screen.getByRole('heading', { name: 'Docs' }).closest('li')!.getAttribute('data-approved')).toBe('true'));
+    expect(screen.queryByRole('button', { name: 'Approve these tools' })).toBeNull();
   });
 });

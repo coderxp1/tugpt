@@ -4,8 +4,9 @@ import Link from 'next/link';
 import { useRouter } from 'next/navigation';
 import { useRef, useState } from 'react';
 import { PROVIDER_NAME, START_PATH, usable, type ConnectProvider, type RouteState } from '@/lib/connect-ui/contract';
-import { DISCONNECT_TEXT, disconnectProvider } from '@/lib/connect-ui/disconnect';
+import { disconnectProvider, disconnectText } from '@/lib/connect-ui/disconnect';
 import { DisconnectDialog } from './DisconnectDialog';
+import { useT } from '@/i18n/provider';
 import s from './connect.module.css';
 
 export interface ProviderActionsProps {
@@ -21,6 +22,7 @@ export interface ProviderActionsProps {
 
 /** Connect / Use / Disconnect for one provider card. Only owners and admins get account actions. */
 export function ProviderActions({ provider, state, canManage, start, disconnect, disconnectFetch }: ProviderActionsProps) {
+  const t = useT();
   const name = PROVIDER_NAME[provider];
   const router = useRouter();
   const [leaving, setLeaving] = useState(false);
@@ -37,14 +39,14 @@ export function ProviderActions({ provider, state, canManage, start, disconnect,
       return null;
     }
     router.refresh();
-    return DISCONNECT_TEXT[outcome](name);
+    return disconnectText(outcome, name, t);
   }
 
   if (state === 'connected') {
     return (
       <div className={s.actionsRow}>
-        <Link className={s.primary} href="/workspace">Use in Chat</Link>
-        {canManage && <button ref={trigger} type="button" className={s.secondary} onClick={() => setConfirming(true)}>Disconnect…</button>}
+        <Link className={s.primary} href="/workspace">{t('connect.action.useInChat')}</Link>
+        {canManage && <button ref={trigger} type="button" className={s.secondary} onClick={() => setConfirming(true)}>{t('connect.action.disconnect')}</button>}
         {confirming && (
           <DisconnectDialog
             providerName={name}
@@ -57,12 +59,12 @@ export function ProviderActions({ provider, state, canManage, start, disconnect,
     );
   }
   if (state !== 'requires_connection') return null;
-  if (!canManage) return <p className={s.muted}>Only an organization owner or admin can connect {name}.</p>;
+  if (!canManage) return <p className={s.muted}>{t('connect.action.onlyManagers', { provider: name })}</p>;
   if (!usable(start)) {
     return (
       <div className={s.actionsRow}>
-        <button type="button" className={s.primary} disabled aria-describedby={`${provider}-start-missing`}>Connect {name}</button>
-        <p id={`${provider}-start-missing`} className={s.muted}>Connecting {name} is not available in TuGPT yet.</p>
+        <button type="button" className={s.primary} disabled aria-describedby={`${provider}-start-missing`}>{t('connect.action.connect', { provider: name })}</button>
+        <p id={`${provider}-start-missing`} className={s.muted}>{t('connect.action.notYet', { provider: name })}</p>
       </div>
     );
   }
@@ -70,9 +72,9 @@ export function ProviderActions({ provider, state, canManage, start, disconnect,
     <div className={s.actionsRow}>
       {/* A real navigation: the provider's consent page must load top-level. */}
       <a className={s.primary} href={START_PATH[provider]} aria-busy={leaving} onClick={() => setLeaving(true)}>
-        {leaving ? `Opening ${name}…` : `Connect ${name}`}
+        {leaving ? t('connect.action.opening', { provider: name }) : t('connect.action.connect', { provider: name })}
       </a>
-      <p className={s.muted}>You sign in on {name}&rsquo;s own page. TuGPT never sees your password.</p>
+      <p className={s.muted}>{t('connect.provider.how2', { provider: name })}</p>
     </div>
   );
 }

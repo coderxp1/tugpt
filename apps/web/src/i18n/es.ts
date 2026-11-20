@@ -23,7 +23,10 @@
  * is a string that silently renders without the number it was written around.
  */
 
+import { areasEs } from "./areas";
+
 export const es = {
+  ...areasEs,
   'app.description': 'Tu empleado con IA para WhatsApp, llamadas y clientes.',
 
   'common.loading': 'Cargando…',

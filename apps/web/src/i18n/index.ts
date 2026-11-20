@@ -98,3 +98,10 @@ export function formatDateTime(value: string, locale: Locale): string {
   if (Number.isNaN(parsed.getTime())) return value;
   return parsed.toLocaleString(FORMATTING_LOCALES[locale]);
 }
+
+/** Date only (no time), for "added on" style facts. Unparseable input is returned untouched. */
+export function formatDate(value: string, locale: Locale): string {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) return value;
+  return parsed.toLocaleDateString(FORMATTING_LOCALES[locale], { year: 'numeric', month: 'short', day: 'numeric' });
+}

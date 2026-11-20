@@ -2,7 +2,9 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BACKEND_GAPS, present, type RouteAvailability } from '@/lib/connect-ui/contract';
-import { ENDPOINT_STATUS_TEXT, PERMISSION_LEVELS, PERMISSION_TEXT, mcpApi, mcpProblem, newIdempotencyKey, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, type McpEndpoint, type McpTool, type PermissionLevel, type SnapshotState } from '@/lib/connect-ui/mcp';
+import { endpointStatusText, mcpApi, mcpIssue, newIdempotencyKey, permissionText, PERMISSION_LEVELS, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, type McpEndpoint, type McpIssue, type McpTool, type PermissionLevel } from '@/lib/connect-ui/mcp';
+import { createTranslator, formatDate, type Translator } from '@/i18n';
+import { useT } from '@/i18n/provider';
 import { ConfirmDialog } from './ConfirmDialog';
 import { GapNote } from './GapNote';
 import { McpToolReview } from './McpToolReview';
@@ -19,33 +21,56 @@ export interface McpPanelProps {
   fetcher?: typeof fetch;
 }
 
-interface Row extends McpEndpoint { snapshot?: SnapshotState; tools?: McpTool[]; problem?: string }
+type ToolsState = 'none' | 'loading' | 'ready' | 'failed';
+interface Row extends McpEndpoint { tools?: McpTool[]; toolsState: ToolsState; issue?: McpIssue }
 
 const GROUP_ORDER = ['active', 'pending', 'disabled'] as const;
-const GROUP_TITLE: Record<(typeof GROUP_ORDER)[number], string> = { active: 'Active', pending: 'Not switched on yet', disabled: 'Turned off' };
+const EN = createTranslator('en');
 
-/** "3 tools: 2 Read only, 1 Makes changes", from tools the backend returned in this visit only. */
-export function permissionSummary(tools: readonly McpTool[]): string {
-  const parts = PERMISSION_LEVELS.map((l) => [l, tools.filter((t) => t.permissionClass === l).length] as const).filter(([, n]) => n > 0)
-    .map(([l, n]) => `${n} ${PERMISSION_TEXT[l].label}`);
-  return `${tools.length} ${tools.length === 1 ? 'tool' : 'tools'}${parts.length ? `: ${parts.join(', ')}` : ''}`;
+/** "3 in total: 2 Read only, 1 Makes changes", from tools the backend returned. */
+export function permissionSummary(tools: readonly McpTool[], t: Translator = EN): string {
+  const parts = PERMISSION_LEVELS.map((l) => [l, tools.filter((x) => x.permissionClass === l).length] as const).filter(([, n]) => n > 0)
+    .map(([l, n]) => `${n} ${permissionText(l, t).label}`);
+  return `${t('mcp.tools.count', { count: tools.length })}${parts.length ? `: ${parts.join(', ')}` : ''}`;
+}
+
+/** Runs fn over items with at most `limit` in flight. */
+async function pool<T>(items: readonly T[], limit: number, fn: (item: T) => Promise<void>) {
+  let next = 0;
+  const worker = async () => { while (next < items.length) { const i = next++; await fn(items[i]); } };
+  await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
+}
+
+function IssueBox({ issue, t }: { issue: McpIssue; t: Translator }) {
+  return (
+    <div className={s.issue} role="alert">
+      <p className={s.issueText}>{issue.text}</p>
+      {issue.fix && <p className={s.issueFix}><strong>{t('mcp.err.fix')}</strong> {issue.fix}</p>}
+      {issue.detail && <p className={s.issueFix}><small>{t('mcp.err.detail')} <span lang="en">{issue.detail}</span></small></p>}
+    </div>
+  );
 }
 
 /**
- * Customer-run MCP servers. The list comes from GET /mcp/endpoints; tools and
- * their permission classes from GET /mcp/snapshots/{id}/tools. Nothing is shown
- * as active, approved or connected unless a backend response said so.
+ * Customer-run MCP servers. The list and each server's latest tool list
+ * (id, approved, count) come from GET /mcp/endpoints; tools and their
+ * permission levels from GET /mcp/snapshots/{id}/tools. Every shown status is
+ * the backend's, re-read after each action; nothing is assumed from a click.
  */
 export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetcher }: McpPanelProps) {
+  const t = useT();
   const [rows, setRows] = useState<Row[] | null>(null);
-  const [loadProblem, setLoadProblem] = useState<string | null>(null);
+  const [loadIssue, setLoadIssue] = useState<McpIssue | null>(null);
   const [url, setUrl] = useState(''); const [name, setName] = useState('');
-  const [formProblem, setFormProblem] = useState<string | null>(null);
+  const [formIssue, setFormIssue] = useState<McpIssue | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
+  const [notice, setNotice] = useState('');
   const [deleting, setDeleting] = useState<Row | null>(null);
   const deleteTrigger = useRef<HTMLButtonElement | null>(null);
   // M9: Idempotency-Key of a snapshot attempt whose outcome may still be pending, per endpoint; reused on retry.
   const pendingSnapshotKey = useRef(new Map<string, string>());
+  // Tool lists are immutable per snapshot id, so a loaded list can be reused across re-reads.
+  const toolCache = useRef(new Map<string, McpTool[]>());
 
   const canList = canManage && present(routes.mcpRegister);
   const can = {
@@ -59,188 +84,228 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
 
   const patch = (id: string, p: Partial<Row>) => setRows((all) => all?.map((e) => (e.id === id ? { ...e, ...p } : e)) ?? all);
 
-  /** Applies a list response; keeps snapshot facts learnt in this session for endpoints that still exist. */
-  const apply = useCallback((r: Awaited<ReturnType<typeof mcpApi.list>>) => {
-    if (!r.ok) { setLoadProblem(mcpProblem(r)); setRows((prev) => prev ?? []); return; }
-    setLoadProblem(null);
-    setRows((prev) => r.data.map((e) => {
-      const old = prev?.find((p) => p.id === e.id);
-      return { ...e, snapshot: old?.snapshot, tools: old?.tools };
-    }));
-  }, []);
-  const reload = useCallback(async () => { apply(await mcpApi.list(fetcher)); }, [apply, fetcher]);
+  /** Re-reads the list, then the saved tool list of every server that has one. Returns the fresh rows. */
+  const reload = useCallback(async (): Promise<Row[] | null> => {
+    const r = await mcpApi.list(fetcher);
+    if (!r.ok) { setLoadIssue(mcpIssue(r, t)); setRows((prev) => prev ?? []); return null; }
+    setLoadIssue(null);
+    const fresh: Row[] = r.data.map((e) => {
+      const cached = e.snapshot ? toolCache.current.get(e.snapshot.id) : undefined;
+      return { ...e, tools: cached, toolsState: !e.snapshot ? 'none' : cached ? 'ready' : 'loading' };
+    });
+    setRows(fresh);
+    const todo = fresh.filter((e) => e.snapshot && e.toolsState === 'loading');
+    await pool(todo, 4, async (e) => {
+      const res = await mcpApi.tools(e.snapshot!.id, fetcher);
+      if (res.ok) { toolCache.current.set(e.snapshot!.id, res.data); patch(e.id, { tools: res.data, toolsState: 'ready' }); }
+      else patch(e.id, { toolsState: 'failed', issue: { text: t('mcp.err.toolsRead'), fix: mcpIssue(res, t).fix } });
+    });
+    return fresh;
+  }, [fetcher, t]);
 
   useEffect(() => {
     if (!canList) return;
-    let live = true;
-    void mcpApi.list(fetcher).then((r) => { if (live) apply(r); });
-    return () => { live = false; };
-  }, [canList, apply, fetcher]);
+    void reload();
+  }, [canList, reload]);
 
   async function register(ev: React.FormEvent) {
     ev.preventDefault();
     if (!can.register) return;
-    const invalid = validateEndpointInput(url, name);
-    if (invalid) { setFormProblem(invalid); return; }
-    setBusy('register'); setFormProblem(null);
+    const invalid = validateEndpointInput(url, name, t);
+    if (invalid) { setFormIssue({ text: invalid }); return; }
+    setBusy('register'); setFormIssue(null); setNotice('');
     const r = await mcpApi.register(url, name, fetcher);
     setBusy(null);
-    if (!r.ok) { setFormProblem(mcpProblem(r)); return; }
+    if (!r.ok) { setFormIssue(mcpIssue(r, t)); return; }
+    const added = name.trim();
     setUrl(''); setName('');
     await reload();
-  }
-
-  async function loadTools(e: Row, snapshot: SnapshotState) {
-    const t = await mcpApi.tools(snapshot.id, fetcher);
-    if (t.ok) patch(e.id, { snapshot, tools: t.data, problem: undefined });
-    else patch(e.id, { snapshot, tools: undefined, problem: `The tools could not be read. ${mcpProblem(t)}` });
+    setNotice(t('mcp.form.added', { name: added }));
   }
 
   async function discover(e: Row) {
     if (!can.discover) return;
-    setBusy(`snapshot:${e.id}`); patch(e.id, { problem: undefined });
+    setBusy(`snapshot:${e.id}`); patch(e.id, { issue: undefined }); setNotice('');
     const key = pendingSnapshotKey.current.get(e.id) ?? newIdempotencyKey();
     pendingSnapshotKey.current.set(e.id, key);
     const r = await mcpApi.snapshot(e.id, fetcher, key);
     // Keep the key only while a retry could still return the original; otherwise the next click starts afresh.
     if (r.ok || !SNAPSHOT_RETRY_SAME_KEY.has(r.code)) pendingSnapshotKey.current.delete(e.id);
-    if (r.ok) await loadTools(e, { id: r.data.snapshotId, toolCount: r.data.toolCount, approved: false });
-    else patch(e.id, { problem: mcpProblem(r) });
+    if (r.ok) {
+      await reload();
+      setNotice(t('mcp.done.discovered', { count: r.data.toolCount, name: e.displayName }));
+    } else patch(e.id, { issue: mcpIssue(r, t) });
     setBusy(null);
   }
 
   async function approve(e: Row, permissions: Record<string, PermissionLevel>): Promise<string | null> {
-    if (!e.snapshot || !can.approve) return 'Approving is switched off.';
+    if (!e.snapshot || !can.approve) return t('mcp.approve.off');
     const r = await mcpApi.approve(e.snapshot.id, permissions, fetcher);
     if (r.ok || r.code === 'ALREADY_APPROVED') {
-      await loadTools(e, { ...e.snapshot, approved: true });
-      return null;
+      // The approved levels are stored per tool; drop the cached pre-approval list and read it again.
+      toolCache.current.delete(e.snapshot.id);
+      const fresh = await reload();
+      const now = fresh?.find((x) => x.id === e.id);
+      if (now?.snapshot?.approved) { setNotice(t('mcp.done.approved', { name: e.displayName })); return null; }
+      return mcpIssue({ ok: false, status: 502, code: 'BAD_RESPONSE', message: '' }, t).text;
     }
-    return mcpProblem(r);
+    const i = mcpIssue(r, t);
+    return i.fix ? `${i.text} ${i.fix}` : i.text;
   }
 
   async function toggle(e: Row, action: 'activate' | 'deactivate') {
     if (action === 'activate' ? !can.activate || !e.snapshot?.approved : !can.deactivate) return;
-    setBusy(`${action}:${e.id}`); patch(e.id, { problem: undefined });
+    setBusy(`${action}:${e.id}`); patch(e.id, { issue: undefined }); setNotice('');
     const r = action === 'activate' ? await mcpApi.activate(e.id, fetcher) : await mcpApi.deactivate(e.id, fetcher);
     // Re-read first so the shown status is the backend's; then attach any error to the fresh row.
-    await reload();
-    if (!r.ok) patch(e.id, { problem: mcpProblem(r) });
+    const fresh = await reload();
+    if (!r.ok) patch(e.id, { issue: mcpIssue(r, t) });
+    else {
+      const now = fresh?.find((x) => x.id === e.id);
+      if (now?.status === 'active' && action === 'activate') setNotice(t('mcp.done.on', { name: e.displayName }));
+      if (now && now.status !== 'active' && action === 'deactivate') setNotice(t('mcp.done.off', { name: e.displayName }));
+    }
     setBusy(null);
   }
 
   async function remove(e: Row): Promise<string | null> {
     const r = await mcpApi.remove(e.id, fetcher);
-    if (!r.ok) return mcpProblem(r);
-    if (r.data.deleted !== true) return 'TuGPT did not confirm the removal. The list below was checked again.';
+    if (!r.ok) { const i = mcpIssue(r, t); return i.fix ? `${i.text} ${i.fix}` : i.text; }
+    if (r.data.deleted !== true) { await reload(); return t('mcp.remove.unconfirmed'); }
     await reload();
+    setNotice(t('mcp.done.removed', { name: e.displayName }));
     return null;
   }
 
   const closeDelete = () => { setDeleting(null); deleteTrigger.current?.focus(); };
-  const lockedNote = !enabled
-    ? <p className={s.muted}>Approving tools is switched off for your organization right now.</p>
-    : <p className={s.muted}>Approving tools is not available yet.</p>;
+  const lockedNote = <p className={s.muted}>{!enabled ? t('mcp.locked.off') : t('mcp.locked.na')}</p>;
+  const groupTitle = (g: (typeof GROUP_ORDER)[number]) => t(`mcp.group.${g}`);
+
+  function nextStep(e: Row): string {
+    if (e.status === 'active') return chatEnabled ? t('mcp.next.activeChat') : t('mcp.next.active');
+    if (e.snapshot?.approved) return e.status === 'disabled' ? t('mcp.next.disabled') : t('mcp.next.approved');
+    if (e.snapshot) return t('mcp.next.review');
+    return enabled ? t('mcp.next.discover') : t('mcp.next.blocked');
+  }
+  function approvalFact(e: Row): string {
+    if (!e.snapshot) return t('mcp.approval.none');
+    if (!e.snapshot.approved) return t('mcp.approval.pending');
+    if (!e.tools) return t('mcp.approval.approved');
+    return e.tools.some((x) => x.permissionClass !== 'read') ? t('mcp.approval.approvedChanges') : t('mcp.approval.approvedRead');
+  }
+  function toolsFact(e: Row): string {
+    if (!e.snapshot) return t('mcp.tools.none');
+    if (e.tools) return permissionSummary(e.tools, t);
+    if (e.toolsState === 'loading') return t('mcp.tools.loading');
+    return t('mcp.tools.count', { count: e.snapshot.toolCount });
+  }
+
+  const approvedTools = rows?.reduce((n, r) => n + (r.snapshot?.approved ? r.snapshot.toolCount : 0), 0) ?? 0;
+  const waitingTools = rows?.reduce((n, r) => n + (r.snapshot && !r.snapshot.approved ? r.snapshot.toolCount : 0), 0) ?? 0;
 
   return (
     <section className={s.section} aria-labelledby="mcp-title">
-      <h2 id="mcp-title">Your own tools (MCP)</h2>
-      <p className={s.lead}>Connect a tool server your organization runs (Model Context Protocol). TuGPT reads the tools it offers; an owner or admin reviews each one and decides what it may do before anything is switched on.</p>
-      <ol className={s.steps} aria-label="How it works">
-        <li><strong>Add</strong> the server&rsquo;s https address.</li>
-        <li><strong>Discover</strong> the tools it offers.</li>
-        <li><strong>Review</strong> each tool: read only, or may make changes (always asks first).</li>
-        <li><strong>Switch on</strong> the server.</li>
+      <h2 id="mcp-title">{t('mcp.title')}</h2>
+      <p className={s.lead}>{t('mcp.lead')}</p>
+      <ol className={s.steps} aria-label={t('mcp.steps.label')}>
+        {([1, 2, 3, 4] as const).map((n) => <li key={n}><strong>{t(`mcp.step${n}.title`)}</strong> {t(`mcp.step${n}.body`)}</li>)}
       </ol>
-      <p className={s.muted} data-testid="mcp-chat-status"><strong>In Chat:</strong> {chatEnabled ? 'tools of active servers can be used with @ in Chat. Tools that make changes ask for approval each time.' : 'not usable yet. Chat does not call MCP tools until this is switched on for your organization, even when a server is active.'}</p>
-      {!enabled && <GapNote gap={BACKEND_GAPS.EGRESS} label="Not enabled">Adding servers, discovering tools, approving and switching on are not enabled for your organization yet. You can still see, turn off and remove servers that already exist.</GapNote>}
+      <p className={s.muted} data-testid="mcp-chat-status"><strong>{t('mcp.chat.label')}</strong> {chatEnabled ? t('mcp.chat.on') : t('mcp.chat.off')}</p>
+      {!enabled && <GapNote gap={BACKEND_GAPS.EGRESS} label={t('connect.gap.notEnabled')}>{t('mcp.disabled.note')}</GapNote>}
 
-      {!canManage ? <p className={s.muted}>Only an organization owner or admin can see and manage MCP servers.</p> : (
+      {!canManage ? <p className={s.muted} data-testid="mcp-members-only">{t('mcp.membersOnly')}</p> : (
         <>
           <form className={s.form} onSubmit={(e) => void register(e)} noValidate>
             <fieldset disabled={!can.register || busy === 'register'}>
-              <legend className={s.sr}>Add an MCP server</legend>
-              <label>Name<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" maxLength={80} placeholder="Support knowledge base" /></label>
-              <label>Server address<input value={url} onChange={(e) => setUrl(e.target.value)} type="url" inputMode="url" autoComplete="off" placeholder="https://mcp.example.com/sse" aria-describedby="mcp-url-help" /></label>
-              <small id="mcp-url-help">https only. Never put passwords or tokens in the address.</small>
-              <button type="submit" className={s.primary} disabled={!can.register || busy === 'register'}>{busy === 'register' ? 'Adding…' : 'Add server'}</button>
+              <legend className={s.sr}>{t('mcp.form.legend')}</legend>
+              <label>{t('mcp.form.name')}<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" maxLength={80} placeholder={t('mcp.form.namePh')} /></label>
+              <label>{t('mcp.form.url')}<input value={url} onChange={(e) => setUrl(e.target.value)} type="url" inputMode="url" autoComplete="off" placeholder="https://mcp.example.com/sse" aria-describedby="mcp-url-help" /></label>
+              <small id="mcp-url-help">{t('mcp.form.urlHelp')}</small>
+              <button type="submit" className={s.primary} disabled={!can.register || busy === 'register'}>{busy === 'register' ? t('mcp.form.adding') : t('mcp.form.add')}</button>
             </fieldset>
-            {formProblem && <p className={s.error} role="alert">{formProblem}</p>}
+            {formIssue && <IssueBox issue={formIssue} t={t} />}
           </form>
 
-          {!canList && <p className={s.muted} role="note">The server list is not available yet.</p>}
-          {canList && rows === null && <p className={s.muted} role="status">Loading servers…</p>}
-          {loadProblem && (
+          <p className={notice ? s.okNote : s.sr} role="status" data-testid="mcp-notice">{notice}</p>
+
+          {!canList && <p className={s.muted} role="note">{t('mcp.list.unavailable')}</p>}
+          {canList && rows === null && <p className={s.muted} role="status">{t('mcp.list.loading')}</p>}
+          {loadIssue && (
             <div className={s.actionsRow}>
-              <p className={s.error} role="alert">The server list could not be loaded. {loadProblem}</p>
-              <button type="button" className={s.secondary} onClick={() => void reload()}>Try again</button>
+              <IssueBox issue={{ text: `${t('mcp.list.failed')} ${loadIssue.text}`, fix: loadIssue.fix }} t={t} />
+              <button type="button" className={s.secondary} onClick={() => void reload()}>{t('mcp.list.retry')}</button>
             </div>
           )}
-          {rows !== null && rows.length === 0 && !loadProblem && <p className={s.muted}>No MCP servers yet.</p>}
+          {rows !== null && rows.length === 0 && !loadIssue && <p className={s.muted}>{t('mcp.list.empty')}</p>}
           {rows !== null && rows.length > 0 && (<>
-            <div className={s.mcpSummary} data-testid="mcp-summary" role="group" aria-label="MCP servers at a glance">
-              {GROUP_ORDER.map((g) => <p key={g}><strong>{rows.filter((r) => r.status === g).length}</strong><span>{GROUP_TITLE[g]}</span></p>)}
-              <p><strong>{chatEnabled ? 'Yes' : 'Not yet'}</strong><span>Usable in Chat</span></p>
+            <div className={s.mcpSummary} data-testid="mcp-summary" role="group" aria-label={t('mcp.summary.label')}>
+              {GROUP_ORDER.map((g) => <p key={g} data-group={g}><strong>{rows.filter((r) => r.status === g).length}</strong><span>{groupTitle(g)}</span></p>)}
+              <p data-summary="approved"><strong>{approvedTools}</strong><span>{t('mcp.summary.toolsApproved')}</span></p>
+              <p data-summary="waiting"><strong>{waitingTools}</strong><span>{t('mcp.summary.toolsWaiting')}</span></p>
+              <p data-summary="chat"><strong>{chatEnabled ? t('mcp.summary.yes') : t('mcp.summary.notYet')}</strong><span>{t('mcp.summary.chat')}</span></p>
             </div>
-            {enabled && <p className={s.muted}>&ldquo;Switch on&rdquo; unlocks after you discover a server&rsquo;s tools and approve them. TuGPT checks the list again when you switch it on.</p>}
+            {enabled && <p className={s.muted}>{t('mcp.unlockNote')}</p>}
             {GROUP_ORDER.filter((g) => rows.some((r) => r.status === g)).map((g) => (
             <section key={g} className={s.mcpGroup} aria-labelledby={`mcp-group-${g}`}>
-            <h3 id={`mcp-group-${g}`}>{GROUP_TITLE[g]} <span className={s.count}>({rows.filter((r) => r.status === g).length})</span></h3>
-            <ul className={s.endpoints} aria-label={`${GROUP_TITLE[g]} MCP servers`}>
-              {rows.filter((r) => r.status === g).map((e) => {
-                const next = e.status === 'active' ? (chatEnabled ? 'Available in Chat with @.' : 'Active, but not usable in Chat yet.') : e.snapshot?.approved ? 'Tools reviewed. Switch the server on to make them available.' : e.snapshot ? `${e.snapshot.toolCount} ${e.snapshot.toolCount === 1 ? 'tool' : 'tools'} found. Review them below.` : enabled ? 'Next step: discover its tools.' : 'Adding tools is not enabled yet. You can turn this server off or remove it.';
-                const changes = e.tools?.some((t) => t.permissionClass !== 'read');
-                return (
-                <li key={e.id} className={s.card}>
+            <h3 id={`mcp-group-${g}`}>{groupTitle(g)} <span className={s.count}>({rows.filter((r) => r.status === g).length})</span></h3>
+            <ul className={s.endpoints} aria-label={t('mcp.group.listLabel', { group: groupTitle(g) })}>
+              {rows.filter((r) => r.status === g).map((e) => (
+                <li key={e.id} className={s.card} data-endpoint={e.id} data-approved={e.snapshot?.approved ? 'true' : 'false'}>
                   <div className={s.endpointHead}>
                     <h4>{e.displayName}</h4>
-                    <span className={`${s.badge} ${e.status === 'active' ? s.ok : e.status === 'pending' ? s.idle : s.off}`}>{ENDPOINT_STATUS_TEXT[e.status]}</span>
+                    <span className={`${s.badge} ${e.status === 'active' ? s.ok : e.status === 'pending' ? s.idle : s.off}`}>{endpointStatusText(e.status, t)}</span>
                   </div>
                   <p className={s.url}>{e.url}</p>
                   <dl className={s.mcpFacts}>
-                    <div><dt>Tools</dt><dd>{e.tools ? permissionSummary(e.tools) : 'Not checked during this visit. Use \u201cDiscover tools\u201d to see them.'}</dd></div>
-                    <div><dt>Approval</dt><dd>{e.tools ? changes ? 'Tools that can make changes are blocked on every use until an owner or admin approves that exact call.' : 'Read-only tools. No approval per use is needed.' : 'Shown after the tools are discovered.'}</dd></div>
-                    <div><dt>In Chat</dt><dd>{chatEnabled ? e.status === 'active' ? 'Usable with @' : 'Only after it is switched on' : 'Not usable yet'}</dd></div>
-                    <div><dt>Next step</dt><dd><p className={s.nextStep}>{next}</p></dd></div>
+                    <div><dt>{t('mcp.fact.tools')}</dt><dd>{toolsFact(e)}</dd></div>
+                    <div><dt>{t('mcp.fact.approval')}</dt><dd>{approvalFact(e)}</dd></div>
+                    <div><dt>{t('mcp.fact.chat')}</dt><dd>{chatEnabled ? e.status === 'active' ? t('mcp.inChat.usable') : t('mcp.inChat.afterOn') : t('mcp.inChat.no')}</dd></div>
+                    {e.createdAt && <div><dt>{t('mcp.fact.added')}</dt><dd>{formatDate(e.createdAt, t.locale)}</dd></div>}
+                    <div className={s.factWide}><dt>{t('mcp.fact.next')}</dt><dd><p className={s.nextStep}>{nextStep(e)}</p></dd></div>
                   </dl>
                   <div className={s.actionsRow}>
                     <button type="button" className={s.secondary} disabled={!can.discover || busy !== null} onClick={() => void discover(e)}>
-                      {busy === `snapshot:${e.id}` ? 'Discovering…' : e.snapshot ? 'Discover again' : 'Discover tools'}
+                      {busy === `snapshot:${e.id}` ? t('mcp.btn.discovering') : e.snapshot ? t('mcp.btn.rediscover') : t('mcp.btn.discover')}
                     </button>
                     {e.status === 'active'
-                      ? <button type="button" className={s.secondary} disabled={!can.deactivate || busy !== null} onClick={() => void toggle(e, 'deactivate')}>{busy === `deactivate:${e.id}` ? 'Turning off…' : 'Turn off'}</button>
-                      : <button type="button" className={s.secondary} disabled={!can.activate || !e.snapshot?.approved || busy !== null} onClick={() => void toggle(e, 'activate')}>{busy === `activate:${e.id}` ? 'Switching on…' : 'Switch on'}</button>}
-                    <button type="button" className={s.secondary} disabled={!can.remove || busy !== null} onClick={(ev) => { deleteTrigger.current = ev.currentTarget; setDeleting(e); }}>Remove…</button>
+                      ? <button type="button" className={s.secondary} disabled={!can.deactivate || busy !== null} onClick={() => void toggle(e, 'deactivate')}>{busy === `deactivate:${e.id}` ? t('mcp.btn.turningOff') : t('mcp.btn.off')}</button>
+                      : <button type="button" className={s.secondary} disabled={!can.activate || !e.snapshot?.approved || busy !== null} onClick={() => void toggle(e, 'activate')}>{busy === `activate:${e.id}` ? t('mcp.btn.turningOn') : t('mcp.btn.on')}</button>}
+                    <button type="button" className={s.secondary} disabled={!can.remove || busy !== null} onClick={(ev) => { deleteTrigger.current = ev.currentTarget; setDeleting(e); }}>{t('mcp.btn.remove')}</button>
                   </div>
-                  {e.snapshot && e.tools && (
+                  {e.issue && <IssueBox issue={e.issue} t={t} />}
+                  {e.snapshot && e.tools && (e.snapshot.approved ? (
+                    <details className={s.toolsDetails}>
+                      <summary>{t('mcp.btn.showTools', { count: e.tools.length })}</summary>
+                      <McpToolReview key={`${e.snapshot.id}:approved`} tools={e.tools} approved serverStatus={e.status} lockedNote={lockedNote} />
+                    </details>
+                  ) : (
                     <McpToolReview
-                      key={`${e.snapshot.id}:${e.snapshot.approved}`}
+                      key={`${e.snapshot.id}:pending`}
                       tools={e.tools}
-                      approved={e.snapshot.approved}
+                      approved={false}
+                      serverStatus={e.status}
                       onApprove={can.approve ? (p) => approve(e, p) : undefined}
                       lockedNote={lockedNote}
                     />
-                  )}
-                  {e.problem && <p className={s.error} role="alert">{e.problem}</p>}
-                </li>);
-              })}
+                  ))}
+                </li>
+              ))}
             </ul>
             </section>))}
           </>)}
-          <GapNote gap={BACKEND_GAPS.MCP_STATE} label="Good to know">After you reload this page, a review starts again from &ldquo;Discover tools&rdquo;.</GapNote>
         </>
       )}
-      {!chatEnabled && <GapNote gap={BACKEND_GAPS.MCP_RUNTIME} label="Not enabled">Approved tools from an active MCP server can be used in Chat with <kbd>@</kbd> once your administrator switches on MCP in Chat. Every call is recorded in your organization&rsquo;s audit log. While it is switched off, the <kbd>@</kbd> menu shows these tools as &ldquo;Not available in chat yet&rdquo; with the reason.</GapNote>}
+      {!chatEnabled && <GapNote gap={BACKEND_GAPS.MCP_RUNTIME} label={t('connect.gap.notEnabled')}>{t('mcp.runtime.note')}</GapNote>}
       {deleting && (
         <ConfirmDialog
-          title={`Remove ${deleting.displayName}?`}
-          confirmLabel="Remove server"
-          busyLabel="Removing…"
+          title={t('mcp.remove.title', { name: deleting.displayName })}
+          confirmLabel={t('mcp.remove.confirm')}
+          busyLabel={t('mcp.remove.busy')}
           onConfirm={can.remove ? () => remove(deleting) : undefined}
           onClose={closeDelete}
           onDone={closeDelete}
         >
-          <p>TuGPT deletes this server together with its discovered tool lists and their reviewed permission levels. This cannot be undone.</p>
+          <p>{t('mcp.remove.body')}</p>
           <p className={s.url}>{deleting.url}</p>
         </ConfirmDialog>
       )}

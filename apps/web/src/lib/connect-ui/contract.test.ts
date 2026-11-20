@@ -5,7 +5,8 @@ import { describe, expect, it } from 'vitest';
 import { CONTRACT_ROUTES, canManageConnections, oauthBanner, oauthReturnQuery, parseOAuthReturn, usable } from './contract';
 import { routeAvailability } from './routes.server';
 import { pickerBlock, requestProblem, toolProblem } from './chat-errors';
-import { mcpProblem, validateEndpointInput } from './mcp';
+import { mcpIssue, mcpProblem, validateEndpointInput } from './mcp';
+import { createTranslator } from '@/i18n';
 import { postJson } from './http';
 
 describe('OAuth return parsing', () => {
@@ -80,7 +81,13 @@ describe('MCP input and errors', () => {
     expect(validateEndpointInput('https://mcp.example.com', ' ')).toMatch(/name/);
   });
   it('explains activation denials and security holds', () => {
-    expect(mcpProblem({ ok: false, status: 409, code: 'ACTIVATION_DENIED', message: 'snapshot not approved' })).toContain('snapshot not approved');
+    expect(mcpProblem({ ok: false, status: 409, code: 'ACTIVATION_DENIED', message: 'snapshot not approved' })).toMatch(/refused to switch this server on.*approve the new list/);
+    const issue = mcpIssue({ ok: false, status: 409, code: 'ACTIVATION_DENIED', message: 'snapshot not approved' });
+    expect(issue).toMatchObject({ text: expect.stringContaining('refused'), fix: expect.stringContaining('Discover'), detail: 'snapshot not approved' });
+    expect(mcpIssue({ ok: false, status: 403, code: 'FORBIDDEN', message: 'Customer MCP is not enabled' }).detail).toBeUndefined();
+    const es = mcpIssue({ ok: false, status: 504, code: 'DISCOVERY_TIMEOUT', message: '' }, createTranslator('es'));
+    expect(es.text).not.toBe(mcpIssue({ ok: false, status: 504, code: 'DISCOVERY_TIMEOUT', message: '' }).text);
+    expect(es.fix).toBeTruthy();
     expect(mcpProblem({ ok: false, status: 503, code: 'privileged_bridge_pending_review', message: '' })).toMatch(/security review/);
   });
   it('normalises both error shapes', async () => {

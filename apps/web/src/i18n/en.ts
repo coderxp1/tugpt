@@ -10,8 +10,10 @@
  */
 
 import type { Dictionary } from './types';
+import { areasEn } from './areas';
 
 export const en: Dictionary = {
+  ...areasEn,
   'app.description': 'Your AI employee for WhatsApp, calls and customers.',
 
   'common.loading': 'Loading…',

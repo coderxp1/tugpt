@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useRef, useState } from 'react';
+import { useT } from '@/i18n/provider';
 import s from './connect.module.css';
 
 export interface ConfirmDialogProps {
@@ -18,6 +19,7 @@ export interface ConfirmDialogProps {
 
 /** Destructive-action confirmation. Focus starts on Cancel; Escape and backdrop close unless busy; the caller restores focus. */
 export function ConfirmDialog({ title, children, confirmLabel, busyLabel, onConfirm, unavailable, onClose, onDone }: ConfirmDialogProps) {
+  const t = useT();
   const titleId = useId(); const descId = useId();
   const cancel = useRef<HTMLButtonElement>(null);
   const box = useRef<HTMLDivElement>(null);
@@ -56,7 +58,7 @@ export function ConfirmDialog({ title, children, confirmLabel, busyLabel, onConf
         {!onConfirm && unavailable}
         {problem && <p className={s.error} role="alert">{problem}</p>}
         <div className={s.dialogActions}>
-          <button ref={cancel} type="button" className={s.secondary} onClick={onClose} disabled={busy}>Cancel</button>
+          <button ref={cancel} type="button" className={s.secondary} onClick={onClose} disabled={busy}>{t('connect.dialog.cancel')}</button>
           <button type="button" className={s.danger} onClick={() => void confirm()} disabled={!onConfirm || busy} aria-busy={busy}>
             {busy ? busyLabel : confirmLabel}
           </button>

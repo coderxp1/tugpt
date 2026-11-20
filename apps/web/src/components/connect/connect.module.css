@@ -137,3 +137,19 @@ button.secondary{border:1px solid #d7d7cf}
 .tableWrap{overflow-x:auto}
 @media (max-width:720px){.stack th[scope=row]{display:block;font-size:15px;padding:2px 0 4px}}
 @media (max-width:720px){.stack td>.badge{justify-self:start}}
+/* M4: structured problems (what happened + how to fix), announcements, collapsible tool lists, status legend. */
+.issue{display:grid;gap:4px;padding:10px 12px;border-radius:8px;background:#fff6f6;color:#7f1d1d;border:1px solid #f0c4c4;font-size:13px;line-height:1.45}
+.issueText{margin:0;font-weight:600}
+.issueFix{margin:0;color:#4a1f1f}
+.okNote{margin:0;padding:10px 12px;border-radius:8px;background:#eaf6ef;color:#1f5137;border:1px solid #b9dcc7;font-size:14px}
+.factWide{grid-column:1/-1}
+.toolsDetails{border-top:1px solid #e9e9e2;padding-top:10px}
+.toolsDetails>summary{cursor:pointer;font-weight:600;font-size:14px;min-height:40px;display:flex;align-items:center;border-radius:6px}
+.toolsDetails>summary:focus-visible{outline:3px solid #ffe436;outline-offset:2px}
+.toolsDetails[open]>summary{margin-bottom:8px}
+.legend{margin:0;display:grid;gap:6px;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));font-size:13px;color:#3e3f3a}
+.legend>div{display:grid;gap:4px;align-content:start}
+.legend dt{margin:0}.legend dd{margin:0;line-height:1.4}
+.legendBox{border:1px solid #e1e1d8;border-radius:10px;padding:12px 14px;background:#fbfaf5;display:grid;gap:8px}
+.legendBox h2{margin:0;font-size:14px}
+@media (max-width:720px){.stack td:empty{display:none}}

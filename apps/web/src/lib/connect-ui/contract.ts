@@ -1,3 +1,4 @@
+import { createTranslator, type Translator } from '@/i18n';
 /**
  * Browser-safe description of the TuGPT Connect (v2) contract the dashboard
  * talks to, plus the human copy for every outcome it can report.
@@ -93,25 +94,17 @@ export function oauthReturnQuery(params: Params): string {
   return `?${q.toString()}`;
 }
 
-const REASON_TEXT: Record<OAuthReason, string> = {
-  invalid_callback: 'The sign-in response was incomplete or expired. Start again from this page.',
-  forbidden: 'Only an organization owner or admin can connect this account.',
-  not_configured: 'Connecting is not switched on for TuGPT yet. Nothing was connected.',
-  internal_error: 'Something went wrong on our side. Nothing was connected; try again in a few minutes.',
-  provider_error: 'The provider declined or cancelled the sign-in. Nothing was connected.',
-  disconnect_failed: 'The account could not be disconnected. It may still be connected; check again before relying on it.',
-  unknown: 'The connection did not complete. Nothing was connected.',
-};
+const EN = createTranslator('en');
 
-export function oauthBanner(r: OAuthReturn): { tone: 'ok' | 'error'; title: string; body: string } {
-  const name = PROVIDER_NAME[r.provider];
+export function oauthBanner(r: OAuthReturn, t: Translator = EN): { tone: 'ok' | 'error'; title: string; body: string } {
+  const provider = PROVIDER_NAME[r.provider];
   if (r.outcome !== 'error') {
     return r.outcome === 'connected'
-      ? { tone: 'ok', title: `${name} is connected`, body: 'The status below was checked just now. Type @ in Chat to use it.' }
-      : { tone: 'ok', title: `${name} is disconnected`, body: 'TuGPT revoked its access to this account. The status below was checked just now.' };
+      ? { tone: 'ok', title: t('connect.oauth.connected.title', { provider }), body: t('connect.oauth.connected.body') }
+      : { tone: 'ok', title: t('connect.oauth.revoked.title', { provider }), body: t('connect.oauth.revoked.body') };
   }
-  const title = r.reason === 'disconnect_failed' ? `${name} could not be disconnected` : `${name} could not be connected`;
-  return { tone: 'error', title, body: REASON_TEXT[r.reason] };
+  const title = r.reason === 'disconnect_failed' ? t('connect.oauth.error.disconnect', { provider }) : t('connect.oauth.error.connect', { provider });
+  return { tone: 'error', title, body: t(`connect.oauth.reason.${r.reason}`) };
 }
 
 export const canManageConnections = (role: string | null | undefined) => role === 'owner' || role === 'admin';

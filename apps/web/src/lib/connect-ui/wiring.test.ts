@@ -42,7 +42,14 @@ describe('customerMcpEnabled', () => {
 describe('MCP contract parsing', () => {
   it('keeps only well-formed endpoints with a known status', () => {
     expect(parseEndpoints({ endpoints: [{ id: 'a', url: 'https://x', displayName: 'X', status: 'active' }, { id: 'b', url: 'https://y', displayName: 'Y', status: 'weird' }, null] }))
-      .toEqual([{ id: 'a', url: 'https://x', displayName: 'X', status: 'active' }]);
+      .toEqual([{ id: 'a', url: 'https://x', displayName: 'X', status: 'active', snapshot: null }]);
+  });
+  it('keeps the stored latest snapshot (survives reload) and drops a malformed one instead of guessing', () => {
+    const base = { id: 'a', url: 'https://x', displayName: 'X', status: 'pending', createdAt: '2025-01-02T03:04:05Z' };
+    expect(parseEndpoints({ endpoints: [{ ...base, snapshot: { id: 's1', approved: true, toolCount: 3 } }] }))
+      .toEqual([{ ...base, snapshot: { id: 's1', approved: true, toolCount: 3 } }]);
+    for (const bad of [{ id: '', approved: true, toolCount: 1 }, { id: 's', approved: 'yes', toolCount: 1 }, { id: 's', approved: false, toolCount: -1 }, { id: 's', approved: false, toolCount: 1.5 }, 'x'])
+      expect(parseEndpoints({ endpoints: [{ ...base, snapshot: bad }] })![0].snapshot).toBeNull();
     expect(parseEndpoints({})).toBeNull();
   });
   it('keeps only tools with a name and a valid permission class', () => {

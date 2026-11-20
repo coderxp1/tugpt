@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useRef, useState } from 'react';
+import { useT } from '@/i18n/provider';
 import s from './connect.module.css';
 
 export interface OAuthBannerProps { tone: 'ok' | 'error'; title: string; body: string }
@@ -10,6 +11,7 @@ export interface OAuthBannerProps { tone: 'ok' | 'error'; title: string; body: s
  * it; the query string is removed so a reload does not repeat a stale message.
  */
 export function OAuthBanner({ tone, title, body }: OAuthBannerProps) {
+  const t = useT();
   const [open, setOpen] = useState(true);
   const ref = useRef<HTMLDivElement>(null);
   useEffect(() => {
@@ -22,7 +24,7 @@ export function OAuthBanner({ tone, title, body }: OAuthBannerProps) {
   return (
     <div ref={ref} tabIndex={-1} className={`${s.banner} ${tone === 'ok' ? s.bannerOk : s.bannerError}`} role={tone === 'ok' ? 'status' : 'alert'}>
       <div><strong>{title}</strong><p>{body}</p></div>
-      <button type="button" className={s.dismiss} onClick={() => setOpen(false)} aria-label="Dismiss message">×</button>
+      <button type="button" className={s.dismiss} onClick={() => setOpen(false)} aria-label={t('connect.oauth.dismiss')}>×</button>
     </div>
   );
 }

@@ -1,3 +1,4 @@
+import { createTranslator, type Translator } from '@/i18n';
 /**
  * Disconnect a provider through the Connect v2 route (B-5).
  *
@@ -27,8 +28,11 @@ export async function disconnectProvider(provider: ConnectProvider, fetcher: typ
   return res.ok ? 'unknown' : 'failed';
 }
 
+const EN = createTranslator('en');
+/** What the person reads after a disconnect attempt; the shown status always comes from a fresh read. */
+export function disconnectText(outcome: DisconnectOutcome, provider: string, t: Translator = EN): string {
+  return t(`connect.disconnect.${outcome}`, { provider });
+}
 export const DISCONNECT_TEXT: Record<DisconnectOutcome, (name: string) => string> = {
-  revoked: (n) => `${n} is disconnected.`,
-  failed: (n) => `${n} could not be disconnected. It may still be connected; the status below was checked again.`,
-  unknown: (n) => `TuGPT could not confirm whether ${n} was disconnected. The status below was checked again; trust that.`,
+  revoked: (n) => disconnectText('revoked', n), failed: (n) => disconnectText('failed', n), unknown: (n) => disconnectText('unknown', n),
 };
