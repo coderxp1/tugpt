@@ -216,11 +216,12 @@ async function visibleLinks(db: WorkspaceDb, organizationId: string, agentIds: r
 /**
  * agent id -> instructions, for the agents in `list` the caller may edit. The
  * database decides (custom_agent_instructions: owner, member, not a viewer);
- * the canEditAgent pre-filter only avoids a call when nothing is editable.
+ * the canEditAgent pre-filter (F-4: visibility-aware, the same rule toAgent
+ * uses to redact) avoids fetching instructions the caller would not be shown.
  * At most 200 ids (listAgents' limit and the RPC's cap).
  */
 async function editorInstructions(db: WorkspaceDb, tenant: TenantContext, userId: string, list: readonly Record<string, unknown>[]): Promise<Map<string, string>> {
-  const ids = list.filter((r) => canEditAgent(str(r.owner_user_id), userId, tenant.role)).map((r) => str(r.id));
+  const ids = list.filter((r) => canEditAgent(str(r.owner_user_id), str(r.visibility), userId, tenant.role)).map((r) => str(r.id));
   const out = new Map<string, string>();
   if (ids.length === 0) return out;
   const r = await db.rpc('custom_agent_instructions', { p_organization_id: tenant.organizationId, p_agent_ids: ids });

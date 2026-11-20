@@ -42,7 +42,7 @@ function fakeDb(select: Record<string, unknown>, rpc: (fn: string) => DbResult =
   return { db, calls };
 }
 
-const member = { organizationId: ORG, role: 'member' } as unknown as TenantContext;
+const member = { organizationId: ORG, role: 'manager' } as unknown as TenantContext; // a real org role (F-4 recognises owner|admin|manager|agent|viewer)
 
 describe('agents: pre-Q-9c schema compatibility (Q-10)', () => {
   it('editors read instructions from the column only for agents they can edit, when the RPC does not exist', async () => {
