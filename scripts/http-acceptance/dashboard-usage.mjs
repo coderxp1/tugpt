@@ -230,9 +230,12 @@ expectStatus(
       r.json?.report?.by_feature?.map((f) => [f.feature, f.requests]),
     ) === '[["chat",4]]',
   );
+  // The platform proxy normalises API responses to `no-store` (stricter than `private, no-store`).
+  const cc = r.headers.get("cache-control") ?? "";
   check(
-    "response is private, no-store",
-    r.headers.get("cache-control") === "private, no-store",
+    "response is never cacheable (no-store, not public)",
+    /\bno-store\b/.test(cc) && !/\bpublic\b/.test(cc),
+    cc,
   );
 }
 {
