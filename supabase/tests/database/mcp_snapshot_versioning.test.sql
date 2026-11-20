@@ -31,6 +31,11 @@ CREATE TEMP TABLE r(k text PRIMARY KEY, v uuid) ON COMMIT DROP;
 GRANT ALL ON r TO authenticated;
 
 -- ---- owner of org A -------------------------------------------------------
+-- Since 20261120000007 no API role may execute the legacy key-less create_mcp_snapshot (asserted in
+-- mcp_snapshot_legacy_and_tenant.test.sql). Its body is kept, so this suite still pins its semantics behind a
+-- grant that exists only inside this transaction; the ROLLBACK at the end removes it.
+GRANT EXECUTE ON FUNCTION public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb) TO authenticated;
+
 SET LOCAL ROLE authenticated;
 SELECT set_config('request.jwt.claims', '{"sub":"a4000000-0000-4000-8000-0000000000a1","role":"authenticated"}', true);
 
@@ -85,7 +90,8 @@ SELECT is((SELECT count(*)::int FROM public.external_tool_snapshots WHERE endpoi
 -- Catalogue.
 SELECT ok((SELECT prosecdef FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure), 'C1: SECURITY DEFINER kept');
 SELECT ok(NOT has_function_privilege('anon', 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)', 'EXECUTE')
-       AND has_function_privilege('authenticated', 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)', 'EXECUTE'), 'C2: anon cannot execute; authenticated can');
+       AND NOT has_function_privilege('service_role', 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)', 'EXECUTE'),
+  'C2: anon and service_role cannot execute (authenticated only through this suite''s transaction-local grant)');
 
 SELECT ok((SELECT 'lock_timeout=2s' = ANY(proconfig) FROM pg_proc WHERE oid = 'public.create_mcp_snapshot(uuid,uuid,integer,text,jsonb)'::regprocedure),
   'C3: the endpoint lock wait is bounded at lock_timeout=2s (20261120000005), below the 5 s app request timeout');
