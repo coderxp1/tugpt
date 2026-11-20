@@ -223,6 +223,8 @@ Verified: pgTAP `supabase/tests/database/mcp_approval_audit.test.sql`
 (44 assertions, run against the isolated database), Vitest route and port
 tests.
 
+**Privileges.** Nobody writes `mcp_approval_events` directly: `anon` has nothing; `authenticated` and `service_role` have exactly `SELECT` (RLS limits `authenticated` to owners/admins of the row's organization; `service_role` bypasses RLS and is read-only since `20261120000011`, which closed the default-privilege `ALL` grant that `20261120000010` left in place). Every event is written by a `SECURITY DEFINER` function or trigger; `UPDATE` is refused by an append-only trigger.
+
 ## Model text is not a tool result
 
 Only results produced by the server's own tool execution (`tool_result`
