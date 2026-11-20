@@ -3,6 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { PublicModel, Thread } from './types';
 
+// UI tests isolate the shared upload coordinator; its transport/recovery has dedicated tests.
+vi.mock('@/lib/workspace/file-upload', () => ({ uploadSafely: async (file: File, type: string, _scope: string, _signal: AbortSignal, _progress: unknown, api: { uploadFile: (blob: Blob, name: string) => Promise<{ ok: boolean; value?: { file?: { id?: string } } }> }) => {
+ const r = await api.uploadFile(new Blob([file], { type }), file.name);
+ return r.ok && r.value?.file?.id ? { kind: 'stored', file: r.value.file } : { kind: 'uncertain' };
+} }));
 const nav = vi.hoisted(() => ({ path: '/workspace', search: '' }));
 vi.mock('next/navigation', () => ({ usePathname: () => nav.path, useSearchParams: () => new URLSearchParams(nav.search) }));
 import { ChatView } from './ChatView';
@@ -13,7 +18,7 @@ const thread = { id: 'a0000000-0000-4000-8000-000000000001', title: 'Carrier rev
 const ok = (body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status: 200, headers: { 'content-type': 'application/json' } }));
 
 function renderChat(props: { models: PublicModel[]; canApprove?: boolean; firstName?: string | null }, threads: Thread[] = []) {
-  return render(<ThreadsProvider initialThreads={threads}><ChatView {...props} /></ThreadsProvider>);
+  return render(<ThreadsProvider initialThreads={threads}><ChatView uploadScope="test-owner" {...props} /></ThreadsProvider>);
 }
 
 let fetchMock: ReturnType<typeof vi.fn>;
@@ -367,19 +372,14 @@ describe('Workspace composer', () => {
     expect(screen.queryByText(/line two/)).toBeNull();
   });
 
-  it('a document is refused with the reason when uploads are not available on this server', async () => {
-    // The default mock answers 200 with some other body for any unknown URL: an older server.
+  it('keeps unconfirmed uploads visible with an explicit check and never automatically retries', async () => {
     const { container } = renderChat({ models: two });
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
-    fireEvent.change(input, { target: { files: [new File([new Uint8Array([37, 80, 68, 70])], 'contract.pdf', { type: 'application/pdf' })] } });
-    expect((await screen.findByText(/contract\.pdf: uploading documents is not available/)).textContent).toContain('Only small text files');
-    expect(screen.queryByRole('list', { name: 'Uploaded documents' })).toBeNull();
-    expect(screen.queryByRole('list', { name: 'Attached files' })).toBeNull();
-    // Later picks are refused at once, without another request.
-    const uploadsBefore = fetchMock.mock.calls.filter(([u]) => String(u).startsWith('/api/v1/files')).length;
-    fireEvent.change(input, { target: { files: [new File([new Uint8Array([1, 2])], 'deck.pptx')] } });
-    await screen.findByText(/deck\.pptx: uploading documents is not available/);
-    expect(fetchMock.mock.calls.filter(([u]) => String(u).startsWith('/api/v1/files')).length).toBe(uploadsBefore);
+    fireEvent.change(input, { target: { files: [new File(['%PDF'], 'contract.pdf', { type: 'application/pdf' })] } });
+    await screen.findByText(/Upload unconfirmed/);
+    expect(screen.getByRole('button', { name: 'Check / retry' })).toBeTruthy();
+    expect(screen.getByRole('list', { name: 'Uploaded documents' }).textContent).toContain('contract.pdf');
+    expect(fetchMock.mock.calls.filter(([u]) => String(u).startsWith('/api/v1/files')).length).toBe(1);
   });
 
   it('refuses a file type the Files API does not take', async () => {

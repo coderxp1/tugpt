@@ -61,7 +61,7 @@ export function LibraryView({ canManage, role, uploadScope }: LibraryViewProps) 
           <p>{t('workspace.library.intro')}</p>
         </header>
 
-        <Collections uploadScope={uploadScope} />
+        <Collections uploadScope={uploadScope} role={role} />
         <FileManager role={role} uploadScope={uploadScope} />
 
         <section className={s.section} aria-labelledby="lib-starters">

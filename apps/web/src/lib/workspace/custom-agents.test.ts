@@ -67,3 +67,11 @@ describe('agent request field whitelist', () => {
     expect(sent).toEqual([{ name: 'Renamed' }, { description: null, modelKey: null, starters: [], collectionIds: [] }]);
   });
 });
+it('honors Retry-After seconds without replaying a write', async () => {
+ const fetcher=vi.fn(async()=>new Response(JSON.stringify({error:'RATE_LIMITED'}),{status:429,headers:{'retry-after':'120'}}));const api=createAgentsClient(fetcher);
+ const r=await api.createAgent(base);expect(r.ok).toBe(false);expect(api.retryAt()).toBeGreaterThan(Date.now()+119000);
+ await api.createAgent(base);expect(fetcher).toHaveBeenCalledTimes(1);
+});
+it('honors Retry-After HTTP dates', async () => {
+ const date=new Date(Date.now()+120000).toUTCString();const api=createAgentsClient(async()=>new Response('{}',{status:429,headers:{'retry-after':date}}));await api.createAgent(base);expect(api.retryAt()).toBe(Date.parse(date));
+});

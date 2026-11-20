@@ -2,7 +2,7 @@
 
 import { customerModels } from '@/lib/workspace/assistant-capabilities';
 import Link from 'next/link';
-import { useId, useMemo, useRef, useState } from 'react';
+import { useEffect, useId, useMemo, useRef, useState } from 'react';
 import { useT } from '@/i18n/provider';
 import type { MessageKey } from '@/i18n/types';
 import type { PublicModel } from '@/components/chat/types';
@@ -149,6 +149,8 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
   const [form, setForm] = useState<AgentInput>(start ? { ...start, starters: start.starters.length ? [...start.starters] : [''] } : EMPTY);
   const [saving, setSaving] = useState(false);
   const saveLock = useRef(false);
+  const [waitSeconds, setWaitSeconds] = useState(() => Math.max(0, Math.ceil((agentsApi().retryAt() - Date.now()) / 1000)));
+  useEffect(() => { const timer = setInterval(() => setWaitSeconds(Math.max(0, Math.ceil((agentsApi().retryAt() - Date.now()) / 1000))), 1000); return () => clearInterval(timer); }, []);
   const capabilityUnavailable = !!form.modelKey && !models.some(m => m.key === form.modelKey && m.available !== false);
   const [error, setError] = useState<MessageKey | null>(null);
   const [touched, setTouched] = useState(false);
@@ -160,11 +162,12 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setTouched(true);
-    if (saveLock.current || capabilityUnavailable || problem || !canSave || (start && (!start.ownedByMe || !start.canEdit)) || (start?.visibility !== 'organization' && form.visibility === 'organization' && !canShare)) return;
+    if (waitSeconds > 0 || saveLock.current || capabilityUnavailable || problem || !canSave || (start && (!start.ownedByMe || !start.canEdit)) || (start?.visibility !== 'organization' && form.visibility === 'organization' && !canShare)) return;
     saveLock.current = true; setSaving(true); setError(null);
     const body = cleanAgent(form);
     const r = start ? await agentsApi().updateAgent(start.id, body) : await agentsApi().createAgent(body);
     saveLock.current = false; setSaving(false);
+    if (!r.ok && r.status === 429) setWaitSeconds(Math.max(0, Math.ceil(((r.retryAt ?? 0) - Date.now()) / 1000)));
     if (r.ok && r.value?.agent) onSaved(r.value.agent, !start);
     else setError(r.ok ? 'workspace.err.generic' : messageKeyFor(r));
   }
@@ -230,10 +233,11 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
 
         {capabilityUnavailable && <p className={u.fieldError} role="alert">{t('workspace.capability.unavailable')}</p>}
         {!canSave && <div className={u.notice}><Icon name="alert" size={16} /><div><strong>{t('workspace.agents.saveUnavailable')}</strong><p>{t('workspace.agents.saveUnavailableBody')}</p></div></div>}
+        {waitSeconds > 0 && <p role="status">{t.locale === 'es' ? `Límite alcanzado. Podrá guardar en ${waitSeconds} s. Sus cambios se conservan; no se enviarán automáticamente.` : `Rate limit reached. You can save in ${waitSeconds}s. Your changes are kept; nothing will be sent automatically.`}</p>}
         {error && <p className={u.fieldError} role="alert">{t(error)}</p>}
         <div className={u.dialogFoot}>
           <button type="button" className={u.button} disabled={saving} onClick={onClose}>{t('workspace.cancel')}</button>
-          <button type="submit" className={u.buttonPrimary} disabled={!canSave || saving || capabilityUnavailable}>{saving ? t('workspace.saving') : start ? t('workspace.save') : t('workspace.agents.createButton')}</button>
+          <button type="submit" className={u.buttonPrimary} disabled={!canSave || saving || capabilityUnavailable || waitSeconds > 0}>{saving ? t('workspace.saving') : start ? t('workspace.save') : t('workspace.agents.createButton')}</button>
         </div>
       </form>
     </Dialog>

@@ -15,7 +15,7 @@ export default async function ChatLayout({ children }: Readonly<{ children: Reac
   const session = await getSessionContext().catch(() => null);
   return (
     <>
-      <ChatView models={customerModels(publicModels(configuredModels()))} canApprove={canApproveMcpCalls(session)} firstName={firstName(session?.fullName)} />
+      <ChatView uploadScope={session?.tenant && !session.requestedTenantRejected ? `${session.tenant.organizationId}:${session.userId}` : undefined} models={customerModels(publicModels(configuredModels()))} canApprove={canApproveMcpCalls(session)} firstName={firstName(session?.fullName)} />
       {children}
     </>
   );

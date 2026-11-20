@@ -13,6 +13,7 @@ import s from './chat.module.css';
 
 export interface ChatViewProps {
   models: PublicModel[];
+  uploadScope?: string;
   /** Owner or admin of the active organization: may approve MCP calls (the backend checks again). */
   canApprove?: boolean;
   /** For the greeting on a new chat. Never the email address. */
@@ -24,8 +25,8 @@ export interface ChatViewProps {
  * conversation, the composer docks at the bottom. Model, agent, @ apps and files live in the
  * composer, so switching any of them never changes the layout. Recent chats live in the sidebar.
  */
-export function ChatView({ models: configured, canApprove = false, firstName = null }: ChatViewProps) {
-  const c = useChatSession(configured);
+export function ChatView({ models: configured, canApprove = false, firstName = null, uploadScope }: ChatViewProps) {
+  const c = useChatSession(configured, uploadScope);
   const models = c.models;
   const t = useT();
   const { threads, manage } = useThreads();
@@ -63,7 +64,7 @@ export function ChatView({ models: configured, canApprove = false, firstName = n
 
         <Composer draft={c.draft} attached={c.attached} matches={c.matches} pickerIndex={c.picker.index} showPicker={c.showPicker}
           activeOption={c.activeOption} listId={c.listId} models={models} modelKey={c.modelKey} model={c.model} busy={c.busy}
-          disabled={models.length === 0 || c.agentBlocked || !!c.recovery} agentLabel={c.agentLabel} inputRef={c.input} files={c.files} fileNotice={c.fileNotice} uploads={c.uploads} uploadCap={c.uploadCap} onRemoveUpload={c.removeUpload} length={c.length} overLimit={c.overLimit}
+          disabled={models.length === 0 || c.agentBlocked || !!c.recovery} agentLabel={c.agentLabel} inputRef={c.input} files={c.files} fileNotice={c.fileNotice} uploads={c.uploads} uploadCap={c.uploadCap} onRemoveUpload={c.removeUpload} onRetryUpload={c.retryUpload} length={c.length} overLimit={c.overLimit}
           hero={fresh} onDraft={c.onDraft} onKey={c.onKey} onChoose={c.choose} onDetach={c.detach} onModel={c.setModelKey} onApps={c.openApps}
           onFiles={(f) => void c.addFiles(f)} onRemoveFile={c.removeFile} onSend={() => void c.send()} onStop={c.stop} />
 

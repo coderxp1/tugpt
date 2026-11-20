@@ -7,6 +7,7 @@ import type { Collection, CollectionDetail, DocumentStatus, FileVisibility, Libr
 import { hasArray, messageKeyFor, workspaceApi } from '@/lib/workspace/service';
 import { LIBRARY_ACCEPT, UPLOAD_MAX_BYTES, formatBytes, isUploadable, mediaTypeFor } from '@/lib/workspace/uploads';
 import { uploadSafely } from '@/lib/workspace/file-upload';
+import { MoveDocument } from './MoveDocument';
 import { ActionMenu } from './ActionMenu';
 import { Dialog } from './Dialog';
 import { Icon } from './icons';
@@ -39,8 +40,9 @@ type Editing = { mode: 'new' } | { mode: 'edit'; collection: Collection } | null
  * not available yet, never as "ready"), and searches the indexed text.
  * When the API is not deployed here, it says so once and the rest of the Library still works.
  */
-export function Collections({ uploadScope }: { uploadScope?: string }) {
+export function Collections({ uploadScope, role }: { uploadScope?: string; role?: string }) {
   const t = useT();
+  const writable = ['owner', 'admin', 'manager', 'agent'].includes(role ?? '');
   const { load, reload, update } = useLoad<{ collections: readonly Collection[] }>('collections', () => workspaceApi().listCollections(), (v) => hasArray(v, 'collections'));
   const [open, setOpen] = useState<string | null>(null);
   const [editing, setEditing] = useState<Editing>(null);
@@ -52,7 +54,7 @@ export function Collections({ uploadScope }: { uploadScope?: string }) {
     <section className={s.section} aria-labelledby="lib-collections">
       <div className={s.sectionHead}>
         <h2 id="lib-collections">{t('workspace.lib.collections')}</h2>
-        {load.state === 'ready' && !current && <button type="button" className={u.buttonPrimary} onClick={() => setEditing({ mode: 'new' })}><Icon name="plus" size={15} />{t('workspace.lib.new')}</button>}
+        {writable && load.state === 'ready' && !current && <button type="button" className={u.buttonPrimary} onClick={() => setEditing({ mode: 'new' })}><Icon name="plus" size={15} />{t('workspace.lib.new')}</button>}
       </div>
       <div role="status" aria-live="polite" className={c.live}>{notice && <p className={c.toast}>{notice}</p>}</div>
       {load.state === 'loading' && <LoadingRows label={t('workspace.lib.loading')} rows={2} tall />}
@@ -62,7 +64,7 @@ export function Collections({ uploadScope }: { uploadScope?: string }) {
           {collections.length > 0 && <LibrarySearch collections={collections} />}
           {collections.length === 0
             ? <EmptyState icon="bookOpen" title={t('workspace.lib.empty')} body={t('workspace.lib.emptyBody')}>
-                <button type="button" className={u.buttonPrimary} onClick={() => setEditing({ mode: 'new' })}><Icon name="plus" size={15} />{t('workspace.lib.new')}</button>
+                {writable && <button type="button" className={u.buttonPrimary} onClick={() => setEditing({ mode: 'new' })}><Icon name="plus" size={15} />{t('workspace.lib.new')}</button>}
               </EmptyState>
             : <ul className={s.grid}>
                 {collections.map((col) => (
@@ -84,11 +86,11 @@ export function Collections({ uploadScope }: { uploadScope?: string }) {
         </>
       )}
       {current && (
-        <CollectionPanel uploadScope={uploadScope} collection={current} onBack={() => setOpen(null)} onEdit={() => setEditing({ mode: 'edit', collection: current })}
+        <CollectionPanel writable={writable} uploadScope={uploadScope} collection={current} onBack={() => setOpen(null)} onEdit={() => setEditing({ mode: 'edit', collection: current })}
           onDeleted={() => { update((v) => ({ collections: v.collections.filter((x) => x.id !== current.id) })); setOpen(null); setNotice(t('workspace.lib.deleted', { name: current.name })); }} />
       )}
       {editing && (
-        <CollectionDialog editing={editing} onClose={() => setEditing(null)} onSaved={(col, created) => {
+        <CollectionDialog canShare={['owner', 'admin'].includes(role ?? '')} editing={editing} onClose={() => setEditing(null)} onSaved={(col, created) => {
           update((v) => ({ collections: created ? [col, ...v.collections] : v.collections.map((x) => (x.id === col.id ? col : x)) }));
           setEditing(null);
           setNotice(t(created ? 'workspace.lib.created' : 'workspace.lib.saved', { name: col.name }));
@@ -150,8 +152,10 @@ function LibrarySearch({ collections }: { collections: readonly Collection[] }) 
 
 type Upload = { id: string; name: string; size: number; state: 'uploading' | 'failed'; percent?: number | null; message?: string };
 
-function CollectionPanel({ collection: col, uploadScope, onBack, onEdit, onDeleted }: { uploadScope?: string; collection: Collection; onBack(): void; onEdit(): void; onDeleted(): void }) {
+function CollectionPanel({ collection: col, uploadScope, writable, onBack, onEdit, onDeleted }: { writable: boolean; uploadScope?: string; collection: Collection; onBack(): void; onEdit(): void; onDeleted(): void }) {
   const t = useT();
+  const canMutate = writable && col.ownedByMe;
+  const [moving, setMoving] = useState<LibraryDocument | null>(null);
   const { load, reload, update } = useLoad<CollectionDetail>(`col:${col.id}`, () => workspaceApi().getCollection(col.id), (v) => hasArray(v, 'documents'));
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [confirm, setConfirm] = useState<{ kind: 'collection' } | { kind: 'document'; doc: LibraryDocument } | null>(null);
@@ -173,6 +177,7 @@ function CollectionPanel({ collection: col, uploadScope, onBack, onEdit, onDelet
   }, [indexing, reload, load]);
 
   async function add(list: FileList | File[] | null) {
+    if (!canMutate) return;
     if (!uploadScope) { setMessage(t('workspace.err.storage')); return; }
     const files = [...(list ?? [])];
     const refused: string[] = [];
@@ -213,6 +218,7 @@ function CollectionPanel({ collection: col, uploadScope, onBack, onEdit, onDelet
   }
 
   async function reindex(doc: LibraryDocument) {
+    if (!canMutate) return;
     const r = await workspaceApi().reindexDocument(col.id, doc.id);
     if (r.ok && r.value?.document) { const next = r.value.document; update((v) => ({ ...v, documents: v.documents.map((d) => (d.id === next.id ? next : d)) })); setMessage(t('workspace.lib.reindexing', { name: doc.title })); }
     else setMessage(t(r.ok ? 'workspace.err.generic' : messageKeyFor(r)));
@@ -220,6 +226,7 @@ function CollectionPanel({ collection: col, uploadScope, onBack, onEdit, onDelet
 
   return (
     <div className={c.panel}>
+      {moving && <MoveDocument source={col} document={moving} onClose={() => setMoving(null)} onMoved={() => { setMoving(null); reload(); }} />}
       <div className={c.panelHead}>
         <button type="button" className={u.buttonGhost} onClick={reload}>{t('workspace.refresh')}</button>
         <button type="button" className={u.buttonGhost} onClick={onBack}><Icon name="arrowLeft" size={15} />{t('workspace.lib.back')}</button>
@@ -228,13 +235,13 @@ function CollectionPanel({ collection: col, uploadScope, onBack, onEdit, onDelet
           {col.description && <p>{col.description}</p>}
         </div>
         <Badge tone={col.visibility === 'organization' ? 'info' : 'neutral'}>{t(col.visibility === 'organization' ? 'workspace.lib.visOrg' : 'workspace.lib.visPrivate')}</Badge>
-        {col.ownedByMe && <ActionMenu label={t('workspace.lib.options', { name: col.name })} actions={[
+        {canMutate && <ActionMenu label={t('workspace.lib.options', { name: col.name })} actions={[
           { key: 'edit', label: t('workspace.lib.edit'), icon: 'pencil', onSelect: onEdit },
           { key: 'delete', label: t('workspace.lib.delete'), icon: 'trash', danger: true, separated: true, onSelect: () => setConfirm({ kind: 'collection' }) },
         ]} />}
       </div>
 
-      <div className={`${u.drop} ${dragging ? u.dropActive : ''}`}
+      {canMutate && <div className={`${u.drop} ${dragging ? u.dropActive : ''}`}
         onDragOver={(e) => { if (e.dataTransfer.types.includes('Files')) { e.preventDefault(); setDragging(true); } }}
         onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragging(false); }}
         onDrop={(e) => { e.preventDefault(); setDragging(false); void add(e.dataTransfer.files); }}>
@@ -243,7 +250,7 @@ function CollectionPanel({ collection: col, uploadScope, onBack, onEdit, onDelet
         <input ref={fileInput} type="file" multiple accept={LIBRARY_ACCEPT} className={u.sr} tabIndex={-1} aria-hidden="true" onChange={(e) => { void add(e.target.files); e.target.value = ''; }} />
         <button type="button" className={u.button} onClick={() => fileInput.current?.click()}><Icon name="upload" size={15} />{t('workspace.lib.upload')}</button>
         <p className={u.help}>{t('workspace.lib.formats', { max: formatBytes(UPLOAD_MAX_BYTES, t.locale) })}</p>
-      </div>
+      </div>}
 
       <div role="status" aria-live="polite" className={c.live}>{message && <p className={c.inline}>{message}</p>}</div>
 
@@ -284,8 +291,11 @@ function CollectionPanel({ collection: col, uploadScope, onBack, onEdit, onDelet
                     <td className={c.rowActions}>
                       <ActionMenu label={t('workspace.lib.docOptions', { name: d.title })} actions={[
                         { key: 'download', label: t('workspace.lib.download'), icon: 'download', onSelect: () => { window.location.href = workspaceApi().fileContentUrl(d.fileId); } },
-                        { key: 'reindex', label: t('workspace.lib.reindex'), icon: 'refresh', onSelect: () => void reindex(d) },
-                        { key: 'remove', label: t('workspace.lib.remove'), icon: 'trash', danger: true, separated: true, onSelect: () => setConfirm({ kind: 'document', doc: d }) },
+                        ...(canMutate ? [
+                        { key: 'reindex', label: t('workspace.lib.reindex'), icon: 'refresh' as const, onSelect: () => void reindex(d) },
+                        { key: 'remove', label: t('workspace.lib.remove'), icon: 'trash' as const, danger: true, separated: true, onSelect: () => setConfirm({ kind: 'document', doc: d }) },
+                        { key: 'move', label: t.locale === 'es' ? 'Mover documento' : 'Move document', onSelect: () => setMoving(d) },
+                        ] : []),
                       ]} />
                     </td>
                   </tr>
@@ -326,7 +336,7 @@ function ConfirmDelete({ title, body, confirm, onClose, onConfirm }: { title: st
   );
 }
 
-function CollectionDialog({ editing, onClose, onSaved }: { editing: NonNullable<Editing>; onClose(): void; onSaved(c: Collection, created: boolean): void }) {
+function CollectionDialog({ editing, canShare, onClose, onSaved }: { canShare: boolean; editing: NonNullable<Editing>; onClose(): void; onSaved(c: Collection, created: boolean): void }) {
   const t = useT();
   const start = editing.mode === 'edit' ? editing.collection : null;
   const [name, setName] = useState(start?.name ?? '');
@@ -337,6 +347,7 @@ function CollectionDialog({ editing, onClose, onSaved }: { editing: NonNullable<
   const id = useId();
   async function save(e: React.FormEvent) {
     e.preventDefault();
+    if (!canShare && visibility === 'organization' && start?.visibility !== 'organization') return;
     const n = name.trim(); if (!n) return;
     setSaving(true); setError(null);
     const d = description.trim();
@@ -358,7 +369,7 @@ function CollectionDialog({ editing, onClose, onSaved }: { editing: NonNullable<
         <fieldset className={u.choices}>
           <legend>{t('workspace.lib.visibility')}</legend>
           <label className={u.choice}><input type="radio" name="vis" checked={visibility === 'private'} onChange={() => setVisibility('private')} /><span>{t('workspace.lib.visPrivate')}<small>{t('workspace.lib.visPrivateHelp')}</small></span></label>
-          <label className={u.choice}><input type="radio" name="vis" checked={visibility === 'organization'} onChange={() => setVisibility('organization')} /><span>{t('workspace.lib.visOrg')}<small>{t('workspace.lib.visOrgHelp')}</small></span></label>
+          <label className={u.choice}><input type="radio" name="vis" disabled={!canShare && start?.visibility !== 'organization'} checked={visibility === 'organization'} onChange={() => setVisibility('organization')} /><span>{t('workspace.lib.visOrg')}<small>{t('workspace.lib.visOrgHelp')}</small></span></label>
         </fieldset>
         {start && start.visibility !== visibility && <p className={u.help}>{t('workspace.lib.visChange')}</p>}
         {error && <p className={u.fieldError} role="alert">{t(error)}</p>}

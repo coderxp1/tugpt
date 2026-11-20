@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { uploadSafely } from '@/lib/workspace/file-upload';
 import { customerModels } from '@/lib/workspace/assistant-capabilities';
 import { usePathname, useSearchParams } from 'next/navigation';
 import type { Capability } from './MentionPicker';
@@ -19,7 +20,7 @@ import {
   composeContent, MAX_FILES, MESSAGE_LIMIT, refusalFor, safeName, type AttachmentRefusal, type TextAttachment,
 } from '@/lib/workspace/attachments';
 import { mediaTypeFor, routeFile, MAX_UPLOADS, UPLOAD_MAX_BYTES, formatBytes, type UploadRefusal } from '@/lib/workspace/uploads';
-import { messageKeyFor, problemOf, workspaceApi } from '@/lib/workspace/service';
+import { workspaceApi } from '@/lib/workspace/service';
 
 /** Same-origin JSON + non-simple header: what isSameOriginMutation() requires. */
 export const MUTATION_HEADERS = { 'content-type': 'application/json', 'x-tugpt-csrf': '1' } as const;
@@ -55,12 +56,13 @@ export interface UploadItem {
   readonly size: number;
   readonly status: 'uploading' | 'ready' | 'failed';
   readonly fileId: string | null;
+  readonly percent?: number | null;
   /** The chat it is linked to, once linked. */
   readonly attachedTo: string | null;
   readonly message: string | null;
 }
 
-export function useChatSession(configured: PublicModel[]) {
+export function useChatSession(configured: PublicModel[], uploadScope?: string) {
   const models = useMemo(() => customerModels(configured), [configured]);
   const { add, touch, setBusy } = useThreads();
   const t = useT();
@@ -76,11 +78,15 @@ export function useChatSession(configured: PublicModel[]) {
   const [files, setFiles] = useState<TextAttachment[]>([]);
   const [fileNotice, setFileNotice] = useState<string | null>(null);
   const [uploads, setUploads] = useState<UploadItem[]>([]);
+  const uploadFiles = useRef(new Map<string, File>());
+  const uploadRequests = useRef(new Map<string, AbortController>());
+  useEffect(() => { const requests = uploadRequests.current; return () => { for (const controller of requests.values()) controller.abort(); }; }, []);
   const [uploadCap, setUploadCap] = useState<'unknown' | 'available' | 'unavailable'>('unknown');
   /** Bumped when files are linked to the open chat, so "Files in this chat" reloads. */
   const [filesVersion, setFilesVersion] = useState(0);
   const routeThread = threadIdFromPath(usePathname());
   const [seenRoute, setSeenRoute] = useState(routeThread);
+  useEffect(() => { const requests = uploadRequests.current; const files = uploadFiles.current; return () => { for (const controller of requests.values()) controller.abort(); files.clear(); }; }, [routeThread]);
   const [activeId, setActiveId] = useState<string | null>(routeThread);
   const [messages, setMessages] = useState<Message[]>([]);
   const [capabilities, setCapabilities] = useState<Capability[] | null>(null);
@@ -112,6 +118,7 @@ export function useChatSession(configured: PublicModel[]) {
     setSeenRoute(routeThread);
     if (routeThread !== activeId) {
       setRecovery(null); setActiveId(routeThread); setTurnAgent(null); setToolsUnavailable(false); setMessages([]); setApprovals([]); setError(null);
+      setUploads([]);
       if (routeThread === null) { setAttached([]); setFiles([]); setFileNotice(null); setUploads([]); }
     }
   }
@@ -262,25 +269,35 @@ export function useChatSession(configured: PublicModel[]) {
   }
 
   async function upload(item: UploadItem, file: File) {
-    const r = await workspaceApi().uploadFile(new Blob([file], { type: mediaTypeFor(file) }), safeName(file.name));
-    const fileId = r.ok && r.value && typeof r.value.file?.id === 'string' ? r.value.file.id : null;
-    if (r.ok && fileId) {
-      setUploadCap('available');
-      let attachedTo: string | null = null;
-      const thread = activeRef.current;
-      if (thread) { const a = await workspaceApi().attachFile(thread, fileId); if (a.ok) { attachedTo = thread; setFilesVersion((n) => n + 1); } }
-      setUploads((x) => x.map((u) => (u.id === item.id ? { ...u, status: 'ready', fileId, attachedTo } : u)));
-      return;
-    }
-    // An older server answers 200 with some other body, or an HTML 404: uploads are not available here.
-    const unavailable = r.ok || problemOf(r) === 'unavailable';
-    if (unavailable) setUploadCap('unavailable');
-    const message = unavailable ? t('workspace.upload.unavailable') : t(messageKeyFor(r as Extract<typeof r, { ok: false }>));
-    // Said once, in words, where the composer reports file problems. A feature that is not here
-    // leaves no chip behind; a failed upload keeps its chip (marked) so the person can remove it.
-    setFileNotice(`${safeName(item.name)}: ${message}`);
-    setUploads((x) => (unavailable ? x.filter((u) => u.id !== item.id) : x.map((u) => (u.id === item.id ? { ...u, status: 'failed', message } : u))));
+    if (uploadRequests.current.has(item.id)) return;
+    if (!uploadScope) { setFileNotice(t('workspace.upload.unavailable')); setUploads(x => x.filter(u => u.id !== item.id)); return; }
+    const controller = new AbortController(); uploadRequests.current.set(item.id, controller); uploadFiles.current.set(item.id, file);
+    const targetThread = activeRef.current;
+    setUploads(x => x.map(u => u.id === item.id ? { ...u, status: 'uploading', message: null } : u));
+    try {
+      const r = await uploadSafely(file, mediaTypeFor(file), uploadScope, controller.signal, percent => {
+        if (!controller.signal.aborted) setUploads(x => x.map(u => u.id === item.id ? { ...u, percent } : u));
+      }, workspaceApi());
+      if (controller.signal.aborted) return;
+      if (r.kind === 'stored' || r.kind === 'existing') {
+        setUploadCap('available'); let attachedTo: string | null = null;
+        // Never attach an old upload to a different conversation opened while it was uploading.
+        if (targetThread && activeRef.current === targetThread) {
+          const a = await workspaceApi().attachFile(targetThread, r.file.id);
+          if (a.ok) { attachedTo = targetThread; setFilesVersion(n => n + 1); }
+          else setFileNotice(t('workspace.upload.attachFailed'));
+        }
+        setUploads(x => x.map(u => u.id === item.id ? { ...u, status: 'ready', fileId: r.file.id, attachedTo } : u));
+        uploadFiles.current.delete(item.id); return;
+      }
+      const message = r.kind === 'failed'
+        ? (t.locale === 'es' ? 'Subida rechazada. Reintente explícitamente.' : 'Upload rejected. Retry explicitly.')
+        : (t.locale === 'es' ? 'Subida sin confirmar. Compruebe el archivo guardado; no se reenviará automáticamente.' : 'Upload unconfirmed. Check the saved file; it will not be resent automatically.');
+      setFileNotice(message); setUploads(x => x.map(u => u.id === item.id ? { ...u, status: 'failed', message } : u));
+    } catch { if (!controller.signal.aborted) { setFileNotice(t('workspace.upload.attachFailed')); setUploads(x => x.map(u => u.id === item.id ? { ...u, status: 'failed' } : u)); } }
+    finally { uploadRequests.current.delete(item.id); }
   }
+  function retryUpload(id: string) { const item = uploads.find(u => u.id === id); const file = uploadFiles.current.get(id); if (item && file) void upload(item, file); }
 
   /** Links uploads that finished before the chat existed (the first message creates it). */
   async function attachPending(threadId: string) {
@@ -290,7 +307,7 @@ export function useChatSession(configured: PublicModel[]) {
     if (results.some((x) => x.ok)) setFilesVersion((n) => n + 1);
     if (results.some((x) => !x.ok)) setFileNotice(t('workspace.upload.attachFailed'));
   }
-  function removeUpload(id: string) { setUploads((x) => x.filter((u) => u.id !== id)); }
+  function removeUpload(id: string) { uploadRequests.current.get(id)?.abort(); uploadFiles.current.delete(id); setUploads((x) => x.filter((u) => u.id !== id)); }
 
   function removeFile(id: string) { setFiles((x) => x.filter((f) => f.id !== id)); setFileNotice(null); }
 
@@ -446,7 +463,7 @@ export function useChatSession(configured: PublicModel[]) {
     activeId, messages, approvals, live, error, busy, models, model, modelKey, setModelKey,
     draft, setDraft, attached, matches, picker, showPicker, activeOption, listId, input, log,
     files, fileNotice, length, overLimit: length > MESSAGE_LIMIT,
-    uploads, uploadCap, uploading: uploads.some((u) => u.status === 'uploading'), filesVersion,
+    uploads, retryUpload, uploadCap, uploading: uploads.some((u) => u.status === 'uploading'), filesVersion,
     onDraft, onKey, choose, detach, openApps, addFiles, removeFile, removeUpload, send, stop, runApproved,
   };
 }

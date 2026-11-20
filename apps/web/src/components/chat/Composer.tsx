@@ -49,6 +49,7 @@ export interface ComposerProps {
   onFiles(files: FileList | File[] | null): void;
   onRemoveFile(id: string): void;
   onRemoveUpload?(id: string): void;
+  onRetryUpload?(id: string): void;
   onSend(): void;
   onStop(): void;
 }
@@ -88,7 +89,9 @@ export function Composer({ inputRef, ...p }: ComposerProps) {
               <li key={f.id} className={`${s.fileChip} ${f.status === 'failed' ? s.fileChipFailed : ''}`}>
                 <Icon name={f.status === 'failed' ? 'alert' : f.status === 'ready' ? 'check' : 'upload'} size={15} />
                 <span className={s.fileName} title={f.message ? `${f.name}: ${f.message}` : f.name}>{f.name}</span>
-                <small>{f.status === 'uploading' ? t('workspace.upload.uploading') : f.status === 'failed' ? t('workspace.upload.failed') : formatBytes(f.size, t.locale)}</small>
+                <small>{f.status === 'uploading' ? (f.percent === 100 ? (t.locale === 'es' ? 'Confirmando…' : 'Confirming…') : `${t('workspace.upload.uploading')}${f.percent != null ? ` ${f.percent}%` : ''}`) : f.status === 'failed' ? t('workspace.upload.failed') : formatBytes(f.size, t.locale)}</small>
+                {f.status === 'uploading' && <progress aria-label={f.name} max={100} value={f.percent ?? undefined} />}
+                {f.status === 'failed' && p.onRetryUpload && <button type="button" onClick={() => p.onRetryUpload?.(f.id)}>{t.locale === 'es' ? 'Comprobar / reintentar' : 'Check / retry'}</button>}
                 {f.status !== 'uploading' && p.onRemoveUpload && <button type="button" aria-label={t('workspace.files.remove', { name: f.name })} onClick={() => p.onRemoveUpload?.(f.id)}><Icon name="close" size={14} /></button>}
               </li>
             ))}</ul>}

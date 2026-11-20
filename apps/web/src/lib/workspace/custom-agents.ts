@@ -35,7 +35,9 @@ export const AGENTS_API = {
 type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
 export function createAgentsClient(fetchFn: FetchFn = (i, init) => fetch(i, init)) {
-  async function call<T>(method: string, url: string, body?: unknown): Promise<WorkspaceResult<T>> {
+  let retryAt = 0;
+  async function call<T>(method: string, url: string, body?: unknown): Promise<WorkspaceResult<T> & { retryAt?: number }> {
+    if (method !== 'GET' && Date.now() < retryAt) return { ok: false, status: 429, error: 'RATE_LIMITED', retryAt };
     const headers: Record<string, string> = { accept: 'application/json' };
     if (method !== 'GET') headers['x-tugpt-csrf'] = '1';
     if (body !== undefined) headers['content-type'] = 'application/json';
@@ -44,12 +46,19 @@ export function createAgentsClient(fetchFn: FetchFn = (i, init) => fetch(i, init
     let json: unknown = null;
     try { json = res.status === 204 ? null : await res.json(); } catch { if (res.ok) return { ok: false, status: res.status, error: 'UNEXPECTED_RESPONSE' }; }
     if (!res.ok) {
+      if (res.status === 429) {
+        const value = res.headers.get('retry-after');
+        const until = value && /^\d+$/.test(value) ? Date.now() + Number(value) * 1000 : value ? Date.parse(value) : NaN;
+        if (Number.isFinite(until) && until > Date.now()) retryAt = until;
+        return { ok: false, status: 429, error: 'RATE_LIMITED', retryAt };
+      }
       const code = json && typeof json === 'object' && typeof (json as { error?: unknown }).error === 'string' ? (json as { error: string }).error : 'UNEXPECTED_RESPONSE';
       return { ok: false, status: res.status, error: code as 'UNEXPECTED_RESPONSE' };
     }
     return { ok: true, value: json as T };
   }
   return {
+    retryAt: () => retryAt,
     getAgent: (id: string) => call<{ agent: CustomAgent }>('GET', AGENTS_API.agent(id)),
     listAgents: () => call<{ agents: readonly CustomAgent[] }>('GET', AGENTS_API.agents),
     createAgent: (input: AgentInput) => call<{ agent: CustomAgent }>('POST', AGENTS_API.agents, cleanAgent(input)),
