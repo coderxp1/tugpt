@@ -1,6 +1,7 @@
 'use client';
 
 import { useEffect, useId, useMemo, useRef, useState } from 'react';
+import { customerModels } from '@/lib/workspace/assistant-capabilities';
 import { usePathname, useSearchParams } from 'next/navigation';
 import type { Capability } from './MentionPicker';
 import type { ApprovalItem, Live, Message, PublicModel, RunResult, Thread } from './types';
@@ -59,7 +60,8 @@ export interface UploadItem {
   readonly message: string | null;
 }
 
-export function useChatSession(models: PublicModel[]) {
+export function useChatSession(configured: PublicModel[]) {
+  const models = useMemo(() => customerModels(configured), [configured]);
   const { add, touch, setBusy } = useThreads();
   const t = useT();
   const requestedAgent = useSearchParams()?.get('agent') ?? null;
@@ -100,7 +102,7 @@ export function useChatSession(models: PublicModel[]) {
   const listId = useId();
   const activeRef = useRef<string | null>(activeId);
   useEffect(() => { activeRef.current = activeId; }, [activeId]);
-  const model = models.find((m) => m.key === modelKey) ?? null;
+  const model = models.find((m) => m.key === modelKey && m.available !== false) ?? null;
   const busy = live !== null;
   const fail = (text: string) => setError({ text, connect: false });
 
@@ -428,9 +430,9 @@ export function useChatSession(models: PublicModel[]) {
       if (summary.terminal === null || controller.signal.aborted) { setRecovery({ threadId: id, partial, original: content }); fail(turnProblem('INTERRUPTED')); }
       setAttached([]);
       touch(id, typed.trim() || sentFiles[0]?.name || content);
-    } catch (e) {
+    } catch {
       setRecovery({ threadId: id, partial, original: content });
-      if (!controller.signal.aborted) fail(e instanceof Error && e.message ? e.message : 'The message could not be sent.');
+      if (!controller.signal.aborted) fail('The response was interrupted. Check saved messages before sending again.');
     } finally { sending.current = false; finish(); }
   }
 

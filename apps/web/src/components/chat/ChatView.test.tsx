@@ -283,8 +283,8 @@ describe('ChatView approval cards', () => {
 
 describe('Workspace composer', () => {
   const two: PublicModel[] = [
-    { key: 'scout', label: 'TuGPT Scout', description: 'Private model', private: true, toolCalling: true },
-    { key: 'langdock:gpt', label: 'GPT Hosted', description: 'Hosted model', private: false, toolCalling: false },
+    { key: 'scout', experience: 'standard', label: 'TuGPT Scout', description: 'Private model', private: true, toolCalling: true },
+    { key: 'langdock:gpt', experience: 'advanced', label: 'GPT Hosted', description: 'Hosted model', private: false, toolCalling: false },
   ];
 
   it('switches model from the model menu, by keyboard, and sends with the chosen model', async () => {
@@ -297,18 +297,18 @@ describe('Workspace composer', () => {
       return ok({ threads: [] });
     });
     renderChat({ models: two });
-    const button = screen.getByRole('button', { name: 'Model: TuGPT Scout' });
+    const button = screen.getByRole('button', { name: 'Assistant capability: Standard' });
     expect(button.getAttribute('aria-haspopup')).toBe('listbox');
     fireEvent.click(button);
-    const list = await screen.findByRole('listbox', { name: 'Choose a model' });
+    const list = await screen.findByRole('listbox', { name: 'Choose an assistant capability' });
     expect(list.querySelectorAll('[role="option"]').length).toBe(2);
-    expect(list.querySelector('[aria-selected="true"]')?.textContent).toContain('TuGPT Scout');
-    expect(list.textContent).toContain('Private');
-    expect(list.textContent).toContain('Hosted (EU)');
+    expect(list.querySelector('[aria-selected="true"]')?.textContent).toContain('Standard');
+    expect(list.textContent).not.toContain('Private');
+    expect(list.textContent).not.toMatch(/GPT|Hosted|Scout/);
     fireEvent.keyDown(list, { key: 'ArrowDown' });
     fireEvent.keyDown(list, { key: 'Enter' });
-    expect(screen.queryByRole('listbox', { name: 'Choose a model' })).toBeNull();
-    expect(screen.getByRole('button', { name: 'Model: GPT Hosted' })).toBeTruthy();
+    expect(screen.queryByRole('listbox', { name: 'Choose an assistant capability' })).toBeNull();
+    expect(screen.getByRole('button', { name: 'Assistant capability: Advanced' })).toBeTruthy();
     fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'hello' } });
     fireEvent.click(screen.getByRole('button', { name: 'Send' }));
     await screen.findByText('ok');
@@ -317,11 +317,11 @@ describe('Workspace composer', () => {
 
   it('closes the model menu on Escape and returns focus to its button', async () => {
     renderChat({ models: two });
-    const button = screen.getByRole('button', { name: 'Model: TuGPT Scout' });
+    const button = screen.getByRole('button', { name: 'Assistant capability: Standard' });
     fireEvent.click(button);
-    await screen.findByRole('listbox', { name: 'Choose a model' });
+    await screen.findByRole('listbox', { name: 'Choose an assistant capability' });
     fireEvent.keyDown(document.activeElement ?? document.body, { key: 'Escape' });
-    expect(screen.queryByRole('listbox', { name: 'Choose a model' })).toBeNull();
+    expect(screen.queryByRole('listbox', { name: 'Choose an assistant capability' })).toBeNull();
     expect(document.activeElement).toBe(button);
   });
 
@@ -519,11 +519,11 @@ it('does not silently replace an unavailable saved model', async () => {
      ? { thread: { ...thread, agentId: null, modelKey: 'retired-model' }, messages: [] } : { threads: [thread], nextCursor: null }
  ))));
  renderChat({ models }, [thread]);
- await screen.findByText('The saved model is unavailable. Select an available model before sending.');
+ await screen.findByText('The saved assistant capability is unavailable. Choose an available capability before sending.');
  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Choose deliberately' } });
  expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
- fireEvent.click(screen.getByRole('button', { name: /^Model:/ }));
- fireEvent.mouseDown(await screen.findByRole('option', { name: /TuGPT Scout/ }));
- expect(screen.queryByText('The saved model is unavailable. Select an available model before sending.')).toBeNull();
+ fireEvent.click(screen.getByRole('button', { name: /^Assistant capability:/ }));
+ fireEvent.mouseDown(await screen.findByRole('option', { name: /TuGPT Assistant/ }));
+ expect(screen.queryByText('The saved assistant capability is unavailable. Choose an available capability before sending.')).toBeNull();
  expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
 });

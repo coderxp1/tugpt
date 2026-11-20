@@ -3,7 +3,6 @@
 import Link from 'next/link';
 import { useThreads } from '@/components/workspace/ThreadsProvider';
 import { useT } from '@/i18n/provider';
-import { Icon } from '@/components/workspace/icons';
 import { ChatFiles } from './ChatFiles';
 import { Composer } from './Composer';
 import { Conversation } from './Conversation';
@@ -25,8 +24,9 @@ export interface ChatViewProps {
  * conversation, the composer docks at the bottom. Model, agent, @ apps and files live in the
  * composer, so switching any of them never changes the layout. Recent chats live in the sidebar.
  */
-export function ChatView({ models, canApprove = false, firstName = null }: ChatViewProps) {
-  const c = useChatSession(models);
+export function ChatView({ models: configured, canApprove = false, firstName = null }: ChatViewProps) {
+  const c = useChatSession(configured);
+  const models = c.models;
   const t = useT();
   const { threads, manage } = useThreads();
   const title = (c.activeId && threads?.find((x) => x.id === c.activeId)?.title) || 'New chat';
@@ -41,7 +41,6 @@ export function ChatView({ models, canApprove = false, firstName = null }: ChatV
     <section className={`${s.view} ${fresh ? s.fresh : ''}`} aria-labelledby="chat-title">
       <header className={s.bar}>
         <h1 id="chat-title" className={s.title} title={title}>{title}</h1>
-        {c.model?.private && <span className={s.privacy}><Icon name="lock" size={14} />{t('workspace.model.privateNote')}</span>}
       </header>
       {c.activeId && manage === 'available' && <ChatFiles threadId={c.activeId} version={c.filesVersion} />}
 

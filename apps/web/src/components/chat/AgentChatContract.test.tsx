@@ -90,13 +90,13 @@ it('restores authorized saved agent identity and citations with the release gate
 it.each([null])('restores explicit null binding as ordinary chat, not a URL-selected agent', async (agentId) => {
   nav.path = `/workspace/c/${tid}`; setup([], false, { agentId, messages: [message] });
   await screen.findByText('Answer from sources.');
-  expect(screen.getByRole('button', { name: /TuGPT Assistant/ })).toBeTruthy();
+  expect(screen.getByRole('button', { name: /^Agent: TuGPT Assistant/ })).toBeTruthy();
   expect(calls.some((c) => c.url.startsWith('/api/v1/agents'))).toBe(false);
 });
 it('fails closed for lost agent access instead of falsely showing the built-in agent', async () => {
   nav.path = `/workspace/c/${tid}`; setup([], true, { agentId: agent.id, messages: [message] });
   await screen.findByRole('button', { name: /This agent is unavailable/ });
-  expect(screen.queryByRole('button', { name: /TuGPT Assistant/ })).toBeNull();
+  expect(screen.queryByRole('button', { name: /^Agent: TuGPT Assistant/ })).toBeNull();
 });
 it('drops malformed restored citations while preserving valid sources and flag', async () => {
   nav.path = `/workspace/c/${tid}`; setup([], false, { agentId: null, messages: [{ ...message, citations: [{}, citation], knowledgeUnavailable: true }] });

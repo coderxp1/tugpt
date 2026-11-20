@@ -31,14 +31,14 @@ const REQUEST: Record<string, ChatProblem> = {
   'An attached integration is not connected': { text: 'One of the attached apps is not connected. Connect it, or remove it from the message.', connect: true },
   'This model cannot use integrations': { text: 'The selected model has not passed tool-calling verification, so it cannot use apps. Remove the app or pick another model.', connect: false },
   'This integration is not available in chat yet': { text: 'One of the attached apps is not available in chat yet. Remove it to send the message.', connect: false },
-  'Unknown model': { text: 'This model is no longer available. Pick another one.', connect: false },
+  'Unknown model': { text: 'This assistant capability is unavailable. Choose an available capability.', connect: false },
   'Two attached integrations offer the same tool. Attach one of them per message': { text: 'Two of the attached apps offer a tool with the same name. Keep one and send the other question separately.', connect: false },
   'Attach one calendar per message': { text: 'Google and Outlook calendars cannot be attached to the same message yet. Keep one and send the other question separately.', connect: false },
 };
 
 /** Maps a server `error` string (or nothing) to what the person should read. */
 export function requestProblem(serverError: string | undefined): ChatProblem {
-  return (serverError && REQUEST[serverError]) || { text: serverError || 'The message could not be sent.', connect: false };
+  return (serverError && REQUEST[serverError]) || { text: 'The message could not be sent.', connect: false };
 }
 
 export interface PickerCapability { state: 'connected' | 'requires_connection' | 'disabled_by_policy' | 'not_available'; toolAvailable?: boolean; unavailableReason?: string }
