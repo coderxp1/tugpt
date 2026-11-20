@@ -136,3 +136,4 @@ button.secondary{border:1px solid #d7d7cf}
 .stats dd{margin:4px 0 0;font-size:20px;font-weight:700}
 .tableWrap{overflow-x:auto}
 @media (max-width:720px){.stack th[scope=row]{display:block;font-size:15px;padding:2px 0 4px}}
+@media (max-width:720px){.stack td>.badge{justify-self:start}}
