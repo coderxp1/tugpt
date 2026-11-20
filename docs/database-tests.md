@@ -221,6 +221,29 @@ no snapshot without its tool rows, and that a follow-up request gets the next ve
 Required environment: `SNAP_BASE_URL`, `SNAP_ORIGIN`, `SNAP_ORG_ID`, `SNAP_ENDPOINT_ID`,
 `SNAP_ENDPOINT_URL`, `SNAP_COOKIE_FILE`, `SNAP_PG_CONTAINER`, `SNAP_PG_PW_FILE`.
 
+## Route-level idempotency / timeout regression (snapshot route, M9)
+
+`scripts/regression/snapshot-idempotency.py CASE [ARGS]` drives the real chain Next → PostgREST → Postgres on a
+**disposable** database with an `Idempotency-Key` on every POST (same environment as above). Since M9 the route
+calls `create_mcp_snapshot_idempotent` with a deadline of now + 3 s; the database rolls back a write that runs past
+it, so a snapshot never commits after the app (5 s) has given up, except for commit + response taking > 2 s.
+
+| Case | Expected |
+|---|---|
+| `slow-timeout 6` / `slow-timeout 9` | 503 `DATABASE_TIMEOUT` at ~5 s; replays while it runs → 409 `IN_PROGRESS`; the write rolls back (deadline / `statement_timeout`); the next replay → 201, exactly one snapshot; the replay after that → 200, same id |
+| `lost-response` | client gives up at 0.5 s, the 1.5 s write commits; `GET ?idempotencyKey=` → `committed`; replay → 200 with the original id/version (`Idempotent-Replayed: true`), no duplicate |
+| `in-progress` | replay during a 2 s write → 409 `IN_PROGRESS` + `Retry-After: 2`; original → 201 |
+| `same-key N` (2/5/10) | one 201, the rest 200 replay or 409 `IN_PROGRESS`; exactly one snapshot |
+| `diff-keys N ROUNDS` | all 201, contiguous versions, one record per key |
+| `lock row` ≥ 2 s | 503 `ENDPOINT_BUSY` after ~2 s, nothing written; replay → 201 |
+| `lock tools-ddl` ≥ 2 s | 503 `SNAPSHOT_STORE_BUSY` after ~2 s, nothing written; replay → 201 |
+| `slow-write` ≤ 2.5 s / 4.5 s | 201 / 503 `SNAPSHOT_DEADLINE_EXCEEDED` before 5 s, rolled back; replay → 201 |
+| `replay-under-ddl` | replay of a committed key during DDL on `external_tools` → 503 `SNAPSHOT_STORE_BUSY` (never 500) |
+| `read-timeout 9` | `GET /snapshots/{id}/tools` with `external_tool_snapshots` locked 9 s → 503 `DATABASE_TIMEOUT` at ~5 s, exactly one database attempt (postgrest-js no longer retries a timed-out GET) |
+
+Every case also asserts: no 500, no idle-in-transaction sessions, no ungranted locks, contiguous versions, no
+partial snapshots, one idempotency record per snapshot, no `40001` in the Postgres log.
+
 ## Known gap
 
 The `database-tests` job runs but is **not yet a required status check** on
