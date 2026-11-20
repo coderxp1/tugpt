@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server';
-import { DatabaseTimeoutError, RepoError } from './external-mcp-repo';
+import { ActivationDeniedError, DatabaseTimeoutError, EndpointNotFoundError, RepoError } from './external-mcp-repo';
 import type { ApiError } from '@/lib/draft-api/types';
 
 /**
@@ -16,6 +16,15 @@ export function endpointLookupFailure(err: unknown): Response | null {
   if (err instanceof RepoError && err.pgCode === '42501') {
     const body: ApiError = { error: { code: 'FORBIDDEN', message: 'Managing this MCP endpoint requires the organization owner or admin role' } };
     return NextResponse.json(body, { status: 403, headers: { 'cache-control': 'no-store' } });
+  }
+  if (err instanceof ActivationDeniedError) {
+    // 20261120000008: the database refused activation (newest snapshot not approved or revoked).
+    const body: ApiError = { error: { code: 'ACTIVATION_DENIED', message: 'Review and approve the newest tool list before activating this endpoint' } };
+    return NextResponse.json(body, { status: 409, headers: { 'cache-control': 'no-store' } });
+  }
+  if (err instanceof EndpointNotFoundError) {
+    const body: ApiError = { error: { code: 'NOT_FOUND', message: 'MCP endpoint not found' } };
+    return NextResponse.json(body, { status: 404, headers: { 'cache-control': 'no-store' } });
   }
   return null;
 }
