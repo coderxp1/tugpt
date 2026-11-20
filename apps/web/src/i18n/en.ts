@@ -519,7 +519,7 @@ export const en: Dictionary = {
   'errors.MEDIA_JOB_NOT_FOUND': 'Media job not found',
   'errors.INVALID_MEDIA_JOB_STATE': 'This media job cannot be changed in its current state',
   'errors.MEDIA_RESULT_NOT_FOUND': 'This media job has no result yet',
-  'errors.FEATURE_UNAVAILABLE': 'Media generation is not available',
+  'errors.FEATURE_UNAVAILABLE': 'This feature is not enabled for your organization',
   'errors.INVALID_REQUEST': 'Invalid media request',
   // Dashboard hub (/dashboard)
   'hub.metaTitle': 'Dashboard',

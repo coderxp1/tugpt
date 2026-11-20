@@ -140,6 +140,12 @@ const ROUTES: RouteExpectation[] = [
     why: 'Media job detail with private result preview. The proxy is the only gate on the page shell.',
   },
   {
+    path: '/invite',
+    kind: 'page',
+    type: 'protected',
+    why: 'Invitee side of a team invitation. Accepting requires a signed-in, freshly verified account, so the shell stays behind the session gate; the one-time token travels only in the URL fragment and is never sent to the server by the browser.',
+  },
+  {
     path: '/settings/integrations',
     kind: 'page',
     type: 'protected',

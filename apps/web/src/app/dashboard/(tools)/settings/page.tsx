@@ -3,6 +3,7 @@ import Link from 'next/link';
 import { getSessionContext } from '@/lib/tenant/server';
 import { OrganizationSwitcher } from '@/components/shell/OrganizationSwitcher';
 import s from '@/components/connect/connect.module.css';
+import { TeamInvitations } from '@/components/team/TeamInvitations';
 
 export const dynamic = 'force-dynamic';
 export const metadata: Metadata = { title: 'Settings · TuGPT' };
@@ -28,6 +29,7 @@ export default async function SettingsPage() {
           <dl className={s.facts}><dt>Name</dt><dd>{t?.organizationName ?? 'Not available'}</dd><dt>Your role</dt><dd>{t ? ROLE[t.role] ?? t.role : 'Not available'}</dd></dl>
           <div className={s.actions}><Link className={s.secondary} href="/dashboard/connect">Manage connections</Link><OrganizationSwitcher label="Switch organization" /></div>
         </section>
+        <TeamInvitations role={t?.role ?? null} organizationName={t?.organizationName ?? null} />
       </div>
     </div>
   );

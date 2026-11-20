@@ -537,7 +537,7 @@ export const es = {
   'errors.MEDIA_JOB_NOT_FOUND': 'No se encontró el trabajo de medios',
   'errors.INVALID_MEDIA_JOB_STATE': 'Este trabajo de medios no se puede modificar en su estado actual',
   'errors.MEDIA_RESULT_NOT_FOUND': 'Este trabajo de medios aún no tiene resultado',
-  'errors.FEATURE_UNAVAILABLE': 'La generación de medios no está disponible',
+  'errors.FEATURE_UNAVAILABLE': 'Esta función no está habilitada para tu organización',
   'errors.INVALID_REQUEST': 'La solicitud de medios no es válida',
   // Dashboard hub (/dashboard)
   'hub.metaTitle': 'Panel',
