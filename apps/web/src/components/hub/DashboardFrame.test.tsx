@@ -4,7 +4,7 @@ import { cleanup, render, screen } from '@testing-library/react';
 
 const nav = vi.hoisted(() => ({ path: '/dashboard/create' }));
 vi.mock('next/navigation', () => ({ usePathname: () => nav.path }));
-vi.mock('@/i18n/provider', () => ({ useT: () => (k: string) => (k === 'hub.state.held' ? 'On hold pending review' : k) }));
+vi.mock('@/i18n/provider', async () => { const { createTranslator } = await import('@/i18n'); const en = createTranslator('en'); return { useT: () => en }; });
 import { DashboardFrame } from './DashboardFrame';
 
 afterEach(cleanup);

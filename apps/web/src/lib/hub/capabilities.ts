@@ -1,5 +1,7 @@
 import type { ProductView, ProductGlyph, ProductId } from './products';
 import type { FeatureKey } from './features';
+import { createTranslator } from '@/i18n';
+import type { Translator } from '@/i18n/types';
 
 /** The official Blueprint's fourteen areas, not a claim that all are shipped. */
 export const BLUEPRINT_AREAS = [
@@ -45,6 +47,17 @@ export const CAPABILITIES: readonly Capability[] = [
   { id: 'governance', title: 'Administration & Governance', description: 'Permissions, policies and oversight.', group: 'Operate', glyph: 'book', area: 'Administration & Governance', note: 'Permissions already apply to every organization. Members and invitations are in Settings.' },
   { id: 'privacy', title: 'Privacy & Deployment', description: 'Secure adoption and deployment choices.', group: 'Operate', glyph: 'book', area: 'Privacy & Deployment', note: 'Choosing where TuGPT is hosted is not available in the Dashboard yet.' },
 ];
-export function capabilityViews(products: readonly ProductView[]) {
-  return CAPABILITIES.map(c => ({ ...c, productView: products.find(p => p.id === c.product) ?? null }));
+const EN = createTranslator('en');
+/** Group heading and subline in the reader's language; `name` stays the stable id. */
+export const groupText = (g: Group, t: Translator = EN) => ({ title: t(`cap.group.${g}`), sub: t(`cap.group.${g}.sub`) });
+
+/** Cards in the reader's language (the English constants above are the fallback), so search matches what is shown. */
+export function capabilityViews(products: readonly ProductView[], t: Translator = EN) {
+  return CAPABILITIES.map(c => ({
+    ...c,
+    title: t.maybe(`cap.${c.id}.title`, c.title),
+    description: t.maybe(`cap.${c.id}.desc`, c.description),
+    note: c.note ? t.maybe(`cap.${c.id}.note`, c.note) : undefined,
+    productView: products.find(p => p.id === c.product) ?? null,
+  }));
 }
