@@ -18,7 +18,7 @@ import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch } from './mcp-egress';
 import { loadChatToolRegistry, mcpUnavailableReason, runnableEndpoints, type McpAuditSink, type McpDeps } from './mcp';
 import { argumentsSha256 } from './approval.server';
-import { canonicalJson, runTurn, type TurnEvent } from './turn';
+import { APPROVAL_PENDING_ANSWER, canonicalJson, runTurn, type TurnEvent } from './turn';
 import type { WireMessage } from './openai-compatible';
 import { listCapabilities, type CapabilityRow } from './store';
 import { toolLabel, toolProblem } from '../connect-ui/chat-errors';
@@ -539,7 +539,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       let round = 0;
       const events: TurnEvent[] = [];
       const gen = runTurn({ messages: [{ role: 'user', content: 'go' }], tools: ts.specs }, {
-        async completeWithTools(messages) {
+        async completeWithTools() {
           round += 1;
           if (round === 1) {
             return { text: null, toolCalls: [
@@ -548,10 +548,10 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
               { id: 't3', name: 'create_ticket', arguments: { q: 'ok' } },
             ] };
           }
-          for (const m of messages) if (m.role === 'tool') toolMessages.push(m.content);
-          return { text: 'Done.', toolCalls: [] };
+          return { text: 'unused: a pending approval ends the tool rounds', toolCalls: [] };
         },
-        stream: async function* () { yield 'unused'; },
+        // One call waits for approval, so the turn asks for no further tool round; the model only summarizes.
+        stream: async function* (messages) { for (const m of messages) if (m.role === 'tool') toolMessages.push(m.content); yield 'Done.'; },
         executeTool: (c) => ts.execute(c),
       });
       for (;;) { const n = await gen.next(); if (n.done) break; events.push(n.value); }
@@ -560,7 +560,9 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
         { type: 'tool_start', tool: 'create_ticket', callId: 't2' }, { type: 'tool_result', tool: 'create_ticket', callId: 't2', ok: false, code: 'APPROVAL_REQUIRED' },
         { type: 'tool_start', tool: 'create_ticket', callId: 't3' }, { type: 'tool_result', tool: 'create_ticket', callId: 't3', ok: true },
         { type: 'delta', text: 'Done.' },
+        { type: 'delta', text: `\n\n${APPROVAL_PENDING_ANSWER}` },
       ]);
+      expect(round).toBe(1);
       // What the messages route adds to each tool event, and what the UI renders from it.
       const d = ts.describe('search_docs');
       expect(d).toEqual({ capabilityKey: 'external.search_docs', providerName: 'Acme Docs MCP', providerKey: 'mcp' });

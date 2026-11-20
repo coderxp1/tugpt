@@ -76,22 +76,27 @@ export async function* streamCompletion(
   const reader = res.body.getReader();
   const decoder = new TextDecoder();
   let buffer = '';
-  for (;;) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    buffer += decoder.decode(value, { stream: true });
-    let nl: number;
-    while ((nl = buffer.indexOf('\n')) >= 0) {
-      const line = buffer.slice(0, nl).trim();
-      buffer = buffer.slice(nl + 1);
-      if (!line.startsWith('data:')) continue;
-      const data = line.slice(5).trim();
-      if (data === '[DONE]') return;
-      let parsed: unknown;
-      try { parsed = JSON.parse(data); } catch { continue; }
-      const delta = (parsed as { choices?: { delta?: { content?: unknown } }[] }).choices?.[0]?.delta?.content;
-      if (typeof delta === 'string' && delta.length > 0) yield delta;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffer += decoder.decode(value, { stream: true });
+      let nl: number;
+      while ((nl = buffer.indexOf('\n')) >= 0) {
+        const line = buffer.slice(0, nl).trim();
+        buffer = buffer.slice(nl + 1);
+        if (!line.startsWith('data:')) continue;
+        const data = line.slice(5).trim();
+        if (data === '[DONE]') return;
+        let parsed: unknown;
+        try { parsed = JSON.parse(data); } catch { continue; }
+        const delta = (parsed as { choices?: { delta?: { content?: unknown } }[] }).choices?.[0]?.delta?.content;
+        if (typeof delta === 'string' && delta.length > 0) yield delta;
+      }
     }
+  } finally {
+    // Also runs when the consumer stops early (turn boundary): stop the model generating.
+    reader.cancel().catch(() => undefined);
   }
 }
 

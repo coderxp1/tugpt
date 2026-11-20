@@ -19,6 +19,7 @@
  *     exactly one tool message per call, in the same order.
  */
 import type { ParsedToolCall, ToolSpec, WireMessage } from './openai-compatible';
+import { cleanToolTurnText, TurnBoundaryFilter } from './model-text';
 
 export interface ToolExecution {
   readonly ok: boolean;
@@ -81,6 +82,47 @@ export function assignCallIds(calls: readonly ParsedToolCall[], used: Set<string
   });
 }
 
+/** A data-changing call is waiting for approval; nothing ran, so no model is asked to describe it. */
+export const APPROVAL_PENDING_ANSWER =
+  'Nothing has run yet. This action needs approval from an owner or admin in the card below; it runs only after that, and only once.';
+
+/** Tools were offered but none ran, and the model text had nothing presentable left. */
+export const NO_TOOL_RESULT_ANSWER =
+  'No tool was run for this message, so there is no result to show. Ask again if you want TuGPT to use the attached app.';
+
+/** A tool ran, but the model text had nothing presentable left. */
+export const RESULT_WITHOUT_SUMMARY_ANSWER =
+  'The tool ran, but TuGPT could not write a summary of the result. Ask again for a summary.';
+
+/** Plain chat: stream deltas through the turn-boundary filter and stop the model at a leaked header. */
+async function* streamClean(source: AsyncIterable<string>): AsyncGenerator<TurnEvent, string> {
+  const f = new TurnBoundaryFilter();
+  let answer = '';
+  for await (const chunk of source) {
+    const out = f.push(chunk);
+    if (out) { answer += out; yield { type: 'delta', text: out }; }
+    if (f.ended) break;
+  }
+  const rest = f.flush();
+  if (rest) { answer += rest; yield { type: 'delta', text: rest }; }
+  return answer;
+}
+
+/** Turn with tools: collect the model text, clean it, then emit it once (or a fixed server text). */
+async function* emitToolTurnText(raw: string, offered: ReadonlySet<string>, anySucceeded: boolean): AsyncGenerator<TurnEvent, string> {
+  const cleaned = cleanToolTurnText(raw, { offered, anySucceeded });
+  const answer = cleaned || (anySucceeded ? RESULT_WITHOUT_SUMMARY_ANSWER : NO_TOOL_RESULT_ANSWER);
+  yield { type: 'delta', text: answer };
+  return answer;
+}
+
+async function collectStream(source: AsyncIterable<string>): Promise<string> {
+  const f = new TurnBoundaryFilter();
+  let text = '';
+  for await (const chunk of source) { text += f.push(chunk); if (f.ended) break; }
+  return text + f.flush();
+}
+
 export async function* runTurn(input: TurnInput, ports: TurnPorts): AsyncGenerator<TurnEvent, string> {
   const messages: WireMessage[] = [...input.messages];
   const usedIds = new Set<string>();
@@ -88,33 +130,39 @@ export async function* runTurn(input: TurnInput, ports: TurnPorts): AsyncGenerat
     if (m.role === 'assistant') for (const tc of m.tool_calls ?? []) usedIds.add(tc.id);
     if (m.role === 'tool') usedIds.add(m.tool_call_id);
   }
-  let answer = '';
-  if (input.tools.length > 0) {
-    const rounds = input.maxToolRounds ?? 2;
-    for (let round = 0; round < rounds; round++) {
-      const r = await ports.completeWithTools(messages, input.tools);
-      const calls = assignCallIds(dedupeCalls(r.toolCalls), usedIds, round);
-      if (calls.length === 0) {
-        if (r.text) {
-          yield { type: 'delta', text: r.text };
-          return r.text;
-        }
-        break;
-      }
-      messages.push({
-        role: 'assistant', content: r.text,
-        tool_calls: calls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) } })),
-      });
-      for (const call of calls) {
-        yield* runOne(call, ports, messages);
-      }
+  if (input.tools.length === 0) return yield* streamClean(ports.stream(messages));
+
+  const offered = new Set(input.tools.map((t) => t.name));
+  let anySucceeded = false;
+  let pending = false;
+  const rounds = input.maxToolRounds ?? 2;
+  for (let round = 0; round < rounds && !pending; round++) {
+    const r = await ports.completeWithTools(messages, input.tools);
+    const calls = assignCallIds(dedupeCalls(r.toolCalls), usedIds, round);
+    if (calls.length === 0) {
+      if (r.text) return yield* emitToolTurnText(r.text, offered, anySucceeded);
+      break;
+    }
+    messages.push({
+      role: 'assistant', content: r.text,
+      tool_calls: calls.map((c) => ({ id: c.id, type: 'function', function: { name: c.name, arguments: JSON.stringify(c.arguments) } })),
+    });
+    for (const call of calls) {
+      const outcome = yield* runOne(call, ports, messages);
+      if (outcome.ok) anySucceeded = true;
+      else if (outcome.code === 'APPROVAL_REQUIRED') pending = true;
     }
   }
-  for await (const delta of ports.stream(messages)) {
-    answer += delta;
-    yield { type: 'delta', text: delta };
+  if (pending && !anySucceeded) {
+    // Nothing ran. Asking the model here produced invented results and leaked turns (Nov 20).
+    yield { type: 'delta', text: APPROVAL_PENDING_ANSWER };
+    return APPROVAL_PENDING_ANSWER;
   }
-  return answer;
+  const answer = yield* emitToolTurnText(await collectStream(ports.stream(messages)), offered, anySucceeded);
+  if (!pending) return answer;
+  const tail = `\n\n${APPROVAL_PENDING_ANSWER}`;
+  yield { type: 'delta', text: tail };
+  return answer + tail;
 }
 
 async function* runOne(call: ParsedToolCall, ports: Pick<TurnPorts, 'executeTool'>, messages: WireMessage[]): AsyncGenerator<TurnEvent, { readonly ok: boolean; readonly code?: string }> {
@@ -149,12 +197,7 @@ export async function* runApprovedCall(input: { readonly messages: readonly Wire
     yield { type: 'delta', text: APPROVED_CALL_REFUSED_ANSWER };
     return APPROVED_CALL_REFUSED_ANSWER;
   }
-  let answer = '';
-  for await (const delta of ports.stream(messages)) {
-    answer += delta;
-    yield { type: 'delta', text: delta };
-  }
-  return answer;
+  return yield* emitToolTurnText(await collectStream(ports.stream(messages)), new Set([call.name]), outcome.ok);
 }
 
 /**

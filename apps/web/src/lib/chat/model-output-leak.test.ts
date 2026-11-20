@@ -6,8 +6,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import leak from './__fixtures__/scout-leak-after-approval-required.json';
-import * as turn from './turn';
-import { runApprovedCall, runTurn, type TurnEvent, type TurnPorts } from './turn';
+import { APPROVAL_PENDING_ANSWER, NO_TOOL_RESULT_ANSWER, runApprovedCall, runTurn, type TurnEvent, type TurnPorts } from './turn';
 import type { ParsedToolCall, ToolSpec, WireMessage } from './openai-compatible';
 
 const tool: ToolSpec = { name: 'create_entities', description: 'Create multiple new entities in the knowledge graph.', parameters: { type: 'object' } };
@@ -41,7 +40,7 @@ describe('model-output leak: approval pending (verbatim Scout transcript)', () =
     expect(h.executed).toHaveLength(1);
     expect(h.rounds()).toBe(1);
     expect(h.streams()).toBe(0);
-    expect(answer).toBe((turn as Record<string, unknown>).APPROVAL_PENDING_ANSWER);
+    expect(answer).toBe(APPROVAL_PENDING_ANSWER);
     expect(answer).toMatch(/^Nothing has run yet/);
     expect(text(events)).toBe(answer);
     for (const m of LEAK_MARKERS) expect(answer).not.toMatch(m);
@@ -63,14 +62,14 @@ describe('model-output leak: model text from a tools round', () => {
     const { events, answer } = await collect(runTurn({ messages: user, tools: [tool] }, h.p));
     expect(h.executed).toHaveLength(0);
     expect(events.some((e) => e.type === 'tool_start' || e.type === 'tool_result')).toBe(false);
-    expect(answer).toBe((turn as Record<string, unknown>).NO_TOOL_RESULT_ANSWER);
+    expect(answer).toBe(NO_TOOL_RESULT_ANSWER);
     for (const m of LEAK_MARKERS) expect(answer).not.toMatch(m);
   });
   it('a malformed text-form call with a fake confirmation: nothing runs and the answer shows neither', async () => {
     const h = ports([{ text: '[{"name": "create_entities", "parameters": {"entities": "[{\\"name\\": \\"Acme', toolCalls: [] }], CREATED);
     const { answer } = await collect(runTurn({ messages: user, tools: [tool] }, h.p));
     expect(h.executed).toHaveLength(0);
-    expect(answer).toBe((turn as Record<string, unknown>).NO_TOOL_RESULT_ANSWER);
+    expect(answer).toBe(NO_TOOL_RESULT_ANSWER);
   });
   it('a failed call: the explanation is kept, the invented success after the role header is cut', async () => {
     const failed = { ok: false, code: 'UPSTREAM_ERROR', content: '{"ok":false,"error":"UPSTREAM_ERROR"}' } as unknown as typeof CREATED;
