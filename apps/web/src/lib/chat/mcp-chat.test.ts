@@ -308,16 +308,18 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(proxy.connects.length).toBe(before);
     });
 
-    it('maps tool errors, JSON-RPC errors and HTTP errors to PROVIDER_UNAVAILABLE', async () => {
+    it('maps a tool-reported error to TOOL_ERROR, and JSON-RPC / HTTP errors to PROVIDER_UNAVAILABLE', async () => {
       const { pick, toolset } = await session(OWNER_A);
       const ts = toolset([pick(EP_A, 'search_docs')]);
       server.onTool = () => ({ text: 'nope', isError: true });
-      expect((await ts.execute(call('search_docs', { q: '1' }))).code).toBe('PROVIDER_UNAVAILABLE');
+      const toolErr = await ts.execute(call('search_docs', { q: '1' }));
+      expect(toolErr.code).toBe('TOOL_ERROR');
+      expect(toolErr.content).not.toContain('nope'); // the tool's own text is untrusted and never reaches the model
       server.onTool = () => ({ rpcError: 'bad' });
       expect((await ts.execute(call('search_docs', { q: '2' }))).code).toBe('PROVIDER_UNAVAILABLE');
       server.mode = 'http500';
       expect((await ts.execute(call('search_docs', { q: '3' }))).code).toBe('PROVIDER_UNAVAILABLE');
-      expect(audits.map((a) => a.outcome)).toEqual(['PROVIDER_UNAVAILABLE', 'PROVIDER_UNAVAILABLE', 'PROVIDER_UNAVAILABLE']);
+      expect(audits.map((a) => a.outcome)).toEqual(['TOOL_ERROR', 'PROVIDER_UNAVAILABLE', 'PROVIDER_UNAVAILABLE']);
     });
 
     it('withholds the result when the audit record cannot be written', async () => {

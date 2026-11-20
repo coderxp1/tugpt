@@ -105,5 +105,6 @@
   "20261120000005_mcp_snapshot_lock_timeout_below_app_timeout.sql": "9cbb219783e9d8b97b8d99d2d60a94f4ac15fa0e2b208b3257bf9a6c593d9121",
   "20261120000006_mcp_snapshot_idempotency.sql": "6d7981946f2cca547da5052f09df88317865c71b6712a94aebc90ae27bc8c6fd",
   "20261120000007_mcp_snapshot_legacy_revoke_owner_first.sql": "b476315003d05b2d3a2cc9786ea7989ed47a95fe8ed9d12824d3bb7b55f4edd5",
-  "20261120000008_mcp_activation_requires_approved_snapshot.sql": "75fd467dded2c1b545b46487fac6f644ab7dbc03a64c0648f89b56cda2c3402a"
+  "20261120000008_mcp_activation_requires_approved_snapshot.sql": "75fd467dded2c1b545b46487fac6f644ab7dbc03a64c0648f89b56cda2c3402a",
+  "20261120000009_mcp_tool_error_outcome.sql": "bcc252dbbebb26057c5d53399839b2f5b3ea2cd85e063019d0bd134850140fc2"
 }

@@ -13,10 +13,12 @@
  *   6. explicit grant for actor/agent + capability  → NOT_GRANTED
  *   7. connection status is connected               → REAUTHORIZATION_REQUIRED / CONNECTION_NOT_ACTIVE
  *   8. connection holds an accepted scope           → SCOPE_MISSING
- *   9. write tools need an approval hook            → APPROVAL_REQUIRED
- *  10. arguments validate                           → INVALID_ARGUMENTS
+ *   9. arguments validate                           → INVALID_ARGUMENTS
+ *      (before step 10, so a call that can never run is never shown for
+ *      approval and never consumes one; the hash is over the original args)
+ *  10. write tools claim a single-use approval      → APPROVAL_REQUIRED
  *  11. broker issues a token                        → REAUTHORIZATION_REQUIRED / PROVIDER_UNAVAILABLE
- *  12. handler runs; output size-capped             → OUTPUT_TOO_LARGE
+ *  12. handler runs; output size-capped             → OUTPUT_TOO_LARGE / TOOL_ERROR
  *
  * Every call, allowed or refused, produces exactly one audit event. The
  * runtime never throws to the model loop; it returns a tool message.
@@ -51,8 +53,9 @@ const MESSAGES: Readonly<Record<ToolErrorCode, string>> = {
   SCOPE_MISSING: 'The connection lacks the permission this tool needs; reconnect with the required access.',
   NOT_GRANTED: 'You or this agent are not permitted to use this connection for this tool.',
   APPROVAL_REQUIRED: 'This action needs explicit user approval.',
-  INVALID_ARGUMENTS: 'The tool arguments were invalid.',
+  INVALID_ARGUMENTS: 'The tool arguments were invalid. Nothing was run; fix the listed arguments and call the tool again.',
   PROVIDER_UNAVAILABLE: 'The external service is unavailable. Try again later.',
+  TOOL_ERROR: 'The tool ran but reported an error for this request. Check the arguments against the tool description before trying again.',
   OUTPUT_TOO_LARGE: 'The result was too large; narrow the request.',
   CALL_BUDGET_EXCEEDED: 'Too many tool calls in one turn.',
   INTERNAL: 'The tool failed unexpectedly.',
@@ -149,11 +152,15 @@ export class ConnectToolRuntime {
     if (!tool) return this.refuse(ctx, call, null, 'UNKNOWN_TOOL', started);
     try {
       const argumentsSha256 = createHash('sha256').update(canonicalJson(call.arguments)).digest('hex');
-      const refusal = await this.authorize(ctx, tool, argumentsSha256);
+      const refusal = await this.authorize(ctx, tool);
       if (refusal) return this.refuse(ctx, call, tool.capability, refusal, started);
 
       const validated = tool.validate(call.arguments, this.now());
-      if (!validated.ok) return this.refuse(ctx, call, tool.capability, 'INVALID_ARGUMENTS', started);
+      if (!validated.ok) return this.refuse(ctx, call, tool.capability, 'INVALID_ARGUMENTS', started, validated.detail);
+
+      if (!(await this.claimApprovalIfWrite(ctx, tool, argumentsSha256))) {
+        return this.refuse(ctx, call, tool.capability, 'APPROVAL_REQUIRED', started);
+      }
 
       const token = await this.opts.tokens.getAccessToken({ organizationId: ctx.organizationId, connectionId: ctx.connectionId });
       if (!token.ok) {
@@ -180,7 +187,7 @@ export class ConnectToolRuntime {
     }
   }
 
-  private async authorize(ctx: ToolExecutionContext, tool: ConnectTool<unknown>, argumentsSha256: string): Promise<ToolErrorCode | null> {
+  private async authorize(ctx: ToolExecutionContext, tool: ConnectTool<unknown>): Promise<ToolErrorCode | null> {
     const conn = await this.opts.connections.getConnection(ctx.organizationId, ctx.connectionId);
     // Defence in depth: even if a directory implementation ignored the org
     // filter, a foreign-org row is treated as not found.
@@ -199,18 +206,19 @@ export class ConnectToolRuntime {
     if (conn.status === 'requires_authorization' || conn.status === 'expired') return 'REAUTHORIZATION_REQUIRED';
     if (conn.status !== 'connected') return 'CONNECTION_NOT_ACTIVE';
     if (tool.acceptedScopes.length > 0 && !tool.acceptedScopes.some((s) => conn.grantedScopes.includes(s))) return 'SCOPE_MISSING';
-    // Write tools require the approval flow (not part of this slice).
-    if (tool.risk !== 'read') {
-      const approved = await (this.opts.approvals?.claimApproval({
-        organizationId: ctx.organizationId,
-        connectionId: ctx.connectionId,
-        capability: tool.capability,
-        actorUserId: ctx.actorUserId,
-        argumentsSha256,
-      }) ?? false);
-      if (!approved) return 'APPROVAL_REQUIRED';
-    }
     return null;
+  }
+
+  /** Step 10: read tools pass; write tools need an atomically claimed, single-use approval (no checker = refused). */
+  private async claimApprovalIfWrite(ctx: ToolExecutionContext, tool: ConnectTool<unknown>, argumentsSha256: string): Promise<boolean> {
+    if (tool.risk === 'read') return true;
+    return (await this.opts.approvals?.claimApproval({
+      organizationId: ctx.organizationId,
+      connectionId: ctx.connectionId,
+      capability: tool.capability,
+      actorUserId: ctx.actorUserId,
+      argumentsSha256,
+    })) === true;
   }
 
   private async refuse(
@@ -218,15 +226,18 @@ export class ConnectToolRuntime {
     call: ProposedToolCall,
     capability: string | null,
     code: ToolErrorCode,
-    started: number
+    started: number,
+    /** Only for INVALID_ARGUMENTS: our validator's bounded description of what to fix (never provider text). */
+    detail?: string
   ): Promise<ToolExecutionResult> {
     await this.audit(ctx, call, capability, code, started);
+    const body = detail === undefined ? { ok: false, error: code, message: MESSAGES[code] } : { ok: false, error: code, message: MESSAGES[code], detail };
     return {
       toolCallId: call.id,
       capability,
       ok: false,
       code,
-      content: JSON.stringify({ ok: false, error: code, message: MESSAGES[code] }),
+      content: JSON.stringify(body),
     };
   }
 

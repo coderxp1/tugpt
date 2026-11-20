@@ -20,6 +20,7 @@
 import { promises as dnsPromises } from 'node:dns';
 import type { JsonSchemaObject } from '@tugpt/ai-providers';
 import type { ConnectTool, ToolErrorCode, ToolOutput, ValidationOutcome } from './types.js';
+import { checkArgumentsAgainstSchema } from './json-schema-args.js';
 
 const MODEL_NAME_PATTERN = /^[a-zA-Z0-9_-]{1,64}$/;
 
@@ -397,7 +398,8 @@ function normalizeModelName(name: string): string {
  *
  * Every execute opens a fresh session (initialize -> notifications/initialized -> tools/call) and maps
  * every failure - SSRF floor, transport, non-200, notification not 2xx, malformed or mismatched reply,
- * unsupported protocol version, JSON-RPC error, `isError: true`, malformed result - to PROVIDER_UNAVAILABLE.
+ * unsupported protocol version, JSON-RPC error, malformed result - to PROVIDER_UNAVAILABLE. A well-formed
+ * result with `isError: true` is TOOL_ERROR (the tool itself refused); its text is never returned.
  * A reply body over MAX_MCP_REPLY_BYTES or a text result over MAX_MCP_RESULT_TEXT_BYTES is
  * OUTPUT_TOO_LARGE (never truncated; the runtime applies its own, smaller cap to what reaches the model).
  * A reply body is never returned unless it is a well-formed result for this exact call.
@@ -425,6 +427,9 @@ export function createExternalMcpTool(
       if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) {
         return { ok: false, detail: 'arguments must be a JSON object' };
       }
+      // Checked against the APPROVED snapshot's schema before the runtime claims any approval.
+      const checked = checkArgumentsAgainstSchema(toolDef.inputSchema, raw);
+      if (!checked.ok) return { ok: false, detail: checked.detail };
       return { ok: true, value: raw as Record<string, unknown> };
     },
     async execute(args): Promise<ToolOutput> {
@@ -434,7 +439,9 @@ export function createExternalMcpTool(
         await assertPublicEndpoint(endpoint.url, endpoint.resolveHostname);
         const session = await openMcpSession(endpoint, fetchFn);
         const result = await session.call('tools/call', { name: toolDef.name, arguments: args });
-        if (result.isError === true) return unavailable;
+        // The server ran the tool and the tool refused or failed: the endpoint is reachable, so this is not
+        // PROVIDER_UNAVAILABLE. The error text is untrusted and is never returned.
+        if (result.isError === true) return { ok: false, code: 'TOOL_ERROR' };
         if (result.content !== undefined && !Array.isArray(result.content)) return unavailable;
         const text = ((result.content ?? []) as unknown[])
           .filter((c): c is { type: 'text'; text: string } => isRecord(c) && c.type === 'text' && typeof c.text === 'string')

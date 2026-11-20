@@ -15,6 +15,7 @@ const TOOL: Record<string, ChatProblem> = {
   CONNECTION_NOT_ACTIVE: { text: 'The connection is not active. Connect the account again.', connect: true },
   REAUTHORIZATION_REQUIRED: { text: 'The provider asked to sign in again. Reconnect the account.', connect: true },
   PROVIDER_UNAVAILABLE: { text: 'The app could not be reached right now. Nothing was changed; try again later.', connect: false },
+  TOOL_ERROR: { text: 'The app received the request but reported a problem with it. Check the details and try again.', connect: false },
   UNKNOWN_TOOL: { text: 'This app is not available in chat yet.', connect: false },
   AUDIT_UNAVAILABLE: { text: 'The call could not be recorded in the audit log, so it was not run.', connect: false },
   INVALID_ARGUMENTS: { text: 'The model asked for this in a form the app does not accept. Nothing was changed; try rephrasing.', connect: false },
