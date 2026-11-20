@@ -31,7 +31,8 @@ INSERT INTO public.external_tool_snapshots (organization_id, endpoint_id, versio
 
 CREATE FUNCTION pg_temp.act() RETURNS boolean LANGUAGE sql AS $f$
   SELECT public.activate_mcp_endpoint('a5000000-0000-4000-8000-00000000000a', 'a5000000-0000-4000-8000-0000000e000a') $f$;
-CREATE FUNCTION pg_temp.st(e uuid) RETURNS text LANGUAGE sql AS $f$
+-- Reads the true status as the table owner: RLS hides pending/disabled endpoints from the authenticated role.
+CREATE FUNCTION pg_temp.st(e uuid) RETURNS text LANGUAGE sql SECURITY DEFINER AS $f$
   SELECT status FROM public.external_tool_endpoints WHERE id = e $f$;
 CREATE FUNCTION pg_temp.as_owner_a() RETURNS void LANGUAGE sql AS $f$
   SELECT set_config('request.jwt.claims', '{"sub":"a5000000-0000-4000-8000-0000000000a1","role":"authenticated"}', true) $f$;
