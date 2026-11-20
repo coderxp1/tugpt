@@ -49,6 +49,8 @@ export interface ExternalMcpRepository {
    * caller lacks the owner/admin role. */
   getEndpointUrl(orgId: string, endpointId: string): Promise<string | null>;
   getEndpoint(orgId: string, endpointId: string): Promise<{ id: string; url: string } | null>;
+  /** Activation gate: true only when the NEWEST snapshot is approved and not revoked. Throws RepoError('42501')
+   * or DatabaseTimeoutError when the read fails (never reports a failed read as false). */
   hasApprovedSnapshot(orgId: string, endpointId: string): Promise<boolean>;
   listEndpoints(orgId: string): Promise<ExternalToolEndpoint[]>;
   getLatestSnapshotVersion(orgId: string, endpointId: string): Promise<number>;
@@ -203,15 +205,24 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
     },
 
     async hasApprovedSnapshot(orgId, endpointId) {
+      // The activation gate: activate_mcp_endpoint itself does not look at snapshots. Only the NEWEST snapshot
+      // (highest version) counts, and it must be approved and not revoked. Reading just that one row means any
+      // number of older versions can no longer trip maybeSingle() (PGRST116 used to become a false 409), a newer
+      // unreviewed discovery cannot hide behind an older approval, and a revoked list never counts.
+      // A failed read is never "not approved": 42501 -> RepoError (403), anything else -> DatabaseTimeoutError (503).
       const { data, error } = await u
         .from('external_tool_snapshots')
-        .select('id')
+        .select('version,approved_at,revoked_at')
         .eq('organization_id', orgId)
         .eq('endpoint_id', endpointId)
-        .not('approved_at', 'is', null)
+        .order('version', { ascending: false })
+        .limit(1)
         .maybeSingle();
-      if (error) return false;
-      return data !== null;
+      if (error) throw endpointLookupError(error as PgError);
+      if (data === null || data === undefined) return false;
+      if (typeof data !== 'object') throw new Error('invalid snapshot lookup result');
+      const row = data as { approved_at?: unknown; revoked_at?: unknown };
+      return typeof row.approved_at === 'string' && row.approved_at.length > 0 && (row.revoked_at === null || row.revoked_at === undefined);
     },
 
     async listEndpoints(orgId) {
