@@ -3,17 +3,21 @@
  *
  * Read the tools in a snapshot (B-2): name, description, input schema and the
  * assigned permission class. Owner/admin, org-scoped.
+ *
+ * Database timeout (M9): each PostgREST read is bounded by POSTGREST_REQUEST_TIMEOUT_MS (5 s) and is never
+ * retried after a timeout (asNonRetryableTimeout); a timeout answers 503 DATABASE_TIMEOUT, not a misleading
+ * 404 (snapshot read) or 500 (tool list read).
  */
 
 import { NextResponse } from 'next/server';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
-import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
+import { createExternalMcpRepository, DatabaseTimeoutError } from '@/lib/connect/external-mcp-repo';
 import type { ApiError } from '@/lib/draft-api/types';
 
-function errorResponse(status: number, code: string, message: string) {
+function errorResponse(status: number, code: string, message: string, headers: Record<string, string> = {}) {
   const body: ApiError = { error: { code, message } };
-  return NextResponse.json(body, { status });
+  return NextResponse.json(body, { status, headers });
 }
 
 export async function GET(request: Request, { params }: { params: Promise<{ snapshotId: string }> }) {
@@ -31,7 +35,7 @@ export async function GET(request: Request, { params }: { params: Promise<{ snap
       return errorResponse(403, 'FORBIDDEN', 'Reading MCP tools requires the organization owner or admin role');
     }
 
-        const repo = createExternalMcpRepository(supabase);
+    const repo = createExternalMcpRepository(supabase);
 
     // 404 unless the snapshot itself belongs to this organization.
     const snapshot = await repo.getSnapshot(tenant.organizationId, snapshotId);
@@ -39,7 +43,10 @@ export async function GET(request: Request, { params }: { params: Promise<{ snap
 
     const tools = await repo.listSnapshotTools(tenant.organizationId, snapshotId);
     return NextResponse.json({ tools });
-  } catch {
+  } catch (err) {
+    if (err instanceof DatabaseTimeoutError) {
+      return errorResponse(503, 'DATABASE_TIMEOUT', 'The database did not answer in time; retry shortly', { 'retry-after': '2', 'cache-control': 'no-store' });
+    }
     return errorResponse(500, 'INTERNAL', 'Failed to read MCP tools');
   }
 }

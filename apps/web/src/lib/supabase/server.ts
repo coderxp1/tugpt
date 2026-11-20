@@ -3,7 +3,7 @@ import { cookies, headers as requestHeaders } from 'next/headers';
 import { createSupabaseClient, type TypedSupabaseClient } from '@tugpt/database';
 import { loadSession, bridgeToken, dbUrl, SsoError } from '@/lib/sso/core';
 import { scopedFeatureAdapter } from '@/lib/sso/feature-adapter';
-import { POSTGREST_REQUEST_TIMEOUT_MS } from './timeouts';
+import { asNonRetryableTimeout, POSTGREST_REQUEST_TIMEOUT_MS } from './timeouts';
 
 async function sessionForRequest() {
   // Raw headers retain duplicate cookies for the frozen parser to reject.
@@ -35,9 +35,11 @@ export async function createAuthenticatedServerClient(): Promise<TypedSupabaseCl
       headers.set('Authorization', 'Bearer ' + bridgeToken('authenticated', session));
       headers.delete('apikey');
       const outgoing = new Request(base + '/' + url.pathname.slice('/rest/v1/'.length) + url.search, incoming);
-      return fetch(outgoing, {
-        headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(POSTGREST_REQUEST_TIMEOUT_MS),
-      });
+      // A timeout must surface as a non-retryable AbortError (see asNonRetryableTimeout): bounded at 5 s, never 3 retries.
+      const signal = AbortSignal.timeout(POSTGREST_REQUEST_TIMEOUT_MS);
+      return asNonRetryableTimeout(signal, fetch(outgoing, {
+        headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal,
+      }));
     } },
   });
   // Identity is from the verified server-side session only. Profile enrichment
@@ -76,7 +78,8 @@ export async function createSsoControlClient(): Promise<TypedSupabaseClient> {
       headers.set('Authorization', 'Bearer ' + bridgeToken('sso_control'));
       headers.delete('apikey');
       const outgoing = new Request(base + '/' + url.pathname.slice('/rest/v1/'.length) + url.search, incoming);
-      return fetch(outgoing, { headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal: AbortSignal.timeout(POSTGREST_REQUEST_TIMEOUT_MS) });
+      const signal = AbortSignal.timeout(POSTGREST_REQUEST_TIMEOUT_MS);
+      return asNonRetryableTimeout(signal, fetch(outgoing, { headers, credentials: 'omit', cache: 'no-store', redirect: 'error', signal }));
     } },
   });
   return client;

@@ -5,8 +5,9 @@
  * runtime discovery client, a local CONNECT proxy and a local HTTPS MCP
  * server (throwaway CA), all over real sockets on 127.0.0.1.
  * MOCKED (labelled): session/tenant (AuthService), the repository (in-memory,
- * enforcing the same latest+1 rule as create_mcp_snapshot; the real RPC is
- * covered by the pgTAP test mcp_snapshot_versioning.test.sql), the customer
+ * mirroring create_mcp_snapshot_idempotent / get_mcp_snapshot_request: one snapshot per Idempotency-Key,
+ * version = max + 1 assigned by the store; the real RPCs are covered by pgTAP mcp_snapshot_idempotency and
+ * by the real Next -> PostgREST -> Postgres script scripts/regression/snapshot-idempotency.py), the customer
  * MCP flag (on here; it stays off by default), the trust anchor (test CA
  * injected into the real egress fetch) and the runtime's defence-in-depth
  * DNS pre-check (the test hostname resolves to a fixed public address).
@@ -33,31 +34,46 @@ const EP = 'a4000000-0000-4000-8000-0000000e0001';
 const HOST = 'mcp.customer.test';
 const T = vi.hoisted(() => ({ ca: '' as string, timeoutMs: 3000, injectCa: true, dnsCalls: 0 }));
 
-// ---- in-memory repository (MOCKED; mirrors create_mcp_snapshot's rule) ----
+// ---- in-memory repository (MOCKED; mirrors create_mcp_snapshot_idempotent's contract) ----
 type Snap = { id: string; version: number; sha: string; tools: { name: string }[] };
-const db = vi.hoisted(() => ({ snaps: [] as Snap[], writes: 0, latestReads: 0, failLatest: false, forceConflict: false,
-  createFails: null as null | 'busy' | 'timeout', latestTimeout: false }));
+type CreateFail = null | 'busy' | 'endpoint-busy' | 'deadline' | 'timeout' | 'in-progress' | 'not-found';
+const db = vi.hoisted(() => ({ snaps: [] as Snap[], writes: 0, latestReads: 0, createCalls: 0,
+  requests: new Map<string, string>(), running: new Set<string>(), lastDeadline: '' as string,
+  createFails: null as CreateFail, latestTimeout: false, failLatest: false }));
 vi.mock('@/lib/connect/external-mcp-repo', async (orig) => {
   const real = await orig<typeof import('@/lib/connect/external-mcp-repo')>();
   return {
     ...real,
     createExternalMcpRepository: () => ({
       getEndpointUrl: async (org: string, id: string) => (org === ORG && id === EP ? `https://${HOST}/mcp` : null),
-      getLatestSnapshotVersion: async () => {
+      // Status lookup (latestReads counts every database read the route makes before discovery).
+      getSnapshotRequest: async (_o: string, _e: string, key: string) => {
         db.latestReads++;
         if (db.latestTimeout) throw new real.DatabaseTimeoutError();
         if (db.failLatest) throw new Error('read failed');
-        return db.snaps.reduce((m, s) => Math.max(m, s.version), 0);
+        if (db.running.has(key)) return { state: 'in_progress' as const };
+        const id = db.requests.get(key);
+        const snap = db.snaps.find((x) => x.id === id);
+        return snap ? { state: 'committed' as const, snapshotId: snap.id, version: snap.version, toolCount: snap.tools.length } : { state: 'not_found' as const };
       },
-      createSnapshot: async (_o: string, _e: string, version: number, sha: string, tools: { name: string }[]) => {
-        const latest = db.snaps.reduce((m, s) => Math.max(m, s.version), 0);
-        if (db.createFails === 'busy') throw new real.SnapshotStoreBusyError();
-        if (db.createFails === 'timeout') throw new real.DatabaseTimeoutError();
-        if (db.forceConflict || version !== latest + 1) throw new real.SnapshotVersionConflictError();
+      createSnapshotIdempotent: async (_o: string, _e: string, key: string, sha: string, tools: { name: string }[], deadline: string) => {
+        db.createCalls++; db.lastDeadline = deadline;
+        switch (db.createFails) {
+          case 'busy': throw new real.SnapshotStoreBusyError();
+          case 'endpoint-busy': throw new real.SnapshotEndpointBusyError();
+          case 'deadline': throw new real.SnapshotDeadlineExceededError();
+          case 'timeout': throw new real.DatabaseTimeoutError();
+          case 'in-progress': throw new real.SnapshotRequestInProgressError();
+          case 'not-found': throw new real.SnapshotEndpointNotFoundError();
+        }
+        const prior = db.snaps.find((x) => x.id === db.requests.get(key));
+        if (prior) return { snapshotId: prior.id, version: prior.version, toolCount: prior.tools.length, replayed: true };
         db.writes++;
+        const version = db.snaps.reduce((m, x) => Math.max(m, x.version), 0) + 1;
         const id = `snap-${version}`;
         db.snaps.push({ id, version, sha, tools: tools.map((t) => ({ name: t.name })) });
-        return id;
+        db.requests.set(key, id);
+        return { snapshotId: id, version, toolCount: tools.length, replayed: false };
       },
     }),
   };
@@ -87,7 +103,7 @@ vi.mock('@tugpt/connect-runtime', async (orig) => {
     real.listExternalMcpTools({ ...ep, resolveHostname: async () => { T.dnsCalls++; return ['93.184.216.34']; } }, f) };
 });
 
-const { POST } = await import('./route');
+const { POST, GET } = await import('./route');
 
 // ---- real sockets: HTTPS MCP server + CONNECT proxy ----
 type Mode = 'ok' | 'malformed' | 'rpc-error' | 'hang' | 'redirect' | 'page2-500' | 'page2-invalid' | 'v2-tools';
@@ -173,29 +189,34 @@ let globalFetch: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   vi.stubEnv('TUGPT_APP_ORIGIN', ORIGIN);
   vi.stubEnv('CONNECT_EGRESS_PROXY', `http://127.0.0.1:${proxyPort}`);
-  Object.assign(db, { snaps: [], writes: 0, latestReads: 0, failLatest: false, forceConflict: false });
+  Object.assign(db, { snaps: [], writes: 0, latestReads: 0, createCalls: 0, failLatest: false, createFails: null, latestTimeout: false,
+    requests: new Map(), running: new Set(), lastDeadline: '' });
   mode = 'ok'; proxyMode = 'allow'; T.injectCa = true; T.timeoutMs = 3000; T.dnsCalls = 0;
   connects.length = 0; tunnels = 0; mcpConnections = 0; mcpRequests = 0; redirectTargetHits = 0;
   globalFetch = vi.spyOn(globalThis, 'fetch');
 });
 afterEach(() => { globalFetch.mockRestore(); vi.unstubAllEnvs(); });
 
-async function snapshot() {
-  const req = new Request(`${ORIGIN}/api/v1/connect/mcp/endpoints/${EP}/snapshot`, {
-    method: 'POST', body: '{}',
-    headers: { origin: ORIGIN, 'x-tugpt-csrf': '1', 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', 'x-tenant-id': ORG },
-  });
+let keySeq = 0;
+/** A fresh valid Idempotency-Key per call unless one is given (null = send no header). */
+function nextKey() { keySeq++; return `test-key-${String(keySeq).padStart(8, '0')}`; }
+type SnapBody = { error?: { code: string; message?: string }; version?: number; snapshotId?: string; toolCount?: number; replayed?: boolean };
+async function snapshotWithHeaders(key: string | null = nextKey()) {
+  const headers: Record<string, string> = { origin: ORIGIN, 'x-tugpt-csrf': '1', 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', 'x-tenant-id': ORG };
+  if (key !== null) headers['idempotency-key'] = key;
+  const req = new Request(`${ORIGIN}/api/v1/connect/mcp/endpoints/${EP}/snapshot`, { method: 'POST', body: '{}', headers });
   const res = await POST(req, { params: Promise.resolve({ endpointId: EP }) });
-  return { status: res.status, body: await res.json() as { error?: { code: string }; version?: number; snapshotId?: string; toolCount?: number } };
+  return { status: res.status, headers: res.headers, body: await res.json() as SnapBody };
 }
-/** Like snapshot(), plus the response headers and error message (M7 503 cases). */
-async function snapshotWithHeaders() {
-  const req = new Request(`${ORIGIN}/api/v1/connect/mcp/endpoints/${EP}/snapshot`, {
-    method: 'POST', body: '{}',
-    headers: { origin: ORIGIN, 'x-tugpt-csrf': '1', 'content-type': 'application/json', 'sec-fetch-site': 'same-origin', 'x-tenant-id': ORG },
-  });
-  const res = await POST(req, { params: Promise.resolve({ endpointId: EP }) });
-  return { status: res.status, headers: res.headers, body: await res.json() as { error?: { code: string; message?: string } } };
+async function snapshot(key: string | null = nextKey()) {
+  const { status, body } = await snapshotWithHeaders(key);
+  return { status, body };
+}
+async function status(key: string | null) {
+  const q = key === null ? '' : `?idempotencyKey=${encodeURIComponent(key)}`;
+  const req = new Request(`${ORIGIN}/api/v1/connect/mcp/endpoints/${EP}/snapshot${q}`, { headers: { 'x-tenant-id': ORG } });
+  const res = await GET(req, { params: Promise.resolve({ endpointId: EP }) });
+  return { status: res.status, headers: res.headers, body: await res.json() as Record<string, unknown> };
 }
 /** Every socket that reached the MCP server came through a proxy tunnel; no global fetch. */
 function expectProxyOnly() {
@@ -216,7 +237,8 @@ describe('proxy missing or unavailable -> 503 EGRESS_UNAVAILABLE, nothing writte
     if (value === undefined) vi.stubEnv('CONNECT_EGRESS_PROXY', undefined as unknown as string); else vi.stubEnv('CONNECT_EGRESS_PROXY', value);
     const r = await snapshot();
     expect(r).toEqual({ status: 503, body: { error: { code: 'EGRESS_UNAVAILABLE', message: 'The egress proxy is not available' } } });
-    expect([db.writes, db.latestReads, T.dnsCalls, connects.length, mcpConnections]).toEqual([0, 0, 0, 0, 0]);
+    // M9: the Idempotency-Key status lookup runs first (a committed replay needs no egress); no write is attempted.
+    expect([db.writes, db.createCalls, T.dnsCalls, connects.length, mcpConnections]).toEqual([0, 0, 0, 0, 0]);
     expect(globalFetch).not.toHaveBeenCalled();
   });
   it('proxy configured but unreachable (closed port)', async () => {
@@ -246,37 +268,128 @@ describe('proxy success: versions are sequential and computed, never hard-coded'
     expect(tunnels).toBeGreaterThanOrEqual(9); // >= 3 requests x 3 snapshots, each over its own tunnel
     expectProxyOnly();
   });
-  it('a concurrent winner -> 409 SNAPSHOT_VERSION_CONFLICT, nothing written by the loser', async () => {
-    db.forceConflict = true;
-    const r = await snapshot();
-    expect(r.status).toBe(409); expect(r.body.error?.code).toBe('SNAPSHOT_VERSION_CONFLICT'); expect(db.writes).toBe(0);
-  });
-  it('a failed version read fails closed (500), never falls back to v1', async () => {
+  it('a failed status read fails closed (500), nothing discovered or written', async () => {
     db.failLatest = true;
     const r = await snapshot();
-    expect(r.status).toBe(500); expect(db.writes).toBe(0);
+    expect(r.status).toBe(500); expect([db.writes, db.createCalls, mcpConnections]).toEqual([0, 0, 0]);
+  });
+  it('the write carries a deadline of now + 3 s, never a client-chosen version', async () => {
+    const t0 = Date.now(); await snapshot(); const t1 = Date.now();
+    const d = Date.parse(db.lastDeadline);
+    expect(d).toBeGreaterThanOrEqual(t0 + 3000); expect(d).toBeLessThanOrEqual(t1 + 3000);
   });
 });
 
-describe('database busy or timed out -> documented 503, never 500, nothing written (M7)', () => {
-  beforeEach(() => { db.createFails = null; db.latestTimeout = false; });
-  afterEach(() => { db.createFails = null; db.latestTimeout = false; });
-  it('create_mcp_snapshot PT503 (a lock other than the endpoint row) -> 503 SNAPSHOT_STORE_BUSY with Retry-After', async () => {
-    db.createFails = 'busy';
-    const r = await snapshotWithHeaders();
-    expect(r.status).toBe(503); expect(r.body.error?.code).toBe('SNAPSHOT_STORE_BUSY');
-    expect(r.headers.get('retry-after')).toBe('2'); expect(db.writes).toBe(0);
+describe('Idempotency-Key (M9)', () => {
+  it('a committed key is replayed even while the egress proxy is unavailable', async () => {
+    const key = nextKey(); const a = await snapshot(key);
+    vi.stubEnv('CONNECT_EGRESS_PROXY', '');
+    const b = await snapshot(key);
+    expect([a.status, b.status]).toEqual([201, 200]); expect(b.body.snapshotId).toBe(a.body.snapshotId);
   });
-  it('the app gave up on the create RPC (transport timeout) -> 503 DATABASE_TIMEOUT, outcome unknown', async () => {
-    db.createFails = 'timeout';
-    const r = await snapshotWithHeaders();
-    expect(r.status).toBe(503); expect(r.body.error?.code).toBe('DATABASE_TIMEOUT');
-    expect(r.body.error?.message).toMatch(/reload/i); expect(db.writes).toBe(0);
+  it.each([
+    ['missing', null, 'IDEMPOTENCY_KEY_REQUIRED'],
+    ['empty', '', 'IDEMPOTENCY_KEY_REQUIRED'],
+    ['too short', 'short-key', 'INVALID_IDEMPOTENCY_KEY'],
+    ['too long', 'k'.repeat(129), 'INVALID_IDEMPOTENCY_KEY'],
+    ['bad characters', 'key with spaces 1234', 'INVALID_IDEMPOTENCY_KEY'],
+  ])('%s -> 400 %s before any session, database or network work', async (_n, key, code) => {
+    const r = await snapshot(key);
+    expect(r.status).toBe(400); expect(r.body.error?.code).toBe(code);
+    expect([db.latestReads, db.createCalls, connects.length, mcpConnections]).toEqual([0, 0, 0, 0]);
   });
-  it('the app gave up on the latest-version read -> 503 DATABASE_TIMEOUT, no create attempted', async () => {
+  it('a cross-origin POST is still refused first (CSRF before the key check)', async () => {
+    const req = new Request(`${ORIGIN}/api/v1/connect/mcp/endpoints/${EP}/snapshot`, {
+      method: 'POST', body: '{}', headers: { origin: 'https://evil.test', 'content-type': 'application/json', 'idempotency-key': nextKey() },
+    });
+    const res = await POST(req, { params: Promise.resolve({ endpointId: EP }) });
+    expect(res.status).toBe(403); expect([db.latestReads, db.createCalls]).toEqual([0, 0]);
+  });
+  it('replay of a committed key -> 200 with the ORIGINAL snapshot, no discovery, no second write', async () => {
+    const key = nextKey();
+    const a = await snapshotWithHeaders(key);
+    const tunnelsAfterFirst = tunnels;
+    const b = await snapshotWithHeaders(key);
+    expect([a.status, b.status]).toEqual([201, 200]);
+    expect(b.body).toEqual({ snapshotId: a.body.snapshotId, version: a.body.version, toolCount: a.body.toolCount, replayed: true });
+    expect(b.headers.get('idempotent-replayed')).toBe('true'); expect(b.headers.get('idempotency-key')).toBe(key);
+    expect(a.headers.get('idempotent-replayed')).toBeNull();
+    expect([db.writes, db.snaps.length, tunnels]).toEqual([1, 1, tunnelsAfterFirst]);
+  });
+  it('a different key creates the next version', async () => {
+    const a = await snapshot(); const b = await snapshot();
+    expect([a.body.version, b.body.version]).toEqual([1, 2]); expect(db.writes).toBe(2);
+  });
+  it('same key still running -> 409 IN_PROGRESS with Retry-After, nothing discovered or written', async () => {
+    const key = nextKey(); db.running.add(key);
+    const r = await snapshotWithHeaders(key);
+    expect(r.status).toBe(409); expect(r.body.error?.code).toBe('IN_PROGRESS');
+    expect(r.body.error?.message).toMatch(/still running/); expect(r.body.error?.message).not.toMatch(/created concurrently/);
+    expect(r.headers.get('retry-after')).toBe('2');
+    expect([db.writes, db.createCalls, mcpConnections]).toEqual([0, 0, 0]);
+  });
+  it('same key started running during discovery (database PT409) -> 409 IN_PROGRESS', async () => {
+    db.createFails = 'in-progress';
+    const r = await snapshot();
+    expect(r.status).toBe(409); expect(r.body.error?.code).toBe('IN_PROGRESS'); expect(db.writes).toBe(0);
+  });
+  it('after a rolled-back attempt the replay creates exactly one snapshot', async () => {
+    const key = nextKey();
+    db.createFails = 'deadline'; const a = await snapshot(key);
+    db.createFails = null; const b = await snapshot(key); const c = await snapshot(key);
+    expect([a.status, b.status, c.status]).toEqual([503, 201, 200]);
+    expect(c.body.snapshotId).toBe(b.body.snapshotId); expect(db.snaps).toHaveLength(1);
+  });
+  it('the endpoint disappeared between the check and the write (P0002) -> 404', async () => {
+    db.createFails = 'not-found';
+    const r = await snapshot();
+    expect(r.status).toBe(404); expect(r.body.error?.code).toBe('NOT_FOUND');
+  });
+});
+
+describe('GET ?idempotencyKey= status (M9)', () => {
+  it('not_found -> committed with the snapshot; in_progress carries Retry-After', async () => {
+    const key = nextKey();
+    expect((await status(key)).body).toEqual({ state: 'not_found' });
+    const a = await snapshot(key);
+    const s = await status(key);
+    expect(s.status).toBe(200);
+    expect(s.body).toEqual({ state: 'committed', snapshotId: a.body.snapshotId, version: a.body.version, toolCount: a.body.toolCount });
+    expect(s.headers.get('cache-control')).toBe('no-store');
+    const k2 = nextKey(); db.running.add(k2);
+    const p = await status(k2);
+    expect(p.body).toEqual({ state: 'in_progress' }); expect(p.headers.get('retry-after')).toBe('2');
+  });
+  it('missing or malformed key -> 400; database timeout -> 503 DATABASE_TIMEOUT', async () => {
+    expect((await status(null)).status).toBe(400);
+    expect((await status('bad key')).status).toBe(400);
+    db.latestTimeout = true;
+    const r = await status(nextKey());
+    expect(r.status).toBe(503); expect((r.body.error as { code: string }).code).toBe('DATABASE_TIMEOUT');
+  });
+});
+
+describe('database busy or timed out -> documented 503, never 500, nothing written (M7/M9)', () => {
+  it.each([
+    ['busy', 'SNAPSHOT_STORE_BUSY', /nothing was saved/],
+    ['endpoint-busy', 'ENDPOINT_BUSY', /Another snapshot of this endpoint is being saved; nothing was saved/],
+    ['deadline', 'SNAPSHOT_DEADLINE_EXCEEDED', /rolled back; nothing was saved/],
+    ['timeout', 'DATABASE_TIMEOUT', /same Idempotency-Key; a retry never creates a duplicate/],
+  ] as const)('create %s -> 503 %s with Retry-After and the key echoed', async (fail, code, msg) => {
+    const key = nextKey();
+    db.createFails = fail;
+    const r = await snapshotWithHeaders(key);
+    expect(r.status).toBe(503); expect(r.body.error?.code).toBe(code); expect(r.body.error?.message).toMatch(msg);
+    expect(r.body.error?.message).toMatch(/Idempotency-Key/);
+    expect(r.headers.get('retry-after')).toBe('2'); expect(r.headers.get('idempotency-key')).toBe(key); expect(db.writes).toBe(0);
+  });
+  it('the app gave up on the status read -> 503 DATABASE_TIMEOUT, no discovery, no create attempted', async () => {
     db.latestTimeout = true;
     const r = await snapshotWithHeaders();
-    expect(r.status).toBe(503); expect(r.body.error?.code).toBe('DATABASE_TIMEOUT'); expect(db.writes).toBe(0);
+    expect(r.status).toBe(503); expect(r.body.error?.code).toBe('DATABASE_TIMEOUT'); expect([db.writes, db.createCalls, mcpConnections]).toEqual([0, 0, 0]);
+  });
+  it('the route never reports the old misleading 409 SNAPSHOT_VERSION_CONFLICT', () => {
+    expect(readFileSync(join(__dirname, 'route.ts'), 'utf8')).not.toMatch(/SNAPSHOT_VERSION_CONFLICT|created concurrently/);
   });
 });
 
@@ -291,7 +404,7 @@ describe('discovery failures write nothing (no snapshot, no partial tools)', () 
     mode = m;
     const r = await snapshot();
     expect(r.status).toBe(status); expect(r.body.error?.code).toBe(codeExpected);
-    expect([db.writes, db.latestReads, db.snaps.length]).toEqual([0, 0, 0]);
+    expect([db.writes, db.createCalls, db.snaps.length]).toEqual([0, 0, 0]);
     expect(redirectTargetHits).toBe(0);
     expectProxyOnly();
   });
@@ -323,7 +436,8 @@ describe('structural: no direct network fallback can be reintroduced', () => {
     expect(route).toMatch(/createEgressMcpFetch\(\{ proxyUrl \}\)/);
     expect(route).toMatch(/listExternalMcpTools\(\{ url: endpoint \}, egressFetch\)/);
     expect(route).not.toMatch(/(^|[^.\w])fetch\(|globalThis\.fetch|node:https?'|undici|node:net/m);
-    expect(route).not.toMatch(/createSnapshot\([^)]*,\s*1\s*,/); // version is never a literal
+    expect(route).not.toMatch(/createSnapshot\(/); // M9: the version is assigned by the database, never by the route
+    expect(route).toMatch(/createSnapshotIdempotent\(organizationId, endpointId, key, contentSha256, tools, deadline\)/);
   });
   it('runtime discovery has no fallback transport', () => {
     const body = runtime.slice(runtime.indexOf('export async function listExternalMcpTools'), runtime.indexOf('function normalizeModelName'));

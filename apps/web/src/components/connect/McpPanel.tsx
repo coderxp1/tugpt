@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BACKEND_GAPS, present, type RouteAvailability } from '@/lib/connect-ui/contract';
-import { ENDPOINT_STATUS_TEXT, mcpApi, mcpProblem, validateEndpointInput, type McpEndpoint, type McpTool, type PermissionLevel, type SnapshotState } from '@/lib/connect-ui/mcp';
+import { ENDPOINT_STATUS_TEXT, mcpApi, mcpProblem, newIdempotencyKey, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, type McpEndpoint, type McpTool, type PermissionLevel, type SnapshotState } from '@/lib/connect-ui/mcp';
 import { ConfirmDialog } from './ConfirmDialog';
 import { GapNote } from './GapNote';
 import { McpToolReview } from './McpToolReview';
@@ -32,6 +32,8 @@ export function McpPanel({ canManage, routes, enabled, fetcher }: McpPanelProps)
   const [busy, setBusy] = useState<string | null>(null);
   const [deleting, setDeleting] = useState<Row | null>(null);
   const deleteTrigger = useRef<HTMLButtonElement | null>(null);
+  // M9: Idempotency-Key of a snapshot attempt whose outcome may still be pending, per endpoint; reused on retry.
+  const pendingSnapshotKey = useRef(new Map<string, string>());
 
   const canList = canManage && present(routes.mcpRegister);
   const can = {
@@ -85,7 +87,11 @@ export function McpPanel({ canManage, routes, enabled, fetcher }: McpPanelProps)
   async function discover(e: Row) {
     if (!can.discover) return;
     setBusy(`snapshot:${e.id}`); patch(e.id, { problem: undefined });
-    const r = await mcpApi.snapshot(e.id, fetcher);
+    const key = pendingSnapshotKey.current.get(e.id) ?? newIdempotencyKey();
+    pendingSnapshotKey.current.set(e.id, key);
+    const r = await mcpApi.snapshot(e.id, fetcher, key);
+    // Keep the key only while a retry could still return the original; otherwise the next click starts afresh.
+    if (r.ok || !SNAPSHOT_RETRY_SAME_KEY.has(r.code)) pendingSnapshotKey.current.delete(e.id);
     if (r.ok) await loadTools(e, { id: r.data.snapshotId, toolCount: r.data.toolCount, approved: false });
     else patch(e.id, { problem: mcpProblem(r) });
     setBusy(null);
