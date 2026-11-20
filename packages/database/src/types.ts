@@ -27,6 +27,11 @@ export interface Organization {
   logo_url: string | null;
   /** Language the dashboard renders in for this organization. See ADR-017. */
   locale: OrganizationLocale;
+  /**
+   * IANA business time zone (20261019000002); NULL means not configured.
+   * Changed only through public.update_organization_settings (20261121700001).
+   */
+  time_zone: string | null;
   created_at: string;
   updated_at: string;
   deleted_at: string | null;
@@ -716,7 +721,7 @@ interface DatabaseDefinition {
         // ('es'). Requiring it here would force every caller to name a language
         // it does not care about, and the one value they would all pass is the
         // one the database already supplies.
-        Insert: Omit<Organization, 'id' | 'created_at' | 'updated_at' | 'locale'> & { id?: string; created_at?: string; updated_at?: string; locale?: OrganizationLocale };
+        Insert: Omit<Organization, 'id' | 'created_at' | 'updated_at' | 'locale' | 'time_zone'> & { id?: string; created_at?: string; updated_at?: string; locale?: OrganizationLocale; time_zone?: string | null };
         Update: Partial<Organization>;
       };
       organization_members: {

@@ -67,6 +67,20 @@ const ERROR_MAP: Record<string, MappedError> = {
   P3J03: { status: 400, code: 'INVALID_QUERY', message: 'Invalid time window' },
   P3J04: { status: 400, code: 'QUERY_WINDOW_TOO_LARGE', message: 'The requested time window is too large' },
 
+  // Team & organization management (20261102000001, 20261121700001). P3S01
+  // answers both "not a member" and "no such organization" so ids cannot be
+  // probed; the routes return 401 before calling, so here it is only ever the
+  // not-found reading. P3S02 keeps its existing meaning (role may not do this,
+  // including an admin touching an owner); P3S07 is the narrower rank refusal
+  // so the screen can explain it.
+  P3S01: { status: 404, code: 'ORGANIZATION_NOT_FOUND', message: 'Organization not found' },
+  P3S02: { status: 403, code: 'FORBIDDEN', message: 'You do not have permission to perform this action' },
+  P3S03: { status: 422, code: 'INVALID_MEMBERSHIP_CHANGE', message: 'That change is not valid' },
+  P3S04: { status: 409, code: 'INVALID_MEMBERSHIP_CHANGE', message: 'That change is not valid' },
+  P3S05: { status: 409, code: 'LAST_OWNER', message: 'An organization must keep at least one owner. Transfer ownership first.' },
+  P3S06: { status: 404, code: 'MEMBER_NOT_FOUND', message: 'Member not found' },
+  P3S07: { status: 403, code: 'MEMBER_RANK_FORBIDDEN', message: 'You can only manage members below your own role' },
+
   // Outbound WhatsApp delivery (20261022000001, 20261022000003). Only the
   // codes the approve-and-enqueue path can surface are mapped here; the
   // worker-side codes (P3W03, P3W04, P3W07) never reach an API response.

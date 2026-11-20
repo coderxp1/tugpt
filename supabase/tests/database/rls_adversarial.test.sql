@@ -3,7 +3,7 @@
 -- Real RLS is simulated by switching roles and injecting JWT claims.
 
 BEGIN;
-SELECT plan(37);
+SELECT plan(41);
 
 -- =============================================================================
 -- SETUP: Seed test database records (bypassing RLS as postgres user)
@@ -109,7 +109,11 @@ SELECT is(
 SELECT set_config('request.jwt.claims', '{"sub":"55555555-5555-5555-5555-555555555555","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-UPDATE public.organizations SET name = 'Viewer Changed' WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+SELECT throws_ok(
+  $$SELECT public.update_organization_settings('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"name":"Viewer Changed"}')$$,
+  'P3S02', NULL,
+  'Test 5a: Viewer is refused by update_organization_settings'
+);
 
 SET LOCAL ROLE postgres;
 SELECT is(
@@ -124,7 +128,11 @@ SELECT is(
 SELECT set_config('request.jwt.claims', '{"sub":"33333333-3333-3333-3333-333333333333","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-UPDATE public.organizations SET name = 'Manager Changed' WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+SELECT throws_ok(
+  $$SELECT public.update_organization_settings('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"name":"Manager Changed"}')$$,
+  'P3S02', NULL,
+  'Test 6a: Manager is refused by update_organization_settings'
+);
 
 SET LOCAL ROLE postgres;
 SELECT is(
@@ -139,7 +147,12 @@ SELECT is(
 SELECT set_config('request.jwt.claims', '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-UPDATE public.organizations SET name = 'Acme Corp Updated By Admin' WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa';
+SELECT throws_ok(
+  $$UPDATE public.organizations SET name = 'Direct Bypass' WHERE id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa'$$,
+  '42501', NULL,
+  'Test 7a: Direct UPDATE on organizations is not granted, even to an admin (audit cannot be bypassed)'
+);
+SELECT public.update_organization_settings('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa', '{"name":"Acme Corp Updated By Admin"}');
 
 SET LOCAL ROLE postgres;
 SELECT is(
@@ -174,18 +187,24 @@ SELECT throws_ok(
 );
 
 -- =============================================================================
--- TEST 10: Admin can insert members
+-- TEST 10: Admin cannot attach an arbitrary user id (membership requires consent
+-- through an accepted invitation; see 20261121700001_dashboard_team_management)
 -- =============================================================================
 SELECT set_config('request.jwt.claims', '{"sub":"22222222-2222-2222-2222-222222222222","role":"authenticated"}', true);
 SET LOCAL ROLE authenticated;
 
-SELECT public.manage_organization_member('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','77777777-7777-7777-7777-777777777777','add','agent');
+SELECT throws_ok(
+  $$SELECT public.manage_organization_member('aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa','77777777-7777-7777-7777-777777777777','add','agent')$$,
+  'P3S02',
+  NULL,
+  'Test 10a: Admin cannot add a user by id without an invitation'
+);
 
 SET LOCAL ROLE postgres;
 SELECT is(
-  (SELECT role::text FROM public.organization_members WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' AND user_id = '77777777-7777-7777-7777-777777777777'),
-  'agent',
-  'Test 10: Admin can insert members'
+  (SELECT count(*)::int FROM public.organization_members WHERE organization_id = 'aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa' AND user_id = '77777777-7777-7777-7777-777777777777'),
+  0,
+  'Test 10b: No membership was created by the refused add'
 );
 
 -- =============================================================================
