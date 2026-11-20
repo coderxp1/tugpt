@@ -230,7 +230,7 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
           <GapNote gap={BACKEND_GAPS.MCP_STATE} label="Good to know">After you reload this page, a review starts again from &ldquo;Discover tools&rdquo;.</GapNote>
         </>
       )}
-      {!chatEnabled && <GapNote gap={BACKEND_GAPS.MCP_RUNTIME} label="Not enabled">Active servers appear in the Chat <kbd>@</kbd> menu as &ldquo;Not available in chat yet&rdquo;. Chat does not call them until MCP tools in Chat are switched on for your organization.</GapNote>}
+      {!chatEnabled && <GapNote gap={BACKEND_GAPS.MCP_RUNTIME} label="Not enabled">Approved tools from an active MCP server can be used in Chat with <kbd>@</kbd> once your administrator switches on MCP in Chat. Every call is recorded in your organization&rsquo;s audit log. While it is switched off, the <kbd>@</kbd> menu shows these tools as &ldquo;Not available in chat yet&rdquo; with the reason.</GapNote>}
       {deleting && (
         <ConfirmDialog
           title={`Remove ${deleting.displayName}?`}
