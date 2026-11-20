@@ -11,6 +11,8 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync, statSync } from 'node:fs';
 import { join, relative } from 'node:path';
+import { isSameOriginMutation } from '@/lib/http/mutations';
+import { isSameOriginRequest, readMutation } from '@/lib/workspace-data/http';
 
 const API_ROOT = join(__dirname);
 const MUTATION = /export\s+(?:async\s+)?function\s+(POST|PUT|PATCH|DELETE)\b|export\s+const\s+(POST|PUT|PATCH|DELETE)\b/g;
@@ -18,6 +20,12 @@ const GUARDS = [
   'crossOriginMutationResponse(',
   'crossOriginFormResponse(',
   'isSameOriginMutation(',
+  // Workspace API helpers (lib/workspace-data/http.ts): the same Origin + x-tugpt-csrf +
+  // sec-fetch-site checks; readMutation also requires application/json. File uploads use
+  // isSameOriginRequest because their body is binary. Equivalence is asserted below, so a
+  // weakened helper fails this file instead of silently passing the scan.
+  'isSameOriginRequest(',
+  'readMutation(',
 ];
 /** Not browser-session endpoints: authenticated by signature, not cookies. */
 const EXEMPT_PREFIXES: Record<string, string> = {
@@ -69,6 +77,33 @@ describe('mutation route origin/CSRF coverage', () => {
       'v1/connect/google/disconnect/route.ts',
       'v1/connect/microsoft/disconnect/route.ts',
     ]) expect(rels).toContain(must);
+  });
+
+  it('the Workspace guards accept and reject exactly what the canonical guard does (content type aside)', async () => {
+    const origin = 'https://app.tugpt-guard.invalid';
+    const prev = process.env.TUGPT_APP_ORIGIN;
+    process.env.TUGPT_APP_ORIGIN = origin;
+    try {
+      const cases: Record<string, string>[] = [
+        { origin, 'x-tugpt-csrf': '1', 'content-type': 'application/json' },
+        { origin: 'https://evil.example', 'x-tugpt-csrf': '1', 'content-type': 'application/json' },
+        { 'x-tugpt-csrf': '1', 'content-type': 'application/json' },
+        { origin, 'content-type': 'application/json' },
+        { origin, 'x-tugpt-csrf': '0', 'content-type': 'application/json' },
+        { origin, 'x-tugpt-csrf': '1', 'sec-fetch-site': 'cross-site', 'content-type': 'application/json' },
+        { origin, 'x-tugpt-csrf': '1', 'content-type': 'text/plain' },
+      ];
+      for (const h of cases) {
+        const req = () => new Request(`${origin}/api/v1/x`, { method: 'POST', headers: h, body: '{}' });
+        const canonical = isSameOriginMutation(req());
+        const ignoringType = isSameOriginMutation(new Request(`${origin}/api/v1/x`, { method: 'POST', headers: { ...h, 'content-type': 'application/json' }, body: '{}' }));
+        expect(isSameOriginRequest(req()), JSON.stringify(h)).toBe(ignoringType);
+        const read = await readMutation(req(), []);
+        expect(!(read instanceof Response) || read.status !== 403, JSON.stringify(h)).toBe(canonical);
+      }
+    } finally {
+      if (prev === undefined) delete process.env.TUGPT_APP_ORIGIN; else process.env.TUGPT_APP_ORIGIN = prev;
+    }
   });
 
   it('every mutation handler is guarded, exempt with a reason, or a listed known gap', () => {
