@@ -46,3 +46,19 @@ What else runs in-process (no network beyond loopback):
 `fixtures.sql` also clears the rate-limit buckets of both test organizations,
 so the suite can be re-run back to back.
 
+## Schema mode (`WS_IT_EXPECT_SCHEMA`, Q-10)
+
+By default the suite requires the Q-9c migrations (`20261120200001`–`3`). If
+they are missing, it stops before any test with "The database lacks
+migrations 20261120200001..3". With `WS_IT_EXPECT_SCHEMA=pre-q9c` it runs the
+same tests against a database **without** them, to prove the app is
+deployable before them (docs/workspace/operations.md §1a):
+
+- the test asserting Q-9c database grants is skipped;
+- two raw-PostgREST assertions are inverted. They record the pre-Q-9c exposure
+  that 200002 closes.
+
+Every other test, and every API assertion, is unchanged. In this mode the
+suite stops if the database already has the Q-9c functions. Any other value
+is rejected.
+

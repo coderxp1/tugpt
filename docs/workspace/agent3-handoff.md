@@ -87,7 +87,11 @@ the agent, and `messages[].citations` still shows only sources the reader can
 read now. What changed is where this is enforced. The database no longer lets
 a signed-in user read `custom_agents.instructions` or
 `chat_messages.citations` directly, or insert assistant/tool messages. The
-API reads and writes those through new database functions. New error mode:
-if the deployment lacks `GRANT sso_control TO authenticator`, chat answers
-end with `{"type":"error","code":"STORE_UNAVAILABLE"}`, which the UI already
-handles.
+API reads and writes those through new database functions. No new error mode
+(measured, Q-10): a deployment without `GRANT sso_control TO authenticator`
+cannot load sessions at all. Every protected request is
+`503 {"error":"temporarily_unavailable"}`, as before Q-9c. If a function call
+fails transiently, a chat answer still ends with
+`{"type":"error","code":"STORE_UNAVAILABLE"}`, which the UI already handles.
+Since Q-10 the same web build also works on a database without the Q-9c
+migrations, with identical responses. No UI change.

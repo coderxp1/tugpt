@@ -6,7 +6,8 @@ database built from the 114 committed migrations (latest `20261120100011`).
 
 ## 1. Deploy order
 
-1. Apply migrations **before** deploying the app. The app calls
+1. Apply migrations **before** deploying the app (exception: Q-9c, app first,
+   see §1a). The app calls
    `link_custom_agent_collection` (100009) and the 8-argument
    `search_chat_threads` (100007); an old database returns 404/500 for those.
    Since Q-9 the app selects `chat_messages.citations` / `knowledge_unavailable`
@@ -24,18 +25,11 @@ database built from the 114 committed migrations (latest `20261120100011`).
    `NOT private.valid_message_citations(citations)` before applying 100011 and
    decide on them explicitly (they can only be a user's own assistant rows). The
    app needs no change for 100011.
-   **Q-9c (200001–200003) is a breaking pair with the app, in both directions.**
-   They revoke the column reads of `custom_agents.instructions` and
-   `chat_messages.citations` and restrict client INSERTs on `chat_messages` to
-   `role = 'user'`. The app **before** Q-9c selects those columns and writes
-   assistant/tool rows with the user's client, so on a Q-9c database it fails
-   (42501) on agent lists/reads, thread reads and every chat answer. The app
-   **with** Q-9c calls `custom_agent_instructions`, `custom_agent_run_instructions`,
-   `chat_message_citations` and `append_chat_message_server`, which an older
-   database does not have. Apply 200001–200003 and deploy the Q-9c web build in
-   one maintenance window, migrations first, and keep the window short. The
-   migrations are DDL/grant changes only (no table rewrite and no row scan). Each
-   takes a brief ACCESS EXCLUSIVE lock for its `REVOKE`/`GRANT`/policy change.
+   **Q-9c (200001–200003): deploy the app first, then the migrations.** See
+   §1a. Since Q-10 the app works on both schemas, so no step of the
+   rollout leaves a broken app. The migrations are DDL/grant changes only (no table rewrite and no
+   row scan). Each takes a brief ACCESS EXCLUSIVE lock for its
+   `REVOKE`/`GRANT`/policy change.
    **B-1 (ordering with Agent 2's MCP migrations):** Agent 2's
    `20261120000001`–`000006` (`agent2/m9-followup`, `47ea476`) sort *between*
    this tree's `20261119100004` and `20261120100001`. The Supabase CLI refuses
@@ -59,6 +53,92 @@ database built from the 114 committed migrations (latest `20261120100011`).
 2. Deploy web and worker together; the worker writes chunks the web reads.
 3. Migrations are frozen once committed; checksums live in
    `supabase/migrations/checksums.json`.
+
+## 1a. Q-9c rollout (expand/contract, Q-10)
+
+### Measured compatibility
+
+Integration suite (`workspace-api.integration.test.ts`, 52 tests, real
+PostgREST and RLS) on disposable stacks. "Old schema" is 114 migrations (up
+to `20261120100011`); "Q-9c schema" is 117 (up to `20261120200003`).
+
+| App \ database | old schema | Q-9c schema |
+|---|---|---|
+| app before Q-9c (`e288687`) | 51/51 pass | **19 fail**: `GET /chat/threads/{id}` is 403 for *every* thread (the old app selects `citations`, 42501); agent list/get/create; every chat answer; agent runs |
+| Q-9c app without Q-10 (`ae76208`) | **18 fail** (probe removed to measure): agent create/get 503 (missing function, `PGRST202`); assistant messages not stored; agent runs; thread reads with assistant messages | 52/52 pass |
+| **this app (Q-10)** | 51 pass, 1 skipped (`WS_IT_EXPECT_SCHEMA=pre-q9c`; the skipped test asserts Q-9c database grants) | 52/52 pass |
+
+Real RS256 signing over HTTP (`next start` with a throwaway signing key,
+`tests/workspace-e2e/chat-signing-http.e2e.mjs`, fake model) passed on both
+schemas: a plain chat answer is stored, the owner sees agent instructions, a
+non-owner sees `''`, an agent run puts the instructions in the model prompt
+and never in a response, and no response body contains a JWT.
+
+### Why the Q-10 app is safe on both schemas
+
+Each of the four Q-9c functions is tried first. Only when PostgREST answers
+`PGRST202` (the function does not exist) does the app run the pre-Q-9c query
+instead (`apps/web/src/lib/supabase/schema-compat.ts`):
+
+| Function | Fallback (old schema only) |
+|---|---|
+| `custom_agent_instructions` | `select id,instructions` with the user's token, only for agents the caller can edit |
+| `custom_agent_run_instructions` | `select instructions` with the user's token (RLS) |
+| `chat_message_citations` | `select id,citations` with the user's token; then the same per-document `authorizeCitations` as before |
+| `append_chat_message_server` | the old full insert with the user's token |
+
+- On a Q-9c database the functions exist, so a fallback is unreachable.
+- On an old database a fallback does only what that database already allows
+  the caller.
+- `42501` and every other error still fail closed. Unit tests cover this:
+  `store.test.ts` and `agents-compat.test.ts`.
+
+### Prerequisites (all deployments)
+
+- `authenticator` must be a member of `sso_control`, and the app's
+  `TUGPT_DB_SIGNING_KID` / `TUGPT_DB_SIGNING_PRIVATE_KEY` must match the JWKS
+  PostgREST trusts (`PGRST_JWT_AUD=tugpt-dashboard-db`,
+  `PGRST_DB_PRE_REQUEST=sso.pre_request`). This is **not new with Q-9c**: every
+  protected request already loads its session through `sso.load_session` with
+  that same `sso_control` token (`proxy.ts`). Measured with the membership
+  revoked: every protected request returns `503 {"error":"temporarily_unavailable"}`,
+  the model is never called, and no row is written. So a deployment where
+  users can sign in today already meets this.
+- No new secret, environment variable, or PostgREST setting.
+
+### Sequence
+
+1. Deploy this web build on the **old** schema, together with the worker
+   (§1.2). Smoke test: sign in, open a thread with an answer, send one message,
+   open an agent you own and one you do not, run an agent.
+2. `psql -X -v ON_ERROR_STOP=1 -v phase=before -f deploy/workspace-q9c-preflight.sql`
+   must pass. It is read-only (catalog metadata only). It fails on a partial
+   Q-9c set or a missing `sso_control` membership.
+3. Apply `20261120200001`–`200003` (B-1 above still applies to the
+   `20261120000001`–`000006` / `20261120100001+` ordering, not to these three).
+4. `psql -X -v ON_ERROR_STOP=1 -v phase=after -f deploy/workspace-q9c-preflight.sql`
+   must pass: functions present, EXECUTE only where intended, the
+   `instructions`/`citations` reads and the assistant INSERT closed to
+   `authenticated`, and the INSERT policy only admits `role = 'user'`.
+5. Repeat the smoke test from step 1.
+
+### Rollback
+
+- **Before step 3:** roll back the app freely. The old schema works with both
+  the old app and this one.
+- **After step 3:** the rollback target is **this app (or later), never an app
+  before Q-9c**. An app before Q-9c on a Q-9c database returns 403 on every
+  thread read (table above).
+- **Do not reverse the migrations.** There is no down-migration, by design:
+  re-granting the column reads or the old INSERT policy reopens Q-9c F-1..F-3.
+  Fix forward.
+
+### Contract step (later)
+
+Once every environment passes step 4, remove the fallbacks in a follow-up
+change: `schema-compat.ts`, its four call sites, the `legacy` parameter of
+`appendServerMessage`, `WS_IT_EXPECT_SCHEMA`, and `agents-compat.test.ts`.
+After that, the app again requires the Q-9c schema.
 
 ## 2. Database grants (verified with `has_function_privilege`)
 
