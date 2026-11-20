@@ -28,7 +28,7 @@ Original SQL regression files remain unchanged, including approval/enqueue, outb
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 76 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
+**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 77 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
 
 ## Why this document exists
 
@@ -170,6 +170,8 @@ is unavailable — there is no skip path. Current races:
 | `workspace_agent_instructions_confidential.test.sql` | Q-9c F-1 (migration 20261120200001): authenticated has no SELECT on `custom_agents.instructions` (column and `*` select 42501, also for the agent's owner and org owner/admin) and keeps SELECT on the 12 other columns; `custom_agent_instructions` (DEFINER, pinned search_path, authenticated only) returns instructions only for agents the caller can edit (own agent; not a same-org member, viewer, other tenant or forged org), rejects >200 ids (22023) and a missing uid (42501); `custom_agent_run_instructions` is executable only by sso_control/service_role, returns the text when that user can read the agent and NULL otherwise (private agent of someone else, other tenant, ex-member, unknown id); `save_custom_agent` still creates and updates (with and without new instructions) and bumps version once |
 | `workspace_message_citations_confidential.test.sql` | Q-9c F-2 (migration 20261120200002): authenticated has no SELECT on `chat_messages.citations` (column and `*` 42501) and keeps the 11 other columns; `chat_message_citations` (DEFINER, authenticated only) returns citations of the caller's own thread only, each entry kept only while the reader can read that document in the same org, collection and file; covers collection made private and restored, document deleted, membership lost, collection mismatch, unknown document, other user's thread, other tenant, forged org, anon, NULL arguments (42501), >400 ids (22023), order and `n` preserved; `search_chat_threads` still works |
 | `workspace_server_authored_messages.test.sql` | Q-9c F-3 (migration 20261120200003): the owner's INSERT allows `role = 'user'` only (assistant and tool rows: 42501) and only the 7 granted columns (citations, knowledge_unavailable, capability_key, id, created_at: 42501); `append_chat_message_server` is executable only by sso_control/service_role, writes assistant/tool rows (citations validated, assistant-only fields enforced) for the thread's owner, and refuses with P0002 a wrong user, a wrong tenant, an archived thread, an ex-member or an unknown thread; role/NULL argument errors are 22023; no forged row is left behind |
+| `workspace_agent_visibility_permissions.test.sql` | F-4 (Agent 3): agent edit permissions follow the visibility RLS: only an owner/admin may save an agent as `organization`; a demoted manager/agent owner may still make their own organization agent private; viewers never edit |
+| `workspace_agent_visibility_permissions.test.sql` | F-4 (Agent 3): agent edit permissions follow the visibility RLS: only an owner/admin may save an agent as `organization`; a demoted manager/agent owner may still make their own organization agent private; viewers never edit |
 
 ## Writing a test
 
