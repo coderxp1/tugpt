@@ -123,5 +123,7 @@
   "20261120200001_workspace_agent_instructions_confidential.sql": "6579da239f6920293c002aab0f029684194ef8fc43dad7766cd00dc965dc415d",
   "20261120200002_workspace_message_citations_confidential.sql": "b74f299e0c4a228067f0dd523bffc6b06ba28bb2a47ca42e34601e94f255a9ee",
   "20261120200003_workspace_server_authored_messages.sql": "28d7a8e89f0fde44c15a4d6b493e0e3ce81e184503e1ff2003b71746d1adb0d7",
-  "20261121100001_workspace_chat_turns.sql": "c4190657c08cf5bde60ef76b00a726d0322cc98ff36006aafbb2a2a32376bf04"
+  "20261121100001_workspace_chat_turns.sql": "c4190657c08cf5bde60ef76b00a726d0322cc98ff36006aafbb2a2a32376bf04",
+  "20261122100001_workspace_chat_turn_runs.sql": "8562ac385fb86a7f78b4e5260887a00e9911d832619695c285591ef66aa28dbc",
+  "20261122100002_workspace_file_upload_request_ids.sql": "f993745668717f6bae214539aba2fe534b0b8159ca0284761079a1d33bac91ec"
 }
