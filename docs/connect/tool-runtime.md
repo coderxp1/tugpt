@@ -47,6 +47,12 @@ sequenceDiagram
 8. The connection holds an accepted scope (`calendar.freebusy`, or the superset `calendar.readonly`) → else `SCOPE_MISSING`.
 9. A write-risk tool → `APPROVAL_REQUIRED`. The approval flow is not in this slice.
 10. Arguments are valid → else `INVALID_ARGUMENTS`.
+    For customer MCP tools the check uses the APPROVED snapshot's `inputSchema` (`json-schema-args.ts`). Before the
+    check, a string that the schema requires to be an array or object (and that the schema does not also allow as
+    a string) is JSON-decoded, at most `MAX_DECODE_CHARS` (64 KiB) per string, and used only if the decoded value
+    has an allowed type. Some models send nested arguments as JSON strings (observed with TuGPT Scout). Approval,
+    audit hash and approval card always use the arguments exactly as the model sent them; the executed value is a
+    deterministic function of exactly those arguments.
 11. The broker token is issued → else `REAUTHORIZATION_REQUIRED` or `PROVIDER_UNAVAILABLE`.
 12. The output is at most 8 KiB → else `OUTPUT_TOO_LARGE`.
 

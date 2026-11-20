@@ -42,6 +42,20 @@ export class RepoError extends Error {
   constructor(public readonly pgCode: string, message: string) { super(message); }
 }
 
+/** activate_mcp_endpoint refused: the newest snapshot is not approved or is revoked (SQLSTATE PT409). HTTP 409. */
+export class ActivationDeniedError extends Error {
+  constructor() { super('the newest tool snapshot must be approved and not revoked'); this.name = 'ActivationDeniedError'; }
+}
+
+/** The endpoint does not exist in this organization (the RPC returned false). HTTP 404. */
+export class EndpointNotFoundError extends Error {
+  constructor() { super('MCP endpoint not found'); this.name = 'EndpointNotFoundError'; }
+}
+
+/** SQLSTATE + message activate_mcp_endpoint raises when the snapshot gate refuses (20261120000008). */
+export const ACTIVATION_DENIED_SQLSTATE = 'PT409';
+export const ACTIVATION_DENIED_MESSAGE = 'SNAPSHOT_NOT_APPROVED';
+
 export interface ExternalMcpRepository {
   createEndpoint(orgId: string, userId: string, url: string, displayName: string): Promise<{ id: string }>;
   /** null ONLY when no such endpoint exists in this org (F-M9-1). Throws DatabaseTimeoutError when the lookup
@@ -49,6 +63,8 @@ export interface ExternalMcpRepository {
    * caller lacks the owner/admin role. */
   getEndpointUrl(orgId: string, endpointId: string): Promise<string | null>;
   getEndpoint(orgId: string, endpointId: string): Promise<{ id: string; url: string } | null>;
+  /** Activation gate: true only when the NEWEST snapshot is approved and not revoked. Throws RepoError('42501')
+   * or DatabaseTimeoutError when the read fails (never reports a failed read as false). */
   hasApprovedSnapshot(orgId: string, endpointId: string): Promise<boolean>;
   listEndpoints(orgId: string): Promise<ExternalToolEndpoint[]>;
   getLatestSnapshotVersion(orgId: string, endpointId: string): Promise<number>;
@@ -59,6 +75,9 @@ export interface ExternalMcpRepository {
   getSnapshot(orgId: string, snapshotId: string): Promise<{ id: string; approvedAt: string | null } | null>;
   listSnapshotTools(orgId: string, snapshotId: string): Promise<ExternalToolWithPermission[]>;
   approveSnapshot(orgId: string, snapshotId: string, tools: readonly { name: string; permissionClass: PermissionClass }[]): Promise<void>;
+  /** Database-gated (20261120000008). Throws ActivationDeniedError (newest snapshot not approved / revoked),
+   * EndpointNotFoundError, RepoError('42501'), or DatabaseTimeoutError for anything else; never resolves unless
+   * the row was actually set to active. */
   activateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deactivateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deleteEndpoint(orgId: string, endpointId: string): Promise<void>;
@@ -203,15 +222,24 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
     },
 
     async hasApprovedSnapshot(orgId, endpointId) {
+      // The activation pre-check (the database enforces the same rule since 20261120000008). Only the NEWEST snapshot
+      // (highest version) counts, and it must be approved and not revoked. Reading just that one row means any
+      // number of older versions can no longer trip maybeSingle() (PGRST116 used to become a false 409), a newer
+      // unreviewed discovery cannot hide behind an older approval, and a revoked list never counts.
+      // A failed read is never "not approved": 42501 -> RepoError (403), anything else -> DatabaseTimeoutError (503).
       const { data, error } = await u
         .from('external_tool_snapshots')
-        .select('id')
+        .select('version,approved_at,revoked_at')
         .eq('organization_id', orgId)
         .eq('endpoint_id', endpointId)
-        .not('approved_at', 'is', null)
+        .order('version', { ascending: false })
+        .limit(1)
         .maybeSingle();
-      if (error) return false;
-      return data !== null;
+      if (error) throw endpointLookupError(error as PgError);
+      if (data === null || data === undefined) return false;
+      if (typeof data !== 'object') throw new Error('invalid snapshot lookup result');
+      const row = data as { approved_at?: unknown; revoked_at?: unknown };
+      return typeof row.approved_at === 'string' && row.approved_at.length > 0 && (row.revoked_at === null || row.revoked_at === undefined);
     },
 
     async listEndpoints(orgId) {
@@ -306,8 +334,13 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
     },
 
     async activateEndpoint(orgId, endpointId) {
-      const { error } = await u.rpc('activate_mcp_endpoint', { p_organization_id: orgId, p_endpoint_id: endpointId });
-      if (error) throw new Error('failed to activate the MCP endpoint');
+      const { data, error } = await u.rpc('activate_mcp_endpoint', { p_organization_id: orgId, p_endpoint_id: endpointId });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === ACTIVATION_DENIED_SQLSTATE && e?.message === ACTIVATION_DENIED_MESSAGE) throw new ActivationDeniedError();
+        throw endpointLookupError(e);
+      }
+      if (data !== true) throw new EndpointNotFoundError();
     },
 
     async deactivateEndpoint(orgId, endpointId) {

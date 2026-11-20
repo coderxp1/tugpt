@@ -20,6 +20,7 @@ const ORIGIN = 'https://app.test';
 let state: FakeState;
 let user = OWNER;
 const appended: Record<string, unknown>[] = [];
+const { streamed } = vi.hoisted(() => ({ streamed: [] as { role: string; content: unknown }[][] }));
 
 vi.mock('@/lib/chat/request', async (orig) => ({
   ...(await orig<typeof import('@/lib/chat/request')>()),
@@ -41,7 +42,7 @@ vi.mock('@/lib/chat/store', async (orig) => ({
 }));
 vi.mock('@/lib/chat/openai-compatible', async (orig) => ({
   ...(await orig<typeof import('@/lib/chat/openai-compatible')>()),
-  streamCompletion: async function* () { yield 'Model answer (stubbed).'; },
+  streamCompletion: async function* (_e: unknown, _m: unknown, msgs: { role: string; content: unknown }[]) { streamed.push(msgs); yield 'Model answer (stubbed).'; },
   completeWithTools: async (_e: unknown, _m: unknown, msgs: { role: string }[]) => (msgs.some((m) => m.role === 'tool')
     ? { text: 'Waiting for your approval.', toolCalls: [] }
     : { text: null, toolCalls: [{ id: 'call_m1', name: 'create_ticket', arguments: { title: 'VPN broken', api_token: 'tok_x' } }] }),
@@ -82,7 +83,7 @@ async function events(res: Response) {
 }
 
 beforeEach(() => {
-  state = seed(); user = OWNER; appended.length = 0;
+  state = seed(); user = OWNER; appended.length = 0; streamed.length = 0;
   vi.stubEnv('TUGPT_APP_ORIGIN', ORIGIN);
   vi.stubEnv('TUGPT_PRIVATE_LLM_URL', 'http://127.0.0.1:12435/v1');
   vi.stubEnv('TUGPT_CHAT_VERIFIED_TOOL_MODELS', 'tugpt-scout');
@@ -161,6 +162,14 @@ describe('POST /api/v1/chat/threads/[id]/approved-call', () => {
     // The approval is consumed by the claim; a second run is refused.
     const again = await events(await runReq(body({ callId: 'call_2' })));
     expect(again[1]).toMatchObject({ code: 'APPROVAL_REQUIRED' });
+  });
+  it('the follow-up model turn is told the approved call ran; it is never told to say the action is waiting', async () => {
+    approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
+    await events(await runReq(body()));
+    expect(streamed).toHaveLength(1);
+    const system = streamed[0].find((m) => m.role === 'system');
+    expect(String(system?.content)).not.toMatch(/waiting for their approval/);
+    expect(String(system?.content)).toMatch(/approved this exact call/);
   });
   it('a member can run an approval that an owner recorded; the claim is per organization', async () => {
     approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });

@@ -77,7 +77,7 @@ export function McpToolReview({ tools, approved, onApprove, lockedNote }: McpToo
         </table>
       </div>
       <dl className={s.levels}>{PERMISSION_LEVELS.map((p) => <div key={p}><dt>{PERMISSION_TEXT[p].label}</dt><dd>{PERMISSION_TEXT[p].help}</dd></div>)}</dl>
-      {risky && <GapNote gap={BACKEND_GAPS.CALL_APPROVAL}>Tools that are not Read only are blocked on every use until an owner or admin approves that exact call, and there is no screen for that approval yet.</GapNote>}
+      {risky && <GapNote gap={BACKEND_GAPS.CALL_APPROVAL}>Tools that are not Read only are blocked on every use until an owner or admin approves that exact call in the approval card in Chat. An approval covers one call with exactly those arguments and expires.</GapNote>}
       {editable ? (
         <>
           <label className={s.check}><input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} /> I read what each tool does and chose its level on purpose.</label>

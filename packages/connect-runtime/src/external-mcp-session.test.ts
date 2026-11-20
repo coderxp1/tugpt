@@ -112,7 +112,6 @@ describe('chat execution: strict replies', () => {
     spec({ stateful: false, callReply: (id) => ({ body: body(id), ...extra }) });
   it.each([
     ['JSON-RPC error', bad((id) => JSON.stringify({ jsonrpc: '2.0', id, error: { code: -32000, message: 'no' } }))],
-    ['isError: true', bad((id) => JSON.stringify({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'boom' }], isError: true } }))],
     ['reply for another id', bad(() => JSON.stringify({ jsonrpc: '2.0', id: 999, result: { content: [] } }))],
     ['no jsonrpc member', bad((id) => JSON.stringify({ id, result: { content: [] } }))],
     ['result is not an object', bad((id) => JSON.stringify({ jsonrpc: '2.0', id, result: 'text' }))],
@@ -122,6 +121,13 @@ describe('chat execution: strict replies', () => {
     ['HTTP 302', bad(() => '', { status: 302 })],
   ])('S7 %s -> PROVIDER_UNAVAILABLE', async (_n, s) => {
     expect(await run(s.fetchFn)).toEqual({ ok: false, code: 'PROVIDER_UNAVAILABLE' });
+  });
+
+  // Agent 2 (MCP reliability): a well-formed result with isError is the TOOL refusing, not the endpoint being
+  // unreachable. Distinct code, and the tool's text is still never returned.
+  it('S7b isError: true -> TOOL_ERROR (well-formed reply, tool refused)', async () => {
+    const s = bad((id) => JSON.stringify({ jsonrpc: '2.0', id, result: { content: [{ type: 'text', text: 'boom' }], isError: true } }));
+    expect(await run(s.fetchFn)).toEqual({ ok: false, code: 'TOOL_ERROR' });
   });
 
   it('S8 SSE: skips a preceding server notification and joins multi-line data', async () => {

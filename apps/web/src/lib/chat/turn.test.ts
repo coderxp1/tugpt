@@ -208,4 +208,15 @@ describe('helpers', () => {
     expect(systemPrompt({ ...base, attached: ['Google Workspace: calendar'] })).toMatch(/untrusted data/);
     expect(systemPrompt({ ...base, attached: ['Acme Docs: create'] })).toMatch(/APPROVAL_REQUIRED, do not call it again/);
   });
+  it('approved-call follow-up: the prompt reports the result and never says the action is still waiting (real-stack regression)', () => {
+    // Real run (server-memory, TuGPT Scout): after the approved create_entities call ran once and wrote the entity,
+    // the follow-up answer said "The action is waiting for your approval in the card shown below this answer."
+    const base = { organizationName: 'Acme', now: new Date('2026-11-15T10:00:00Z'), timeZone: 'Europe/Berlin', attached: ['Acme Docs: create'] };
+    const p = systemPrompt({ ...base, approvedCall: true } as Parameters<typeof systemPrompt>[0]);
+    expect(p).not.toMatch(/waiting for their approval/);
+    expect(p).not.toMatch(/APPROVAL_REQUIRED, do not call it again/);
+    expect(p).toMatch(/approved this exact call/);
+    expect(p).toMatch(/untrusted data/);
+    expect(systemPrompt(base)).toMatch(/waiting for their approval/);
+  });
 });
