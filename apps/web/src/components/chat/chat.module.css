@@ -200,3 +200,19 @@
 .threadList .thread,.threadList .threadActive{display:flex!important;align-items:center;gap:8px}
 .threadTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
 .threadTime{flex:none;font-size:11px;color:#686963;font-weight:400}.threadActive .threadTime{color:#d8d8d0}
+/* M4: picker groups, empty state, @ button, tool result blocks */
+.pickerWrap{position:static}
+.pickerGroup{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#686963;font-weight:700;padding:8px 12px 4px}
+.pickerEmpty{padding:10px 12px;font-size:13px;color:#4e4f49}
+.pickerHelp{padding:6px 12px 2px;font-size:11px;color:#686963;border-top:1px solid #eeeee8;margin-top:4px}
+.atButton{border:1px solid #d7d7cf;background:#fff;color:#171715;border-radius:10px;min-width:52px;min-height:52px;font-size:20px;font-weight:700;cursor:pointer}
+.atButton:hover:not(:disabled){background:#fff8c9}.atButton:disabled{opacity:.5;cursor:not-allowed}
+.atButton:focus-visible{outline:3px solid #8c4bce;outline-offset:2px}
+.toolBlock{align-self:flex-start;max-width:100%;border:1px solid #deded6;border-radius:12px;background:#fff;padding:8px 12px;font-size:13px;display:grid;gap:6px}
+.toolBlockFail{border-color:#f0c4c4;background:#fff6f6}
+.toolBlockHead{display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin:0}
+.toolBlockFix{margin:0;color:#9b1c1c}
+.toolBlock details summary{cursor:pointer;color:#4e4f49;font-size:12px;min-height:24px}
+.toolBlock details summary:focus-visible{outline:3px solid #8c4bce;outline-offset:2px}
+.toolBlock dl{display:grid;grid-template-columns:max-content 1fr;gap:4px 12px;margin:6px 0 0;font-size:12px}
+.toolBlock dt{color:#686963;font-weight:600}.toolBlock dd{margin:0;overflow-wrap:anywhere}

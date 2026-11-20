@@ -17,6 +17,8 @@
  * database (claim_tool_approval) for this exact endpoint, tool and
  * argument hash. Changed arguments, expiry, revocation or reuse all fail there.
  */
+import { createTranslator } from '@/i18n';
+import type { Translator } from '@/i18n/types';
 
 export type ApprovalPermissionClass = 'write' | 'irreversible' | 'financial';
 
@@ -117,6 +119,8 @@ export function displayArguments(args: Readonly<Record<string, unknown>>): Argum
   for (const [k, v] of Object.entries(args)) walk(v, k, 1, SECRET_KEY.test(k));
   return { lines, omitted };
 }
+
+const EN = createTranslator('en');
 
 export const PERMISSION_TEXT: Record<ApprovalPermissionClass, { label: string; effect: string }> = {
   write: { label: 'Changes data', effect: 'This creates or changes data in the connected system.' },
@@ -247,15 +251,17 @@ export function approvalReducer(s: ApprovalState, a: ApprovalAction): ApprovalSt
   }
 }
 
-export function failureText(reason: ApprovalFailure | 'not_recorded', canApprove: boolean): string {
+export function failureText(reason: ApprovalFailure | 'not_recorded', canApprove: boolean, t: Translator = EN): string {
   switch (reason) {
-    case 'forbidden': return canApprove ? 'You are not allowed to approve this in this organization.' : 'Only an owner or admin can approve this.';
-    case 'unauthenticated': return 'Your session has ended. Sign in again, then retry.';
-    case 'invalid': return 'The approval was refused because the request was not valid.';
-    case 'not_found': return 'This tool is no longer available.';
-    case 'unavailable': return 'The approval service is not working right now. Nothing was approved.';
-    case 'network': return 'The approval could not be sent. Check your connection. Nothing was approved.';
-    case 'not_recorded': return 'The approval could not be confirmed in the database. Nothing will run.';
-    default: return 'The approval service sent an unexpected answer. Nothing was approved.';
+    case 'forbidden': return canApprove ? t('chat.fail.forbidden') : t('chat.fail.forbiddenOther');
+    case 'unauthenticated': case 'invalid': case 'not_found': case 'unavailable': case 'network': case 'not_recorded':
+      return t(`chat.fail.${reason}`);
+    default: return t('chat.fail.unexpected');
   }
 }
+
+/** Permission badge and effect sentence in the reader's language. */
+export function permissionText(cls: ApprovalPermissionClass, t: Translator = EN): { label: string; effect: string } {
+  return { label: t(`chat.perm.${cls}.label`), effect: t(`chat.perm.${cls}.effect`) };
+}
+export const ttlLabel = (seconds: number, t: Translator = EN) => t.maybe(`chat.ttl.${seconds}`, `${seconds} s`);

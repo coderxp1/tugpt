@@ -2,8 +2,9 @@
 
 import { ToolState, type ToolRunState } from './ToolState';
 import { useEffect, useId, useReducer, useState } from 'react';
+import { useT } from '@/i18n/provider';
 import {
-  approvalReducer, checkApproval, displayArguments, failureText, INITIAL_APPROVAL, PERMISSION_TEXT, requestApproval, revokeApproval, TTL_OPTIONS,
+  approvalReducer, checkApproval, displayArguments, failureText, INITIAL_APPROVAL, permissionText, requestApproval, revokeApproval, TTL_OPTIONS, ttlLabel,
   type PendingApproval,
 } from '@/lib/chat/approval';
 import { toolProblem } from '@/lib/connect-ui/chat-errors';
@@ -35,13 +36,14 @@ function mmss(ms: number): string {
  * and failed. A failed or unconfirmed approval request never enables Run.
  */
 export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, init) => fetch(i, init), now = Date.now }: ApprovalCardProps) {
+  const t = useT();
   const [state, dispatch] = useReducer(approvalReducer, INITIAL_APPROVAL);
   const [ttl, setTtl] = useState<number>(TTL_OPTIONS[0].seconds);
   const [checked, setChecked] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
   const [clock, setClock] = useState(() => now());
   const id = useId();
-  const perm = PERMISSION_TEXT[approval.permissionClass];
+  const perm = permissionText(approval.permissionClass, t);
   const args = displayArguments(approval.arguments);
   const expiresAt = state.kind === 'approved' || state.kind === 'running' || state.kind === 'revoking' ? state.expiresAt : null;
 
@@ -75,7 +77,7 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
     dispatch({ type: 'approve' });
     const v = await checkApproval(approval, fetchFn);
     if (!v.ok) { dispatch({ type: 'approve_failed', reason: v.reason }); return; }
-    if (!v.value.approved) { dispatch({ type: 'approve_failed', reason: 'forbidden' }); setNotice('No approval for this exact call exists yet.'); return; }
+    if (!v.value.approved) { dispatch({ type: 'approve_failed', reason: 'forbidden' }); setNotice(t('chat.ap.n.noneYet')); return; }
     dispatch({ type: 'approved', id: null, expiresAt: null });
   }
 
@@ -87,10 +89,10 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
     const r = await revokeApproval(id, fetchFn);
     if (!r.ok) {
       dispatch({ type: 'revoke_failed' });
-      setNotice(`The approval could not be revoked (${failureText(r.reason, canApprove)}) It stays valid until it expires or is used.`);
+      setNotice(t('chat.ap.n.revokeFailed', { reason: failureText(r.reason, canApprove, t) }));
       return;
     }
-    if (!r.value.revoked) setNotice('There was no unused approval left to revoke (it was already used, revoked or had expired).');
+    if (!r.value.revoked) setNotice(t('chat.ap.n.nothingToRevoke'));
     dispatch({ type: 'revoke_done' });
   }
 
@@ -101,7 +103,7 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
       const r = await onRun(approval);
       if (!r.ok && r.code === 'REQUEST_REFUSED') {
         dispatch({ type: 'run_refused' });
-        setNotice(`Not run: ${r.message ?? 'the server refused the call'}. The approval was not used and stays valid until it expires${canApprove ? ' or you revoke it' : ''}.`);
+        setNotice(t(canApprove ? 'chat.ap.n.refusedRevocable' : 'chat.ap.n.refused', { reason: r.message ?? t('chat.ap.n.serverRefused') }));
         return;
       }
       dispatch({ type: 'run_done', ok: r.ok, ...(r.code ? { code: r.code } : {}) });
@@ -110,19 +112,19 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
 
   const statusText = (() => {
     switch (state.kind) {
-      case 'pending': return canApprove ? 'Waiting for your decision. Nothing has run.' : 'Waiting for an owner or admin. Nothing has run.';
-      case 'approving': return 'Recording the approval…';
-      case 'approved': return state.expiresAt === null ? 'Approved for one run.' : `Approved for one run. Expires in ${mmss(state.expiresAt - clock)}.`;
-      case 'running': return 'Running the approved call…';
+      case 'pending': return canApprove ? t('chat.ap.s.pendingYou') : t('chat.ap.s.pendingOther');
+      case 'approving': return t('chat.ap.s.approving');
+      case 'approved': return state.expiresAt === null ? t('chat.ap.s.approved') : t('chat.ap.s.approvedExp', { time: mmss(state.expiresAt - clock) });
+      case 'running': return t('chat.ap.s.running');
       case 'done':
-        if (state.ok) return 'Done. The call ran once; the answer is shown below.';
-        if (state.code === 'APPROVAL_REQUIRED') return 'Not run: the database did not accept the approval (expired, revoked, already used, or the call changed).';
-        return `Not completed: ${toolProblem(state.code).text}`;
-      case 'rejected': return 'Rejected. Nothing was run.';
-      case 'revoking': return 'Revoking the approval…';
-      case 'revoked': return 'Approval revoked. Nothing was run.';
-      case 'expired': return 'The approval expired before it was used. Nothing was run.';
-      case 'failed': return failureText(state.reason, canApprove);
+        if (state.ok) return t('chat.ap.s.done');
+        if (state.code === 'APPROVAL_REQUIRED') return t('chat.ap.s.dbRefused');
+        return t('chat.ap.s.notCompleted', { reason: toolProblem(state.code, t).text });
+      case 'rejected': return t('chat.ap.s.rejected');
+      case 'revoking': return t('chat.ap.s.revoking');
+      case 'revoked': return t('chat.ap.s.revoked');
+      case 'expired': return t('chat.ap.s.expired');
+      case 'failed': return failureText(state.reason, canApprove, t);
     }
   })();
 
@@ -136,28 +138,28 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
     <section className={`${s.approval} ${closed ? s.approvalClosed : ''}`} aria-labelledby={`${id}-t`} data-state={state.kind}>
       <header className={s.approvalHead}>
         <span className={`${s.permBadge} ${approval.permissionClass === 'write' ? '' : s.permDanger}`}>{perm.label}</span>
-        <h2 id={`${id}-t`}>Approve this action?</h2>
+        <h2 id={`${id}-t`}>{t('chat.ap.title')}</h2>
         <ToolState state={pill} />
       </header>
       <p className={s.approvalWhat}>
-        TuGPT wants to run <code>{approval.toolName}</code> on <strong>{approval.endpointName}</strong>. {perm.effect}
+        {(() => { const [a, rest] = t('chat.ap.what', { tool: '\u0000', endpoint: '\u0001' }).split('\u0000'); const [b, c] = rest.split('\u0001'); return <>{a}<code>{approval.toolName}</code>{b}<strong>{approval.endpointName}</strong>{c}</>; })()} {perm.effect}
       </p>
       <dl className={s.approvalFacts}>
-        <dt>Tool</dt><dd><code>{approval.toolName}</code>{approval.toolDescription && <> — {approval.toolDescription}</>}</dd>
-        <dt>Endpoint</dt><dd>{approval.endpointName} <span className={s.host}>({approval.endpointHost})</span></dd>
+        <dt>{t('chat.ap.tool')}</dt><dd><code>{approval.toolName}</code>{approval.toolDescription && <> — {approval.toolDescription}</>}</dd>
+        <dt>{t('chat.ap.endpoint')}</dt><dd>{approval.endpointName} <span className={s.host}>({approval.endpointHost})</span></dd>
       </dl>
-      <h3 className={s.argsTitle}>Arguments</h3>
-      {args.lines.length === 0 ? <p className={s.muted}>No arguments.</p> : (
+      <h3 className={s.argsTitle}>{t('chat.ap.args')}</h3>
+      {args.lines.length === 0 ? <p className={s.muted}>{t('chat.ap.noArgs')}</p> : (
         <table className={s.args}>
-          <caption className={s.sr}>Arguments of this call. Hidden values are secrets and are not shown.</caption>
+          <caption className={s.sr}>{t('chat.ap.argsCaption')}</caption>
           <tbody>{args.lines.map((l) => (
             <tr key={l.path}><th scope="row">{l.path}</th>
-              <td>{l.redacted ? <span className={s.redacted}>Hidden</span> : <span className={s.argValue}>{l.value}</span>}{l.truncated && <span className={s.muted}> (shortened)</span>}</td></tr>
+              <td>{l.redacted ? <span className={s.redacted}>{t('chat.ap.hidden')}</span> : <span className={s.argValue}>{l.value}</span>}{l.truncated && <span className={s.muted}>{t('chat.ap.shortened')}</span>}</td></tr>
           ))}</tbody>
         </table>
       )}
-      {args.omitted > 0 && <p className={s.muted}>{args.omitted} more value{args.omitted === 1 ? '' : 's'} not shown.</p>}
-      <p className={s.fine}>An approval covers this exact call with these arguments, once. Reference <code>{approval.argumentsSha256.slice(0, 12)}</code></p>
+      {args.omitted > 0 && <p className={s.muted}>{args.omitted === 1 ? t('chat.ap.omittedOne') : t('chat.ap.omittedMany', { count: args.omitted })}</p>}
+      <p className={s.fine}>{t('chat.ap.fine')} <code>{approval.argumentsSha256.slice(0, 12)}</code></p>
 
       <p className={s.approvalStatus} role="status" aria-live="polite">{statusText}</p>
       {notice && <p className={s.approvalNotice}>{notice}</p>}
@@ -165,36 +167,36 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
       {decide && canApprove && (
         <div className={s.approvalForm}>
           <fieldset>
-            <legend>Approval valid for</legend>
+            <legend>{t('chat.ap.validFor')}</legend>
             {TTL_OPTIONS.map((o) => (
-              <label key={o.seconds}><input type="radio" name={`${id}-ttl`} value={o.seconds} checked={ttl === o.seconds} onChange={() => setTtl(o.seconds)} /> {o.label}</label>
+              <label key={o.seconds}><input type="radio" name={`${id}-ttl`} value={o.seconds} checked={ttl === o.seconds} onChange={() => setTtl(o.seconds)} /> {ttlLabel(o.seconds, t)}</label>
             ))}
           </fieldset>
-          <label className={s.confirm}><input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> I checked the server, tool and details and want this to run once.</label>
+          <label className={s.confirm}><input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> {t('chat.ap.confirm')}</label>
           <div className={s.approvalActions}>
-            <button type="button" className={s.approve} onClick={() => void approve()} disabled={!checked} aria-describedby={`${id}-t`}>Approve</button>
-            <button type="button" className={s.reject} onClick={() => dispatch({ type: 'reject' })}>Reject</button>
+            <button type="button" className={s.approve} onClick={() => void approve()} disabled={!checked} aria-describedby={`${id}-t`}>{t('chat.ap.approve')}</button>
+            <button type="button" className={s.reject} onClick={() => dispatch({ type: 'reject' })}>{t('chat.ap.reject')}</button>
           </div>
         </div>
       )}
       {decide && !canApprove && (
         <div className={s.approvalForm}>
-          <p className={s.muted}>Only an owner or admin of this organization can approve actions that change data. Chat cannot send them an approval request yet, so ask them directly. Nothing was changed.</p>
+          <p className={s.muted}>{t('chat.ap.onlyAdmins')}</p>
           <div className={s.approvalActions}>
-            <button type="button" className={s.reject} onClick={() => void checkAgain()}>Check again</button>
-            <button type="button" className={s.reject} onClick={() => dispatch({ type: 'reject' })}>Dismiss</button>
+            <button type="button" className={s.reject} onClick={() => void checkAgain()}>{t('chat.ap.checkAgain')}</button>
+            <button type="button" className={s.reject} onClick={() => dispatch({ type: 'reject' })}>{t('chat.ap.dismiss')}</button>
           </div>
         </div>
       )}
       {state.kind === 'approved' && (
         <div className={s.approvalActions}>
-          <button type="button" className={s.approve} onClick={() => void run()} disabled={busy}>Run now</button>
-          {canApprove && <button type="button" className={s.reject} onClick={() => void revoke('revoked')}>Revoke approval</button>}
-          {busy && <span className={s.muted}>Wait until the current answer finishes.</span>}
+          <button type="button" className={s.approve} onClick={() => void run()} disabled={busy}>{t('chat.ap.runNow')}</button>
+          {canApprove && <button type="button" className={s.reject} onClick={() => void revoke('revoked')}>{t('chat.ap.revoke')}</button>}
+          {busy && <span className={s.muted}>{t('chat.ap.waitBusy')}</span>}
         </div>
       )}
-      {(state.kind === 'approving' || state.kind === 'running' || state.kind === 'revoking') && <span className={s.sr}>Working</span>}
-      {expiresAt !== null && state.kind === 'running' && <span className={s.sr}>Approval expiry {new Date(expiresAt).toISOString()}</span>}
+      {(state.kind === 'approving' || state.kind === 'running' || state.kind === 'revoking') && <span className={s.sr}>{t('chat.ap.working')}</span>}
+      {expiresAt !== null && state.kind === 'running' && <span className={s.sr}>{t('chat.ap.expiry', { at: new Date(expiresAt).toISOString() })}</span>}
     </section>
   );
 }

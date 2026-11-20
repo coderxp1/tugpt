@@ -12,8 +12,9 @@
 import { useState } from 'react';
 import Link from 'next/link';
 import s from '@/components/connect/connect.module.css';
-import { GENERIC_ERROR, readInvitationError } from '@/lib/team/invitation-errors';
-import { ROLE_LABEL } from '@/components/team/TeamInvitations';
+import { readInvitationError } from '@/lib/team/invitation-errors';
+import { roleLabel } from '@/lib/team/roles';
+import { useT } from '@/i18n/provider';
 
 export const PENDING_INVITE_KEY = 'tugpt.pendingInvite';
 const JSON_HEADERS = { 'Content-Type': 'application/json', 'x-tugpt-csrf': '1' };
@@ -39,6 +40,7 @@ type State =
   | { kind: 'error'; code: string | null; status: number; message: string };
 
 export function InviteAccept() {
+  const t = useT();
   // Browser-only component (loaded with ssr:false by InviteAcceptClient), so window exists on first render.
   const [token] = useState<string | null>(() => takeInviteToken(window));
   const [state, setState] = useState<State>(() => (token ? { kind: 'ready' } : { kind: 'none' }));
@@ -52,7 +54,7 @@ export function InviteAccept() {
     try {
       const res = await fetch('/api/v1/invitations/accept', { method: 'POST', headers: JSON_HEADERS, body: JSON.stringify({ token }) });
       if (!res.ok) {
-        const err = await readInvitationError(res);
+        const err = await readInvitationError(res, t);
         if (err.code && TERMINAL.has(err.code)) forget();
         setState({ kind: 'error', ...err });
         return;
@@ -61,7 +63,7 @@ export function InviteAccept() {
       forget();
       setState({ kind: 'joined', organizationId: body.membership.organization_id, role: body.membership.role, created: body.membership.membership_created });
     } catch {
-      setState({ kind: 'error', code: null, status: 0, message: GENERIC_ERROR });
+      setState({ kind: 'error', code: null, status: 0, message: t('team.err.generic') });
     }
   }
 
@@ -73,30 +75,30 @@ export function InviteAccept() {
       window.location.assign('/dashboard/settings');
     } catch {
       setOpening(false);
-      setState({ kind: 'error', code: 'SWITCH_FAILED', status: 0, message: 'You joined, but switching organization failed. Use “Switch organization” in Settings.' });
+      setState({ kind: 'error', code: 'SWITCH_FAILED', status: 0, message: t('invite.switchFailed') });
     }
   }
 
   return (
     <div className={s.page}>
-      <header className={s.head}><p className={s.eyebrow}>Invitation</p><h1>Join an organization on TuGPT</h1></header>
+      <header className={s.head}><p className={s.eyebrow}>{t('invite.eyebrow')}</p><h1>{t('invite.title')}</h1></header>
       <section className={s.card} aria-labelledby="invite-h" aria-live="polite" style={{ maxWidth: '40rem' }}>
         <h2 id="invite-h">
-          {state.kind === 'joined' ? 'You’re in' : state.kind === 'none' ? 'No invitation found' : 'You have been invited'}
+          {state.kind === 'joined' ? t('invite.h.joined') : state.kind === 'none' ? t('invite.h.none') : t('invite.h.invited')}
         </h2>
 
         {state.kind === 'none' && (
-          <p className={s.next}>Open the complete invitation link you received. If it does not work, ask the person who invited you for a new one.</p>
+          <p className={s.next}>{t('invite.none.body')}</p>
         )}
 
         {(state.kind === 'ready' || state.kind === 'busy') && (
           <>
-            <p className={s.next}>Joining gives you access to this organization’s chats, connections and settings according to the role you were invited with. You must be signed in with the e-mail address the invitation was sent to.</p>
+            <p className={s.next}>{t('invite.ready.body')}</p>
             <div className={s.actions}>
               <button type="button" className={s.primary} onClick={() => void join()} disabled={state.kind === 'busy'} style={{ minHeight: 44 }}>
-                {state.kind === 'busy' ? 'Joining…' : 'Join organization'}
+                {state.kind === 'busy' ? t('invite.joining') : t('invite.join')}
               </button>
-              <Link className={s.secondary} href="/dashboard" onClick={forget}>Not now</Link>
+              <Link className={s.secondary} href="/dashboard" onClick={forget}>{t('invite.notNow')}</Link>
             </div>
           </>
         )}
@@ -104,11 +106,11 @@ export function InviteAccept() {
         {state.kind === 'joined' && (
           <>
             <p className={s.next}>
-              {state.created ? 'You joined the organization' : 'You were already a member of this organization'} as {ROLE_LABEL[state.role] ?? state.role}.
+              {t(state.created ? 'invite.joined' : 'invite.already', { role: roleLabel(state.role, t) })}
             </p>
             <div className={s.actions}>
               <button type="button" className={s.primary} disabled={opening} onClick={() => void openOrganization(state.organizationId)} style={{ minHeight: 44 }}>
-                {opening ? 'Opening…' : 'Open the organization'}
+                {opening ? t('invite.opening') : t('invite.open')}
               </button>
             </div>
           </>
@@ -118,16 +120,16 @@ export function InviteAccept() {
           <div role="alert" className={s.bannerError}>
             <p>{state.message}</p>
             {state.code === 'VERIFIED_EMAIL_REQUIRED' && (
-              <p>For your security, accepting requires a fresh e-mail confirmation. Sign out, sign in again with the invited address, then return to this page within one minute and choose Join.</p>
+              <p>{t('invite.verifyHelp')}</p>
             )}
             <div className={s.actions}>
               {(state.status === 401 || state.code === 'VERIFIED_EMAIL_REQUIRED' || state.code === 'INVITATION_WRONG_ACCOUNT') && (
-                <Link className={s.secondary} href="/auth/logout" prefetch={false}>Sign out and sign in again</Link>
+                <Link className={s.secondary} href="/auth/logout" prefetch={false}>{t('invite.signOutIn')}</Link>
               )}
               {token && !(state.code && TERMINAL.has(state.code)) && state.code !== 'SWITCH_FAILED' && (
-                <button type="button" className={s.secondary} onClick={() => void join()}>Try again</button>
+                <button type="button" className={s.secondary} onClick={() => void join()}>{t('invite.tryAgain')}</button>
               )}
-              <Link className={s.secondary} href="/dashboard">Go to dashboard</Link>
+              <Link className={s.secondary} href="/dashboard">{t('invite.toDashboard')}</Link>
             </div>
           </div>
         )}

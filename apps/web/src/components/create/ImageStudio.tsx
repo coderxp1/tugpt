@@ -5,6 +5,8 @@
  * never reach the browser.
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 'react';
+import { useT } from '@/i18n/provider';
+import type { MessageKey, Translator } from '@/i18n/types';
 import s from './create.module.css';
 
 type Status = 'queued' | 'processing' | 'completed' | 'failed' | 'cancelled' | 'expired';
@@ -17,59 +19,57 @@ export interface StudioImage {
 interface ServiceState { readonly configured: boolean; readonly available: boolean; readonly model: string | null }
 type Size = 'square' | 'landscape' | 'portrait';
 
-const SIZES: readonly { key: Size; label: string; detail: string }[] = [
-  { key: 'square', label: 'Square', detail: '1024 × 1024' },
-  { key: 'landscape', label: 'Landscape', detail: '1280 × 720' },
-  { key: 'portrait', label: 'Portrait', detail: '720 × 1280' },
+const SIZES: readonly { key: Size; detail: string }[] = [
+  { key: 'square', detail: '1024 × 1024' },
+  { key: 'landscape', detail: '1280 × 720' },
+  { key: 'portrait', detail: '720 × 1280' },
 ];
+
 const MAX = 1000;
 const POLL_MS = 1200;
 const HEADERS = { 'content-type': 'application/json', 'x-tugpt-csrf': '1' } as const;
 const active = (st: Status) => st === 'queued' || st === 'processing';
 
-const FAILURE_TEXT: Readonly<Record<string, string>> = {
-  GPU_INFERENCE_FAILED: 'The GPU could not generate this image. Try rephrasing the prompt.',
-  GPU_SHUTDOWN: 'Generation was interrupted.',
-  JOB_NOT_FOUND: 'This job is no longer known to the image service.',
-  RESULT_EXPIRED: 'This image has expired and is no longer stored.',
-};
+const FAILURES = new Set(['GPU_INFERENCE_FAILED', 'GPU_SHUTDOWN', 'JOB_NOT_FOUND', 'RESULT_EXPIRED']);
 
-async function readError(res: Response): Promise<string> {
+/** A server `message` is passed through as the server wrote it; otherwise the reader's language. */
+async function readError(res: Response, t: Translator): Promise<string> {
   try {
     const body = await res.json() as { message?: unknown };
     if (typeof body.message === 'string') return body.message;
   } catch { /* fall through */ }
-  if (res.status === 401) return 'Your session has ended. Sign in again to continue.';
-  return 'Something went wrong. Please try again.';
+  if (res.status === 401) return t('create.err.session');
+  return t('create.err.generic');
 }
 
-function statusText(img: StudioImage): string {
-  if (img.status === 'queued') return 'Waiting for the GPU…';
-  if (img.status === 'processing') return `Generating… ${img.progress}%`;
-  if (img.status === 'completed') return img.seconds !== null ? `Done in ${img.seconds.toFixed(1)} s` : 'Done';
-  if (img.status === 'cancelled') return 'Cancelled';
-  if (img.status === 'expired') return 'Expired';
-  return FAILURE_TEXT[img.errorCode ?? ''] ?? 'Generation failed.';
+function statusText(img: StudioImage, t: Translator): string {
+  if (img.status === 'queued') return t('create.st.queued');
+  if (img.status === 'processing') return t('create.st.processing', { progress: img.progress });
+  if (img.status === 'completed') return img.seconds !== null ? t('create.st.doneIn', { seconds: img.seconds.toLocaleString(t.locale, { minimumFractionDigits: 1, maximumFractionDigits: 1 }) }) : t('create.st.done');
+  if (img.status === 'cancelled') return t('create.st.cancelled');
+  if (img.status === 'expired') return t('create.st.expired');
+  return img.errorCode && FAILURES.has(img.errorCode) ? t(`create.fail.${img.errorCode}` as MessageKey) : t('create.fail.default');
 }
 
 type LoadResult =
   | { readonly ok: true; readonly service: ServiceState; readonly images: StudioImage[] }
   | { readonly ok: false; readonly message: string };
 
-async function fetchHistory(): Promise<LoadResult> {
+async function fetchHistory(t: Translator): Promise<LoadResult> {
   try {
     const res = await fetch('/api/v1/create/images', { cache: 'no-store' });
-    if (!res.ok) return { ok: false, message: await readError(res) };
+    if (!res.ok) return { ok: false, message: await readError(res, t) };
     const body = await res.json() as { service: ServiceState; images: StudioImage[] };
     return { ok: true, service: body.service, images: body.images };
   } catch {
-    return { ok: false, message: 'Could not reach TuGPT. Check your connection and try again.' };
+    return { ok: false, message: t('create.err.network') };
   }
 }
 
-const timeFmt = new Intl.DateTimeFormat(undefined, { dateStyle: 'medium', timeStyle: 'short' });
 
 export function ImageStudio() {
+  const t = useT();
+  const timeFmt = new Intl.DateTimeFormat(t.locale, { dateStyle: 'medium', timeStyle: 'short' });
   const [service, setService] = useState<ServiceState | null>(null);
   const [images, setImages] = useState<StudioImage[]>([]);
   /** Finished images whose preview failed to load (the bytes are served from the private GPU). */
@@ -102,11 +102,11 @@ export function ImageStudio() {
   // Initial state is already 'loading'; Retry sets it before fetching again.
   useEffect(() => {
     mounted.current = true;
-    void fetchHistory().then(applyLoad);
+    void fetchHistory(t).then(applyLoad);
     return () => { mounted.current = false; if (pollTimer.current) clearTimeout(pollTimer.current); };
-  }, [applyLoad]);
+  }, [applyLoad, t]);
 
-  const retry = () => { setLoadState('loading'); void fetchHistory().then(applyLoad); };
+  const retry = () => { setLoadState('loading'); void fetchHistory(t).then(applyLoad); };
 
   const running = images.find((i) => active(i.status)) ?? null;
   const runningId = running?.id ?? null;
@@ -139,20 +139,20 @@ export function ImageStudio() {
     setSubmitting(true); setFormError('');
     try {
       const res = await fetch('/api/v1/create/images', { method: 'POST', headers: HEADERS, body: JSON.stringify({ prompt: trimmed, size }) });
-      if (!res.ok) { setFormError(await readError(res)); return; }
+      if (!res.ok) { setFormError(await readError(res, t)); return; }
       const { image } = await res.json() as { image: StudioImage };
       upsert(image); setSelectedId(image.id);
     } catch {
-      setFormError('Could not reach TuGPT. Check your connection and try again.');
+      setFormError(t('create.err.network'));
     } finally { if (mounted.current) setSubmitting(false); }
   }
 
   async function cancel(id: string) {
     try {
       const res = await fetch(`/api/v1/create/images/${id}/cancel`, { method: 'POST', headers: HEADERS, body: '{}' });
-      if (!res.ok) { setFormError(await readError(res)); return; }
+      if (!res.ok) { setFormError(await readError(res, t)); return; }
       upsert((await res.json() as { image: StudioImage }).image);
-    } catch { setFormError('Could not cancel. Please try again.'); }
+    } catch { setFormError(t('create.err.cancel')); }
   }
 
   function onKey(e: KeyboardEvent<HTMLTextAreaElement>) {
@@ -166,96 +166,96 @@ export function ImageStudio() {
     <div className={s.studio}>
       <section className={s.composer} aria-labelledby="create-image-title">
         <div className={s.composerHead}>
-          <h2 id="create-image-title">Image generation</h2>
+          <h2 id="create-image-title">{t('create.studio.title')}</h2>
           {loadState === 'ready' && service && (
             <span className={`${s.badge} ${service.available ? s.ok : s.off}`}>
-              {service.available ? 'Ready' : service.configured ? 'Temporarily unavailable' : 'Not enabled yet'}
+              {service.available ? t('create.badge.ready') : service.configured ? t('create.badge.down') : t('create.badge.off')}
             </span>
           )}
         </div>
         {loadState === 'ready' && service && !service.available && (
           <p className={s.notice} role="status">
             {service.configured
-              ? 'The private GPU is not answering right now. Your image list is still here, but previews and downloads come from the GPU and return when it answers. Try again in a minute.'
-              : 'Image generation has not been switched on for this workspace.'}
+              ? t('create.notice.down')
+              : t('create.notice.off')}
           </p>
         )}
         <form onSubmit={generate} className={s.form} noValidate>
-          <label htmlFor="create-prompt" className={s.label}>Describe the image</label>
+          <label htmlFor="create-prompt" className={s.label}>{t('create.prompt.label')}</label>
           <textarea
             id="create-prompt" className={s.prompt} value={prompt} rows={4} maxLength={MAX}
-            placeholder="A product photo of a ceramic coffee cup on a sunlit oak table, soft shadows"
+            placeholder={t('create.prompt.placeholder')}
             onChange={(e) => setPrompt(e.target.value)} onKeyDown={onKey}
             aria-describedby="create-prompt-hint" disabled={loadState !== 'ready'}
           />
           <div id="create-prompt-hint" className={s.hint}>
-            <span>Ctrl or ⌘ + Enter to generate</span>
+            <span>{t('create.prompt.hint')}</span>
             <span aria-live="polite">{count} / {MAX}</span>
           </div>
           <fieldset className={s.sizes} disabled={loadState !== 'ready'}>
-            <legend className={s.label}>Size</legend>
+            <legend className={s.label}>{t('create.size')}</legend>
             {SIZES.map((o) => (
               <label key={o.key} className={`${s.size} ${size === o.key ? s.sizeOn : ''}`}>
                 <input type="radio" name="size" value={o.key} checked={size === o.key} onChange={() => setSize(o.key)} />
                 <span className={`${s.frame} ${s[o.key]}`} aria-hidden="true" />
-                <span><strong>{o.label}</strong><small>{o.detail}</small></span>
+                <span><strong>{t(`create.size.${o.key}`)}</strong><small>{o.detail}</small></span>
               </label>
             ))}
           </fieldset>
           {formError && <p className={s.error} role="alert">{formError}</p>}
           <div className={s.formActions}>
             <button type="submit" className={s.primary} disabled={!canGenerate} aria-disabled={!canGenerate}>
-              {submitting ? 'Starting…' : running ? 'Generating…' : 'Generate image'}
+              {submitting ? t('create.starting') : running ? t('create.generating') : t('create.generate')}
             </button>
-            {service?.model && <span className={s.model}>Model: {service.model.split('/').pop()} · private EU GPU</span>}
+            {service?.model && <span className={s.model}>{t('create.model', { model: service.model.split('/').pop() ?? service.model })}</span>}
           </div>
         </form>
       </section>
 
-      <section className={s.stage} aria-label="Result" aria-busy={!!running}>
-        {loadState === 'loading' && <div className={s.placeholder}><span className={s.spinner} aria-hidden="true" /><p>Loading your images…</p></div>}
+      <section className={s.stage} aria-label={t('create.resultAria')} aria-busy={!!running}>
+        {loadState === 'loading' && <div className={s.placeholder}><span className={s.spinner} aria-hidden="true" /><p>{t('create.loading')}</p></div>}
         {loadState === 'error' && (
           <div className={s.placeholder} role="alert">
             <p>{loadError}</p>
-            <button type="button" className={s.secondary} onClick={retry}>Try again</button>
+            <button type="button" className={s.secondary} onClick={retry}>{t('create.tryAgain')}</button>
           </div>
         )}
         {loadState === 'ready' && !selected && (
-          <div className={s.placeholder}><p className={s.emptyTitle}>No images yet</p><p>{service?.available ? 'Describe what you want to see and choose Generate image. Results appear here and stay in your history.' : 'Image generation is not switched on for your organization yet, so nothing can be generated here today.'}</p></div>
+          <div className={s.placeholder}><p className={s.emptyTitle}>{t('create.empty.title')}</p><p>{service?.available ? t('create.empty.ready') : t('create.empty.off')}</p></div>
         )}
         {loadState === 'ready' && selected && (
           <figure className={s.result}>
             <div className={s.canvas} style={{ aspectRatio: `${selected.width} / ${selected.height}` }}>
               {selected.status === 'completed' && selected.fileUrl && broken.has(selected.id) ? (
                 <div className={s.previewOff} role="status">
-                  <p className={s.emptyTitle}>Preview unavailable</p>
-                  <p>This image is kept on TuGPT&rsquo;s private GPU, which is not answering right now.</p>
-                  <button type="button" className={s.secondary} onClick={() => retryPreview(selected.id)}>Try again</button>
+                  <p className={s.emptyTitle}>{t('create.preview.off')}</p>
+                  <p>{t('create.preview.offBody')}</p>
+                  <button type="button" className={s.secondary} onClick={() => retryPreview(selected.id)}>{t('create.tryAgain')}</button>
                 </div>
               ) : selected.status === 'completed' && selected.fileUrl ? (
                 // eslint-disable-next-line @next/next/no-img-element -- private, authenticated, no-store image; next/image would cache it
                 <img key={selected.id} src={selected.fileUrl} alt={selected.prompt} width={selected.width} height={selected.height} onError={() => markBroken(selected.id)} />
               ) : active(selected.status) ? (
                 <div className={s.progressWrap}>
-                  <div className={s.progress} role="progressbar" aria-label="Generation progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={selected.progress}>
+                  <div className={s.progress} role="progressbar" aria-label={t('create.progressAria')} aria-valuemin={0} aria-valuemax={100} aria-valuenow={selected.progress}>
                     <span style={{ width: `${Math.max(4, selected.progress)}%` }} />
                   </div>
-                  <p aria-live="polite">{statusText(selected)}</p>
-                  <button type="button" className={s.secondary} onClick={() => void cancel(selected.id)}>Cancel</button>
+                  <p aria-live="polite">{statusText(selected, t)}</p>
+                  <button type="button" className={s.secondary} onClick={() => void cancel(selected.id)}>{t('create.cancel')}</button>
                 </div>
               ) : (
-                <div className={s.progressWrap}><p role="status">{statusText(selected)}</p></div>
+                <div className={s.progressWrap}><p role="status">{statusText(selected, t)}</p></div>
               )}
             </div>
             <figcaption className={s.caption}>
               <p className={s.captionPrompt}>{selected.prompt}</p>
               <p className={s.meta}>
-                {selected.width} × {selected.height} · seed {selected.seed} · {statusText(selected)}
+                {selected.width} × {selected.height} · {t('create.seed', { seed: selected.seed })} · {statusText(selected, t)}
               </p>
               {selected.status === 'completed' && selected.fileUrl && !broken.has(selected.id) && (
                 <div className={s.resultActions}>
-                <a className={s.secondary} href={`${selected.fileUrl}?download=1`} download>Download PNG</a>
-                <a className={s.secondary} href={selected.fileUrl} target="_blank" rel="noopener noreferrer">Open full size<span className={s.sr}> (opens in a new tab)</span></a>
+                <a className={s.secondary} href={`${selected.fileUrl}?download=1`} download>{t('create.download')}</a>
+                <a className={s.secondary} href={selected.fileUrl} target="_blank" rel="noopener noreferrer">{t('create.openFull')}<span className={s.sr}>{t('create.newTab')}</span></a>
                 </div>
               )}
             </figcaption>
@@ -265,20 +265,20 @@ export function ImageStudio() {
 
       {loadState === 'ready' && images.length > 0 && (
         <section className={s.history} aria-labelledby="create-history-title">
-          <h2 id="create-history-title">Your images</h2>
-          <p className={s.meta}>Only you can see these.</p>
+          <h2 id="create-history-title">{t('create.history')}</h2>
+          <p className={s.meta}>{t('create.historyPrivate')}</p>
           <ul className={s.thumbs}>
             {images.map((img) => (
               <li key={img.id}>
                 <button type="button" className={`${s.thumb} ${img.id === selected?.id ? s.thumbOn : ''}`} onClick={() => setSelectedId(img.id)}
-                  aria-pressed={img.id === selected?.id} aria-label={`${img.prompt}. ${statusText(img)}. ${timeFmt.format(new Date(img.createdAt))}`}>
+                  aria-pressed={img.id === selected?.id} aria-label={`${img.prompt}. ${statusText(img, t)}. ${timeFmt.format(new Date(img.createdAt))}`}>
                   <span className={s.thumbArt} style={{ aspectRatio: `${img.width} / ${img.height}` }}>
                     {img.status === 'completed' && img.fileUrl && broken.has(img.id)
-                      ? <span className={s.thumbState}>Preview unavailable</span>
+                      ? <span className={s.thumbState}>{t('create.preview.off')}</span>
                       : img.status === 'completed' && img.fileUrl
                       // eslint-disable-next-line @next/next/no-img-element -- see above
                       ? <img src={img.fileUrl} alt="" loading="lazy" width={img.width} height={img.height} onError={() => markBroken(img.id)} />
-                      : <span className={s.thumbState}>{active(img.status) ? `${img.progress}%` : statusText(img)}</span>}
+                      : <span className={s.thumbState}>{active(img.status) ? `${img.progress}%` : statusText(img, t)}</span>}
                   </span>
                   <span className={s.thumbText}>{img.prompt}</span>
                   <time className={s.thumbTime} dateTime={img.createdAt}>{timeFmt.format(new Date(img.createdAt))}</time>
