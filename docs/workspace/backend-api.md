@@ -77,7 +77,7 @@ optional: a client that sends no `turnId` behaves exactly as before.
 |---|---|---|
 | `POST /api/v1/chat/threads/{threadId}/messages` | `{content, modelKey, mentions?, timeZone?, turnId?, retry?}` | `200` NDJSON stream; or `409 {error, code, turn}` (no model call, no write) |
 | `POST /api/v1/agents/{agentId}/run` | `{content, threadId?, modelKey?, timeZone?, turnId?, retry?}` | same; retrying needs the thread, so a run started without `threadId` is retried with the `threadId` from its `agent` event |
-| `GET /api/v1/chat/threads/{threadId}/turns/{turnId}` | none | `200 {turn}`; `404` = the turn was never stored (or not your thread) |
+| `GET /api/v1/chat/threads/{threadId}/turns/{turnId}` | none | `200 {turn}`; `404 {code:'TURN_NOT_FOUND'}` = your thread, turn never stored; `404 {code:'THREAD_NOT_FOUND'}` = no such thread for you; `501 {code:'MIGRATION_PENDING', feature:'chat.turns'}` = database without turn ids (Q-14) |
 
 `turn` = `{id, status, latest, userMessage, assistantMessage}`. `status`:
 
@@ -111,7 +111,8 @@ each message too.
 `400 "Invalid request"`: a malformed `turnId` (not a UUID), a non-boolean `retry`, or `retry` without a `turnId`.
 
 **Recommended client flow after an ambiguous failure** (network error, 5xx, stream ended without `done`/`error`):
-1. `GET .../turns/{turnId}`. `404` means send again with the **same** `turnId`. `pending` means poll.
+1. `GET .../turns/{turnId}`. Only `404` with `code: TURN_NOT_FOUND` means send again with the **same** `turnId`
+   (Q-14; a 404 without that code, `THREAD_NOT_FOUND` or `501 MIGRATION_PENDING` is **not** a resend signal). `pending` means poll.
    `complete` means render it. `error` / `stopped` / `interrupted` means show Retry.
 2. Retry = `POST .../messages {content, modelKey, turnId, retry: true}`.
 3. Never re-send a prompt with a **new** `turnId` unless the person asks to.
@@ -130,6 +131,47 @@ each message too.
 - Assistant and tool rows get it only through the server-only `append_chat_turn_message_server`, which
   also requires the turn to have been opened in that very thread.
 - Other users and tenants get `404`.
+
+### Regenerate vs retry (Q-14 contract, request 2)
+
+| Action | Supported | Behaviour |
+|---|---|---|
+| Retry the **latest** turn in `error` / `stopped` / `interrupted` | yes (`chat.turns`; single run with `chat.turnRunLease`) | `POST .../messages {content, modelKey, turnId, retry:true}` re-runs on the **same stored user message** (no second user row): retrieval and tools run again, one model call |
+| Regenerate a **complete** answer | **no** (`chat.regenerateCompleted` = `unavailable`) | `409 TURN_EXISTS` with the stored `turn`; no model call |
+| Retry an older turn | no | `409 TURN_NOT_LATEST` |
+| Two retries at once | one runs | the other gets `409 TURN_IN_PROGRESS` (lease) |
+
+Side effects on retry: built-in chat tools are read-only. Customer MCP tools whose permission class is not `read` need a
+**single-use** approval (`claim_tool_approval`, `used_at`); a retry cannot reuse a consumed approval, so it gets
+`APPROVAL_REQUIRED` and nothing runs again without a new human approval. Agent threads use the same turn decision and lease.
+
+### Feature signal (Q-14, request 1)
+
+`GET /api/v1/chat/features` (session; read-only; `Cache-Control: private, no-store`). Not to be confused with
+`GET /api/v1/chat/capabilities` (the @-picker tool catalogue).
+
+```json
+{ "contract": "workspace-features/1",
+  "features": {
+    "chat.turns": {"state": "available"},
+    "chat.turnRunLease": {"state": "migration_pending", "missingMigrations": ["20261122100001_workspace_chat_turn_runs"]},
+    "chat.regenerateCompleted": {"state": "unavailable", "reason": "NOT_IMPLEMENTED"},
+    "files.uploadIdempotency": {"state": "available"},
+    "library.writeRefusals": {"state": "available"},
+    "library.atomicDocumentMove": {"state": "unavailable", "reason": "NOT_IMPLEMENTED"},
+    "files.preview": {"state": "unavailable", "reason": "NOT_IMPLEMENTED"} } }
+```
+
+| State | Meaning |
+|---|---|
+| `available` | code deployed and the database has the migration |
+| `migration_pending` | code deployed, database lacks `missingMigrations` (expand window); backend behaves like the previous release |
+| `unavailable` + `NOT_IMPLEMENTED` | not in this build |
+
+Probes are row-less (`limit(0)`) selects under the caller's RLS; only "relation/column does not exist" counts as
+`migration_pending`, anything else is `503 STORE_UNAVAILABLE`. `401` without a session. **Client rule:** use a contract
+only when its key is `available`; a missing key, `404` (pre-Q-14 deployment) or `503` means unknown → legacy behaviour.
+Worker-side features (document formats) are not reported: the web app cannot see the worker build.
 
 ### Turn runs: one model call per turn (Q-13, migration `20261122100001`)
 
@@ -255,7 +297,7 @@ or log. The blob key is derived on the server as `org/<orgId>/files/<fileId>`, a
 | `DELETE /api/v1/library/collections/{id}` | none | `200 {deleted:true}`. Readable but not writable returns 403 | writers |
 | `POST /api/v1/library/collections/{id}/documents` | `{fileId, title?}` | **`202 {document, created: true}`** with `status: 'pending'`; the worker indexes it. **`200 {document, created: false}`** when this file *or the same content* (SHA-256) is already in the collection: the existing document is returned unchanged, so retries never create duplicates | writers; the file must be `ready` and readable (`409 CONFLICT` otherwise). Never indexes in the request |
 | `POST /api/v1/library/collections/{id}/documents/{docId}` | `{action: 'reindex'}` | **`202 {document}`** (`pending`, attempts reset) | writers (readers of a foreign private collection get 404) |
-| `DELETE /api/v1/library/collections/{id}/documents/{docId}` | none | `200 {deleted:true}` (the file is kept) | writers |
+| `DELETE /api/v1/library/collections/{id}/documents/{docId}` | none | `200 {deleted:true}` (the file is kept). Q-14: `403 FORBIDDEN` if you can read the collection but not change it; `404` only when the document (or collection) is not there for you, so a 404 on a repeated remove means already removed | writers |
 | `GET /api/v1/library/search` | `q` (required, ≤200), `collectionIds=a,b` (optional), `limit` ≤50 | `200 {hits: SearchHit[], semantic: boolean}` | readers |
 | `GET\|POST /api/v1/chat/threads/{id}/collections` | POST `{collectionId}` | `200 {collections}` / `201 {linked:true}` | thread owner; the collection must be readable |
 | `DELETE /api/v1/chat/threads/{id}/collections/{collectionId}` | none | `200 {deleted:true}` | thread owner |
@@ -293,6 +335,25 @@ or log. The blob key is derived on the server as `org/<orgId>/files/<fileId>`, a
   migration, e.g. `CREATE INDEX … USING hnsw ((embedding::vector(1024)) vector_cosine_ops) WHERE dims = 1024`.
 - **No similarity threshold:** semantic search returns the nearest neighbours even when they are not close.
   Treat low `semanticScore` hits accordingly in the UI.
+
+### Move, dedupe and roles (Q-14, request 3)
+
+* **Move** is two calls (no atomic move: `library.atomicDocumentMove` = `unavailable`): `POST` to the destination
+  (`202`, a **new** document id, indexed again), then `DELETE` from the source. Destination first: on failure the file
+  stays findable in at least one collection. `404` on the source remove = already removed; `403` = not allowed (stop).
+  The file is never deleted by a move.
+* **Dedupe:** adding the same file again returns the existing document (`200 created:false`); a different file with
+  identical bytes (`content_sha256`) in the same collection also returns the existing document.
+* **Roles** (org collections): owner/admin create, rename, add and remove; manager/agent/viewer read and search only
+  (`403 FORBIDDEN` on write). Private collections: the creator only; everyone else `404`. A member can search an org
+  collection containing an owner's private file but cannot read its metadata or download it (`404`).
+
+### Citations after library changes (Q-14, request 4)
+
+A stored citation is returned only while that exact document still exists in that collection and the reader can read the
+collection; the answer text is always kept. Unlinking a collection from the thread keeps citations; switching an org
+collection to private hides them for others (they return when switched back); moving the document out or deleting the
+file hides them permanently (re-adding creates a new document id, the old citation stays hidden).
 
 ### Upload flow and failure semantics (Q-8)
 
@@ -438,6 +499,9 @@ Every error body is JSON with `code`; turn conflicts also carry `turn` (the turn
 | `409 TURN_CHANGED` | another attempt stored a new answer meanwhile | render `turn`; offer Retry again if it is not `complete` |
 | `409 TURN_NOT_LATEST` | a newer message was sent after this turn | render `turn`; no Retry for this turn |
 | `409 TURN_CONFLICT` | same `turnId` with different content | client bug: new message → new `turnId` |
+| `404 TURN_NOT_FOUND` (turn GET) | your thread, turn never stored | resend with the same `turnId` |
+| `404 THREAD_NOT_FOUND` / `501 MIGRATION_PENDING` (turn GET) | not your thread / database without turn ids | do **not** resend blindly |
+| `403 FORBIDDEN` on library remove/rename/delete | readable, not writable | explain; do not treat as removed |
 | `200 {file, replayed: true}` | upload retry, same file | treat like `201` |
 | `409 UPLOAD_IN_PROGRESS` + `Retry-After` | first upload with this key still storing | wait `Retry-After` seconds, retry with the same key |
 | `409 IDEMPOTENCY_KEY_REUSED` | key used for different bytes | client bug: new file → new key |
