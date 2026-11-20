@@ -34,8 +34,7 @@ database built from the 114 committed migrations (latest `20261120100011`).
    `20261120000001`–`000006` (`agent2/m9-followup`, `47ea476`) sort *between*
    this tree's `20261119100004` and `20261120100001`. The Supabase CLI refuses
    local migrations older than the remote's latest without `--include-all`
-   (docs/server-migrations.md §6). The Q-9c IDs (`20261120200001`–`3`) sort
-   after both sequences, so they add no new interleaving. Agent 2's six still
+   (docs/server-migrations.md §6). Agent 2's six still
    have to land on `main` and be applied **before** 20261120100001+ reach a
    database, or else be renumbered by Agent 2. That decision is Agent 2's and
    is still open.
@@ -50,6 +49,26 @@ database built from the 114 committed migrations (latest `20261120100011`).
      000001 is present.
    - The two sets touch no common object. Agent 2 should still confirm the order
      on their side.
+   **B-2 (open, blocks combining the branches): duplicate version
+   `20261120200001`.** Since `644ce7b` (2026-11-20 03:41 UTC),
+   `agent2/m9-followup` adds `20261120200001_mcp_snapshot_legacy_revoke_owner_first.sql`.
+   This tree's committed, frozen Q-9c migration is
+   `20261120200001_workspace_agent_instructions_confidential.sql`.
+   `supabase_migrations.schema_migrations` is keyed by the bare version
+   (docs/server-migrations.md), so only one of the two can be recorded. The
+   CLI is expected to treat the other as already applied and never run it.
+   That is inferred from the ledger key; it was not run with the CLI here.
+   - If the Q-9c file is the one skipped, agents lose instruction
+     confidentiality (F-1), and the app falls back to its pre-Q-9c path.
+   - If Agent 2's file is the one skipped, its revoke is missing.
+   Neither failure is loud. Resolution: Agent 2 renumbers their file to a free
+   version after `20261120200003` before either set reaches a shared
+   database. This tree's IDs cannot change (frozen). Guards:
+   - `apps/worker/tests/migration-versions.test.ts` fails on any duplicate
+     version (verified: it fails with both file names when Agent 2's file is
+     added to this tree);
+   - `deploy/workspace-q9c-preflight.sql phase=after` fails if 200001 was
+     skipped (2/4 functions present: partial).
 2. Deploy web and worker together; the worker writes chunks the web reads.
 3. Migrations are frozen once committed; checksums live in
    `supabase/migrations/checksums.json`.
