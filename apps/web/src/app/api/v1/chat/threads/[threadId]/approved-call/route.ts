@@ -112,7 +112,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
               organizationId: orgId, userId: ctx.userId, threadId, role: 'tool',
               content: ev.ok ? `${cap?.providerName ?? 'Integration'} responded (approved call)` : `${cap?.providerName ?? 'Integration'} failed: ${ev.code ?? 'ERROR'}`,
               status: ev.ok ? 'complete' : 'error',
-            }).catch(() => undefined);
+            }, ctx.db).catch(() => undefined);
           }
           send(ev.type === 'tool_start' || ev.type === 'tool_result' ? { ...ev, provider: toolset.describe(ev.tool)?.providerName ?? null } : ev);
         }
@@ -124,7 +124,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
         const saved = await appendServerMessage(control, {
           organizationId: orgId, userId: ctx.userId, threadId, role: 'assistant', modelKey: model.key, status,
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
-        });
+        }, ctx.db);
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key });
         if (!signal.aborted) send(errorCode ? { type: 'error', code: errorCode, message: saved } : { type: 'done', message: saved });
       } catch {

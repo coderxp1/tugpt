@@ -1,3 +1,5 @@
+import { isMissingFunction } from '@/lib/supabase/schema-compat';
+
 /**
  * Chat persistence through the caller's own RLS-bound client.
  *
@@ -167,10 +169,22 @@ export async function listMessages(db: ChatDb, organizationId: string, threadId:
   const cited = raw.filter((r) => r.role === 'assistant').map((r) => str(r.id));
   const citations = new Map<string, unknown>();
   if (cited.length > 0) {
-    const rows = check(await db.rpc('chat_message_citations', { p_organization_id: organizationId, p_thread_id: threadId, p_message_ids: cited }));
-    for (const row of Array.isArray(rows) ? rows : []) {
-      const r = row as Record<string, unknown>;
-      citations.set(str(r.message_id), r.citations);
+    const r = await db.rpc('chat_message_citations', { p_organization_id: organizationId, p_thread_id: threadId, p_message_ids: cited });
+    if (isMissingFunction(r.error)) {
+      // Pre-Q-9c schema only (see schema-compat): the column is still readable to the thread owner there,
+      // and authorizeCitations below applies the same per-document rule as before Q-9c.
+      const legacy = check(await db.from('chat_messages').select('id,citations')
+        .eq('thread_id', threadId).eq('organization_id', organizationId).in('id', cited));
+      for (const row of Array.isArray(legacy) ? legacy : []) {
+        const x = row as Record<string, unknown>;
+        citations.set(str(x.id), x.citations);
+      }
+    } else {
+      const fromRpc = check(r);
+      for (const row of Array.isArray(fromRpc) ? fromRpc : []) {
+        const x = row as Record<string, unknown>;
+        citations.set(str(x.message_id), x.citations);
+      }
     }
   }
   return authorizeCitations(db, organizationId, raw.map((r) => toMessage({ ...r, citations: citations.get(str(r.id)) ?? [] })));
@@ -217,7 +231,7 @@ export async function appendServerMessage(control: ChatDb, input: {
   mentions?: readonly Mention[]; status?: 'complete' | 'error' | 'stopped'; capabilityKey?: string;
   /** Assistant messages only (ignored otherwise): the citations streamed with this turn. */
   citations?: readonly MessageCitation[]; knowledgeUnavailable?: boolean;
-}): Promise<StoredMessage> {
+}, legacy?: ChatDb): Promise<StoredMessage> {
   const assistant = input.role === 'assistant';
   const r = await control.rpc('append_chat_message_server', {
     p_organization_id: input.organizationId, p_user_id: input.userId, p_thread_id: input.threadId, p_role: input.role,
@@ -227,6 +241,16 @@ export async function appendServerMessage(control: ChatDb, input: {
     p_knowledge_unavailable: assistant && input.knowledgeUnavailable === true,
   });
   if (r.error?.code === 'P0002') throw new ChatStoreError('NOT_FOUND');
+  if (isMissingFunction(r.error) && legacy) {
+    // Pre-Q-9c schema only (see schema-compat): there the owner's own client may still insert these rows.
+    return toMessage(check(await legacy.from('chat_messages').insert({
+      organization_id: input.organizationId, thread_id: input.threadId, role: input.role, content: input.content,
+      model_key: input.modelKey ?? null, mentions: input.mentions ?? [], status: input.status ?? 'complete',
+      capability_key: input.role === 'tool' ? input.capabilityKey ?? null : null,
+      citations: assistant ? citationsForStorage(input.citations) : [],
+      knowledge_unavailable: assistant && input.knowledgeUnavailable === true,
+    }).select(`${MESSAGE_COLS},citations`).single()));
+  }
   return toMessage(check(r));
 }
 

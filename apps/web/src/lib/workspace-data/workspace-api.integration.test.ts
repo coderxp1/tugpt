@@ -13,6 +13,11 @@
  * production (docs/workspace/operations.md).
  *
  * Skipped unless WS_IT_POSTGREST_URL is set. See tests/workspace-it/README.md.
+ *
+ * WS_IT_EXPECT_SCHEMA=pre-q9c runs the same suite against a database WITHOUT
+ * migrations 20261120200001..3, proving this app is deployable before them
+ * (expand/contract, docs/workspace/operations.md section 1). In that mode the
+ * Q-9c database assertions are skipped or inverted; nothing else changes.
  */
 import { createHmac } from 'node:crypto';
 import http from 'node:http';
@@ -36,6 +41,9 @@ import type { QueryEmbedder } from './library';
 
 const URL_ = process.env.WS_IT_POSTGREST_URL;
 const SECRET_FILE = process.env.WS_IT_JWT_SECRET_FILE;
+const EXPECT_SCHEMA = process.env.WS_IT_EXPECT_SCHEMA ?? '';
+if (EXPECT_SCHEMA !== '' && EXPECT_SCHEMA !== 'pre-q9c') throw new Error(`WS_IT_EXPECT_SCHEMA must be unset or "pre-q9c", got "${EXPECT_SCHEMA}"`);
+const PRE_Q9C = EXPECT_SCHEMA === 'pre-q9c';
 
 const ORG_A = 'a4a00000-0000-4000-8000-00000000000a';
 const ORG_B = 'a4b00000-0000-4000-8000-00000000000b';
@@ -157,7 +165,13 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
     control = new PostgrestClient(URL_!, { headers: { Authorization: `Bearer ${jwt('a4900000-0000-4000-8000-000000000002', secret, 'sso_control')}` } });
     // Fail fast with a clear message when the stack lacks the production prerequisite.
     const probe = await (control as PostgrestClient).rpc('custom_agent_run_instructions', { p_organization_id: ORG_A, p_user_id: U.ownerA.id, p_agent_id: MISSING });
-    if (probe.error) throw new Error(`sso_control is not usable through PostgREST (${probe.error.code}); run GRANT sso_control TO authenticator on the test database.`);
+    if (PRE_Q9C) {
+      if (probe.error?.code !== 'PGRST202') throw new Error(`WS_IT_EXPECT_SCHEMA=pre-q9c but the database already has the Q-9c functions (probe: ${probe.error?.code ?? 'ok'}).`);
+    } else if (probe.error?.code === 'PGRST202') {
+      throw new Error('The database lacks migrations 20261120200001..3 (custom_agent_run_instructions not found). Apply them, or set WS_IT_EXPECT_SCHEMA=pre-q9c to test the compatibility path.');
+    } else if (probe.error) {
+      throw new Error(`sso_control is not usable through PostgREST (${probe.error.code}); run GRANT sso_control TO authenticator on the test database.`);
+    }
     // The suite assumes the state fixtures.sql creates (it also clears the per-user rate-limit windows).
     // A second run on the same database would otherwise fail a dozen tests for unrelated-looking reasons.
     const left = async (table: string) => (await (svc as unknown as PostgrestClient).from(table)
@@ -1194,14 +1208,15 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
             const db = clients.get(who.id) as PostgrestClient;
             expect((await db.from('chat_threads').select('agent_id').eq('id', tid)).data).toEqual([]);
             expect((await db.from('chat_messages').select('id,knowledge_unavailable').eq('thread_id', tid)).data).toEqual([]);
-            expect((await db.rpc('chat_message_citations', { p_organization_id: who.org, p_thread_id: tid, p_message_ids: [MISSING] })).data).toEqual([]);
+            if (PRE_Q9C) expect((await db.from('chat_messages').select('id,citations').eq('thread_id', tid)).data).toEqual([]); // RLS alone, before Q-9c
+            else expect((await db.rpc('chat_message_citations', { p_organization_id: who.org, p_thread_id: tid, p_message_ids: [MISSING] })).data).toEqual([]);
             expect((await db.from('chat_threads').select('id').eq('agent_id', privAgent)).data).toEqual([]);
           }
           as(U.memberA);
           expect((await getThread(tid)).json.thread.agentId).toBe(privAgent);
         });
 
-        it('Q-9c: PostgREST cannot bypass the API for instructions, citations or server-authored messages', async () => {
+        it.skipIf(PRE_Q9C)('Q-9c: PostgREST cannot bypass the API for instructions, citations or server-authored messages', async () => {
           as(U.memberA);
           const tid = events((await run(privAgent, { content: 'quantum ledger' })).text)[0].thread.id as string;
           as(U.ownerA);
@@ -1278,9 +1293,15 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
             // Q-9c F-2: the filter is in the database. The thread owner cannot read the raw column, and the
             // citation RPC returns nothing for this message; the stored snapshot itself is untouched (service_role read).
             const own = clients.get(U.memberA.id) as PostgrestClient;
-            expect((await own.from('chat_messages').select('citations').eq('thread_id', tid)).error?.code).toBe('42501');
             const mid = assistants(hidden.json)[0].id as string;
-            expect((await own.rpc('chat_message_citations', { p_organization_id: ORG_A, p_thread_id: tid, p_message_ids: [mid] })).data).toEqual([{ message_id: mid, citations: [] }]); // filtered to nothing, not leaked
+            if (PRE_Q9C) {
+              // Pre-Q-9c: the API still omits it (app-side filter), but the raw column is readable to the owner;
+              // this is the exposure (F-2) that 20261120200002 closes.
+              expect((await own.from('chat_messages').select('citations').eq('thread_id', tid)).error).toBeNull();
+            } else {
+              expect((await own.from('chat_messages').select('citations').eq('thread_id', tid)).error?.code).toBe('42501');
+              expect((await own.rpc('chat_message_citations', { p_organization_id: ORG_A, p_thread_id: tid, p_message_ids: [mid] })).data).toEqual([{ message_id: mid, citations: [] }]); // filtered to nothing, not leaked
+            }
             expect(((await (svc as unknown as PostgrestClient).from('chat_messages').select('citations').eq('id', mid)).data ?? [])[0].citations).toEqual(streamed);
 
             as(U.ownerA);
