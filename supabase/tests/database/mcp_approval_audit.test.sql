@@ -2,7 +2,7 @@
 -- Self-contained fixtures, rolled back. Every approval decision writes one
 -- classified, append-only, tenant-isolated event that never holds arguments.
 BEGIN;
-SELECT plan(44);
+SELECT plan(48);
 
 -- Fixtures (as postgres) ----------------------------------------------------
 INSERT INTO auth.users (id, email) VALUES
@@ -43,6 +43,19 @@ SELECT ok(NOT has_table_privilege('authenticated', 'public.mcp_approval_events',
       AND NOT has_table_privilege('authenticated', 'public.mcp_approval_events', 'DELETE')
       AND NOT has_table_privilege('anon', 'public.mcp_approval_events', 'SELECT'),
   'A4: no direct writes for authenticated, nothing for anon');
+-- A5–A8: service_role (BYPASSRLS) must not be able to forge or erase the audit either.
+-- 20261120000010 revoked only PUBLIC/anon/authenticated, so the schema default privileges left service_role ALL.
+SELECT is(
+  (SELECT string_agg(privilege_type, ',' ORDER BY privilege_type) FROM information_schema.role_table_grants
+    WHERE table_schema = 'public' AND table_name = 'mcp_approval_events' AND grantee = 'service_role'),
+  'SELECT', 'A5: service_role holds exactly SELECT on mcp_approval_events');
+SET LOCAL ROLE service_role;
+SELECT throws_ok($$INSERT INTO public.mcp_approval_events (organization_id, actor_user_id, capability, arguments_sha256, event)
+  VALUES ('b0000000-0000-4000-8000-000000000001', 'a0000000-0000-4000-8000-000000000001', 'external.x', repeat('a', 64), 'approved')$$,
+  '42501', NULL, 'A6: service_role cannot forge an audit event');
+SELECT throws_ok($$DELETE FROM public.mcp_approval_events$$, '42501', NULL, 'A7: service_role cannot delete audit events');
+SELECT throws_ok($$TRUNCATE public.mcp_approval_events$$, '42501', NULL, 'A8: service_role cannot truncate the audit');
+RESET ROLE;
 SELECT ok(NOT has_function_privilege('authenticated', 'public.claim_tool_approval(uuid,uuid,text,text,uuid)', 'EXECUTE'),
   'A5: the unaudited claim can no longer be called by users');
 SELECT ok(has_function_privilege('authenticated', 'public.claim_tool_approval_audited(uuid,uuid,text,text,uuid,text)', 'EXECUTE')
