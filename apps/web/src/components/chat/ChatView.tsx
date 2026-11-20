@@ -52,12 +52,19 @@ export function ChatView({ models, canApprove = false, firstName = null }: ChatV
 
         {c.agentNotice && <p className={s.error} role="status">{c.agentNotice}</p>}
         {c.toolsUnavailable && <p role="status">{t('workspace.agent.toolsUnavailable')}</p>}
-        {c.error && <p className={s.error} role="alert">{c.error.text}{c.draft.trim() && <>{' '}<button type="button" className={s.tool} disabled={c.busy || c.uploading || c.overLimit || c.agentBlocked || !c.model} onClick={() => void c.send()}>{t('workspace.chat.resendDraft')}</button></>}{c.error.connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</p>}
+        {c.error && <p className={s.error} role="alert">{c.error.text}{!c.recovery && c.draft.trim() && <>{' '}<button type="button" className={s.tool} disabled={c.busy || c.uploading || c.overLimit || c.agentBlocked || !c.model} onClick={() => void c.send()}>{t('workspace.chat.resendDraft')}</button></>}{c.error.connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</p>}
+        {c.recovery && <section className={`${s.error} ${s.recovery}`} aria-label={t('workspace.chat.recoveryTitle')}>
+          <p role="status">{t('workspace.chat.recoveryNote')}</p>
+          <details><summary>{t('workspace.chat.original')}</summary><p>{c.recovery.original}</p></details>
+          {c.recovery.partial && <details><summary>{t('workspace.chat.partial')}</summary><p>{c.recovery.partial}</p></details>}
+          <button type="button" className={s.tool} disabled={c.reconciling || c.busy} onClick={() => void c.reconcile()}>{t(c.reconciling ? 'workspace.chat.reconciling' : 'workspace.chat.reconcile')}</button>
+        </section>}
+        {!c.model && models.length > 0 && <p role="status">{t('workspace.chat.modelUnavailable')}</p>}
         {models.length === 0 && <p className={s.error} role="alert">{t('workspace.model.noneConfigured')}</p>}
 
         <Composer draft={c.draft} attached={c.attached} matches={c.matches} pickerIndex={c.picker.index} showPicker={c.showPicker}
           activeOption={c.activeOption} listId={c.listId} models={models} modelKey={c.modelKey} model={c.model} busy={c.busy}
-          disabled={models.length === 0 || c.agentBlocked} agentLabel={c.agentLabel} inputRef={c.input} files={c.files} fileNotice={c.fileNotice} uploads={c.uploads} uploadCap={c.uploadCap} onRemoveUpload={c.removeUpload} length={c.length} overLimit={c.overLimit}
+          disabled={models.length === 0 || c.agentBlocked || !!c.recovery} agentLabel={c.agentLabel} inputRef={c.input} files={c.files} fileNotice={c.fileNotice} uploads={c.uploads} uploadCap={c.uploadCap} onRemoveUpload={c.removeUpload} length={c.length} overLimit={c.overLimit}
           hero={fresh} onDraft={c.onDraft} onKey={c.onKey} onChoose={c.choose} onDetach={c.detach} onModel={c.setModelKey} onApps={c.openApps}
           onFiles={(f) => void c.addFiles(f)} onRemoveFile={c.removeFile} onSend={() => void c.send()} onStop={c.stop} />
 

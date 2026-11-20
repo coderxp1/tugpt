@@ -467,7 +467,7 @@ it('preserves a rejected draft and resends only on an explicit customer click', 
     if (url.endsWith('/threads') && init?.method === 'POST') return new Response(JSON.stringify({ thread: { ...thread, agentId: null } }));
     if (url.endsWith('/messages')) {
       attempts++;
-      if (attempts === 1) return new Response(JSON.stringify({ error: 'MODEL_UNAVAILABLE' }), { status: 503 });
+      if (attempts === 1) return new Response(JSON.stringify({ error: 'RATE_LIMITED' }), { status: 429 });
       return new Response(JSON.stringify({ type: 'done', message: { id: 'retry-answer', role: 'assistant', content: 'Recovered response', status: 'complete', mentions: [], capabilityKey: null } }) + '\n');
     }
     return new Response(JSON.stringify({ threads: [], nextCursor: null }));
@@ -481,4 +481,49 @@ it('preserves a rejected draft and resends only on an explicit customer click', 
   fireEvent.click(retry);
   await screen.findByText('Recovered response');
   expect(attempts).toBe(2);
+});
+
+it.each(['network', 'http500', 'cutoff'])('reconciles %s without reposting an uncertain message', async (failure) => {
+  let posts = 0;
+  const saved = { id: 'saved-answer', role: 'assistant', content: 'Saved answer recovered', status: 'complete', mentions: [], capabilityKey: null };
+  vi.stubGlobal('fetch', vi.fn(async (url: string, init?: RequestInit) => {
+    if (url.endsWith('/capabilities')) return new Response(JSON.stringify({ capabilities: [] }));
+    if (url.endsWith('/threads') && init?.method === 'POST') return new Response(JSON.stringify({ thread: { ...thread, agentId: null } }));
+    if (url.endsWith('/messages')) {
+      posts++;
+      if (failure === 'network') throw new Error('Connection lost');
+      if (failure === 'http500') return new Response('{}', { status: 500 });
+      return new Response(JSON.stringify({ type: 'delta', text: 'Unconfirmed words' }) + '\n');
+    }
+    if (url.endsWith(thread.id)) return new Response(JSON.stringify({ thread: { ...thread, agentId: null }, messages: [saved] }));
+    return new Response(JSON.stringify({ threads: [], nextCursor: null }));
+  }));
+  renderChat({ models });
+  fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Do not duplicate' } });
+  const send = screen.getByRole('button', { name: 'Send' });
+  fireEvent.click(send); fireEvent.click(send);
+  const check = await screen.findByRole('button', { name: 'Check saved messages' });
+  expect(posts).toBe(1);
+  expect(screen.queryByRole('button', { name: 'Send draft again' })).toBeNull();
+  expect((screen.getByLabelText('Message') as HTMLTextAreaElement).value).toBe('');
+  if (failure === 'cutoff') expect(screen.getByText('Unconfirmed words')).toBeTruthy();
+  fireEvent.click(check);
+  await screen.findByText('Saved answer recovered');
+  expect(posts).toBe(1);
+});
+
+it('does not silently replace an unavailable saved model', async () => {
+ nav.path = '/workspace/c/' + thread.id;
+ vi.stubGlobal('fetch', vi.fn(async (url: string) => new Response(JSON.stringify(
+   url.endsWith('/capabilities') ? { capabilities: [] } : url.endsWith(thread.id)
+     ? { thread: { ...thread, agentId: null, modelKey: 'retired-model' }, messages: [] } : { threads: [thread], nextCursor: null }
+ ))));
+ renderChat({ models }, [thread]);
+ await screen.findByText('The saved model is unavailable. Select an available model before sending.');
+ fireEvent.change(screen.getByLabelText('Message'), { target: { value: 'Choose deliberately' } });
+ expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(true);
+ fireEvent.click(screen.getByRole('button', { name: /^Model:/ }));
+ fireEvent.mouseDown(await screen.findByRole('option', { name: /TuGPT Scout/ }));
+ expect(screen.queryByText('The saved model is unavailable. Select an available model before sending.')).toBeNull();
+ expect((screen.getByRole('button', { name: 'Send' }) as HTMLButtonElement).disabled).toBe(false);
 });

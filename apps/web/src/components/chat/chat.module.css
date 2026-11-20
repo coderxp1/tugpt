@@ -188,3 +188,5 @@
 .conversationIdentity{display:flex;align-items:flex-start;gap:8px;margin:0 4px 8px;color:#4a4b45;font-size:13px;line-height:1.4;min-width:0}
 .conversationIdentity svg{flex:none;margin-top:1px}
 .conversationIdentity span{min-width:0;overflow-wrap:anywhere}
+
+.recovery{min-width:0;max-height:40vh;overflow:auto;overflow-wrap:anywhere}.recovery details{margin:8px 0}.recovery details p{white-space:pre-wrap}
