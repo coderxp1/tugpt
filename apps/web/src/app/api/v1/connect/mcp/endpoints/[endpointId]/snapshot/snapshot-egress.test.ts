@@ -5,6 +5,8 @@
  * runtime discovery client, a local CONNECT proxy and a local HTTPS MCP
  * server (throwaway CA), all over real sockets on 127.0.0.1.
  * MOCKED (labelled): session/tenant (AuthService), the repository (in-memory,
+ * except getEndpointUrl, which is the REAL repository method over a stand-in rpc client returning
+ * PostgREST error shapes, so F-M9-1 is tested through the real error mapping;
  * mirroring create_mcp_snapshot_idempotent / get_mcp_snapshot_request: one snapshot per Idempotency-Key,
  * version = max + 1 assigned by the store; the real RPCs are covered by pgTAP mcp_snapshot_idempotency and
  * by the real Next -> PostgREST -> Postgres script scripts/regression/snapshot-idempotency.py), the customer
@@ -39,13 +41,21 @@ type Snap = { id: string; version: number; sha: string; tools: { name: string }[
 type CreateFail = null | 'busy' | 'endpoint-busy' | 'deadline' | 'timeout' | 'in-progress' | 'not-found';
 const db = vi.hoisted(() => ({ snaps: [] as Snap[], writes: 0, latestReads: 0, createCalls: 0,
   requests: new Map<string, string>(), running: new Set<string>(), lastDeadline: '' as string,
-  createFails: null as CreateFail, latestTimeout: false, failLatest: false }));
+  createFails: null as CreateFail, latestTimeout: false, failLatest: false,
+  endpointError: null as null | { code: string; message: string }, endpointLookups: 0 }));
 vi.mock('@/lib/connect/external-mcp-repo', async (orig) => {
   const real = await orig<typeof import('@/lib/connect/external-mcp-repo')>();
   return {
     ...real,
     createExternalMcpRepository: () => ({
-      getEndpointUrl: async (org: string, id: string) => (org === ORG && id === EP ? `https://${HOST}/mcp` : null),
+      // REAL getEndpointUrl over a stand-in rpc (labelled): db.endpointError is what PostgREST returned.
+      getEndpointUrl: (org: string, id: string) => real.createExternalMcpRepository({
+        rpc: async (_fn: string, a: { p_organization_id: string; p_endpoint_id: string }) => {
+          db.endpointLookups++;
+          if (db.endpointError) return { data: null, error: db.endpointError };
+          return { data: a.p_organization_id === ORG && a.p_endpoint_id === EP ? `https://${HOST}/mcp` : null, error: null };
+        },
+      } as never).getEndpointUrl(org, id),
       // Status lookup (latestReads counts every database read the route makes before discovery).
       getSnapshotRequest: async (_o: string, _e: string, key: string) => {
         db.latestReads++;
@@ -190,6 +200,7 @@ beforeEach(() => {
   vi.stubEnv('TUGPT_APP_ORIGIN', ORIGIN);
   vi.stubEnv('CONNECT_EGRESS_PROXY', `http://127.0.0.1:${proxyPort}`);
   Object.assign(db, { snaps: [], writes: 0, latestReads: 0, createCalls: 0, failLatest: false, createFails: null, latestTimeout: false,
+    endpointError: null, endpointLookups: 0,
     requests: new Map(), running: new Set(), lastDeadline: '' });
   mode = 'ok'; proxyMode = 'allow'; T.injectCa = true; T.timeoutMs = 3000; T.dnsCalls = 0;
   connects.length = 0; tunnels = 0; mcpConnections = 0; mcpRequests = 0; redirectTargetHits = 0;
@@ -390,6 +401,53 @@ describe('database busy or timed out -> documented 503, never 500, nothing writt
   });
   it('the route never reports the old misleading 409 SNAPSHOT_VERSION_CONFLICT', () => {
     expect(readFileSync(join(__dirname, 'route.ts'), 'utf8')).not.toMatch(/SNAPSHOT_VERSION_CONFLICT|created concurrently/);
+  });
+});
+
+describe('endpoint lookup failures are not "not found" (F-M9-1)', () => {
+  const LOOKUP_FAILURES = [
+    ['our fetch timed out', { code: '', message: 'TimeoutError: The operation was aborted due to timeout' }],
+    ['55P03 lock_not_available (endpoints table locked)', { code: '55P03', message: 'canceling statement due to lock timeout' }],
+    ['57014 statement timeout', { code: '57014', message: 'canceling statement due to statement timeout' }],
+    ['network failure', { code: '', message: 'TypeError: fetch failed' }],
+    ['PostgREST cannot reach the database', { code: 'PGRST000', message: 'Database client error' }],
+  ] as const;
+  it.each(LOOKUP_FAILURES)('POST: %s -> 503 DATABASE_TIMEOUT with the key echoed; the same key then creates exactly one snapshot', async (_n, error) => {
+    const key = nextKey();
+    db.endpointError = { ...error };
+    const r = await snapshotWithHeaders(key);
+    expect(r.status).toBe(503); expect(r.body.error?.code).toBe('DATABASE_TIMEOUT');
+    expect(r.headers.get('retry-after')).toBe('2'); expect(r.headers.get('idempotency-key')).toBe(key);
+    expect([db.endpointLookups, db.latestReads, db.createCalls, db.writes, mcpConnections]).toEqual([1, 0, 0, 0, 0]);
+    db.endpointError = null;
+    const ok = await snapshot(key);
+    expect(ok.status).toBe(201); expect(db.writes).toBe(1);
+    const again = await snapshot(key);
+    expect(again.status).toBe(200); expect(again.body.snapshotId).toBe(ok.body.snapshotId); expect(db.writes).toBe(1);
+  });
+  it.each(LOOKUP_FAILURES)('GET: %s -> 503 DATABASE_TIMEOUT, not 404; then the real state', async (_n, error) => {
+    const key = nextKey();
+    db.endpointError = { ...error };
+    const r = await status(key);
+    expect(r.status).toBe(503); expect((r.body.error as { code: string }).code).toBe('DATABASE_TIMEOUT');
+    expect(r.headers.get('retry-after')).toBe('2'); expect(r.headers.get('idempotency-key')).toBe(key);
+    expect(db.latestReads).toBe(0);
+    db.endpointError = null;
+    expect((await status(key)).body).toEqual({ state: 'not_found' });
+  });
+  it('42501 from the lookup -> 403 FORBIDDEN for POST and GET, never 404', async () => {
+    db.endpointError = { code: '42501', message: 'FORBIDDEN' };
+    const p = await snapshotWithHeaders();
+    expect(p.status).toBe(403); expect(p.body.error?.code).toBe('FORBIDDEN');
+    const g = await status(nextKey());
+    expect(g.status).toBe(403); expect((g.body.error as { code: string }).code).toBe('FORBIDDEN');
+    expect([db.createCalls, db.writes, mcpConnections]).toEqual([0, 0, 0]);
+  });
+  it('a genuinely missing endpoint (RPC answered NULL) is still 404 NOT_FOUND', async () => {
+    const other = 'a4000000-0000-4000-8000-0000000e0fff';
+    const req = new Request(`${ORIGIN}/api/v1/connect/mcp/endpoints/${other}/snapshot?idempotencyKey=${nextKey()}`, { headers: { 'x-tenant-id': ORG } });
+    const res = await GET(req, { params: Promise.resolve({ endpointId: other }) });
+    expect(res.status).toBe(404); expect(((await res.json()) as { error: { code: string } }).error.code).toBe('NOT_FOUND');
   });
 });
 

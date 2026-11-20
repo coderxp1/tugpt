@@ -33,6 +33,11 @@
  * 2 s; nothing saved) and 503 SNAPSHOT_STORE_BUSY (another lock, e.g. DDL; nothing saved), both Retry-After: 2.
  * None of these is a 500.
  *
+ * Endpoint lookup (F-M9-1): 404 NOT_FOUND only when the endpoint does not exist in the caller's org. If the
+ * lookup itself fails (timeout, locked table, transport or database error) POST and GET answer 503
+ * DATABASE_TIMEOUT with Retry-After and the key echoed, so the client keeps its Idempotency-Key and retries;
+ * a role refusal from the database is 403 FORBIDDEN.
+ *
  * All-or-nothing: discovery completes and validates before any write, and the
  * snapshot + tools + idempotency record are written by one RPC (one transaction).
  * A failed discovery writes nothing.
@@ -46,7 +51,7 @@ import { AuthService } from '@tugpt/auth';
 import { listExternalMcpTools, McpDiscoveryError } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch, EGRESS_PROXY_ENV, EgressError, parseEgressProxy } from '@/lib/chat/mcp-egress';
 import {
-  createExternalMcpRepository, DatabaseTimeoutError, IDEMPOTENCY_KEY_PATTERN, SnapshotDeadlineExceededError,
+  createExternalMcpRepository, DatabaseTimeoutError, IDEMPOTENCY_KEY_PATTERN, RepoError, SnapshotDeadlineExceededError,
   SnapshotEndpointBusyError, SnapshotEndpointNotFoundError, SnapshotRequestInProgressError, SnapshotRequestInvalidError,
   SnapshotStoreBusyError, type ExternalMcpRepository,
 } from '@/lib/connect/external-mcp-repo';
@@ -91,6 +96,9 @@ function persistFailure(err: unknown, keyHeaders: Record<string, string>): Respo
   }
   if (err instanceof SnapshotEndpointNotFoundError) {
     return errorResponse(404, 'NOT_FOUND', 'MCP endpoint not found', keyHeaders);
+  }
+  if (err instanceof RepoError && err.pgCode === '42501') {
+    return errorResponse(403, 'FORBIDDEN', 'Snapshotting an MCP endpoint requires the organization owner or admin role', keyHeaders);
   }
   if (err instanceof SnapshotRequestInvalidError) {
     return err.reason === 'INVALID_TOOLS'
@@ -157,6 +165,7 @@ async function authorize(request: Request, endpointId: string): Promise<Authoriz
   }
 
   const repo = createExternalMcpRepository(supabase);
+  // Throws DatabaseTimeoutError / RepoError('42501') if the lookup fails (mapped by the caller's catch); null = missing.
   const endpoint = await repo.getEndpointUrl(tenant.organizationId, endpointId);
   if (!endpoint) return errorResponse(404, 'NOT_FOUND', 'MCP endpoint not found');
   return { repo, organizationId: tenant.organizationId, endpoint };

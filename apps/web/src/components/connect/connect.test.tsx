@@ -261,6 +261,47 @@ describe('McpPanel', () => {
     expect(within(card).getByText('Not active')).toBeTruthy();
   });
 
+  it('keeps the same Idempotency-Key across retryable failures and starts a new one only after an outcome (F-M9-1)', async () => {
+    const keys: string[] = [];
+    const answers = [
+      json({ error: { code: 'DATABASE_TIMEOUT', message: 'The database did not answer in time' } }, 503),
+      json({ error: { code: 'IN_PROGRESS', message: 'still running' } }, 409),
+      json({ error: { code: 'ENDPOINT_BUSY', message: 'busy' } }, 503),
+      json({ snapshotId: 's1', toolCount: 1 }, 201),
+      json({ error: { code: 'NOT_FOUND', message: 'MCP endpoint not found' } }, 404),
+      json({ error: { code: 'DATABASE_TIMEOUT', message: 'The database did not answer in time' } }, 503),
+      json({ snapshotId: 's1', toolCount: 1 }, 201),
+    ];
+    const f = api((url, init) => {
+      if (url === '/api/v1/connect/mcp/endpoints') return json({ endpoints: [EP] });
+      if (url === '/api/v1/connect/mcp/endpoints/e1/snapshot') {
+        expect(init.method).toBe('POST');
+        keys.push(new Headers(init.headers).get('idempotency-key') ?? '');
+        return answers.shift()!;
+      }
+      if (url === '/api/v1/connect/mcp/snapshots/s1/tools') return json({ tools: [{ name: 'search', description: 'Search docs', inputSchema: {}, permissionClass: 'write' }] });
+      throw new Error(`unexpected ${init.method} ${url}`);
+    });
+    render(<McpPanel canManage routes={all('available')} enabled fetcher={f as unknown as typeof fetch} />);
+    const card = (await screen.findByRole('heading', { name: 'Docs' })).closest('li')!;
+    // The label becomes "Discover again" once a snapshot exists.
+    const discover = () => within(card).getByRole('button', { name: /^Discover (tools|again)$/ }) as HTMLButtonElement;
+    for (let n = 1; n <= 7; n++) {
+      await waitFor(() => expect(discover().disabled).toBe(false));
+      fireEvent.click(discover());
+      await waitFor(() => expect(keys).toHaveLength(n));
+    }
+    await waitFor(() => expect(discover().disabled).toBe(false));
+    expect(keys.every((k) => /^[A-Za-z0-9_-]{16,128}$/.test(k))).toBe(true);
+    // 503 DATABASE_TIMEOUT, 409 IN_PROGRESS, 503 ENDPOINT_BUSY: the retry carries the SAME key, so it can only
+    // return the original snapshot, never create a second one.
+    expect(new Set(keys.slice(0, 4)).size).toBe(1);
+    // After a definite outcome (201 created, 404 not found) the next click starts a new request.
+    expect(keys[4]).not.toBe(keys[3]);
+    expect(keys[5]).not.toBe(keys[4]);
+    expect(keys[6]).toBe(keys[5]);
+  });
+
   it('treats ALREADY_APPROVED as approved, based on the backend answer', async () => {
     const f = api((url) => {
       if (url === '/api/v1/connect/mcp/endpoints') return json({ endpoints: [EP] });

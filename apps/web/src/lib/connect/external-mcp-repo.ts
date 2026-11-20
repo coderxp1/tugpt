@@ -44,11 +44,13 @@ export class RepoError extends Error {
 
 export interface ExternalMcpRepository {
   createEndpoint(orgId: string, userId: string, url: string, displayName: string): Promise<{ id: string }>;
+  /** null ONLY when no such endpoint exists in this org (F-M9-1). Throws DatabaseTimeoutError when the lookup
+   * could not be answered (timeout, lock, transport, PostgREST/database error) and RepoError('42501') when the
+   * caller lacks the owner/admin role. */
   getEndpointUrl(orgId: string, endpointId: string): Promise<string | null>;
   getEndpoint(orgId: string, endpointId: string): Promise<{ id: string; url: string } | null>;
   hasApprovedSnapshot(orgId: string, endpointId: string): Promise<boolean>;
   listEndpoints(orgId: string): Promise<ExternalToolEndpoint[]>;
-  createSnapshot(orgId: string, endpointId: string, version: number, contentSha256: string, tools: readonly ExternalToolListEntry[]): Promise<string>;
   getLatestSnapshotVersion(orgId: string, endpointId: string): Promise<number>;
   /** M9: idempotent create keyed by (endpoint, Idempotency-Key); version assigned by the database. */
   createSnapshotIdempotent(orgId: string, endpointId: string, idempotencyKey: string, contentSha256: string, tools: readonly ExternalToolListEntry[], deadlineIso: string): Promise<IdempotentSnapshotResult>;
@@ -64,16 +66,10 @@ export interface ExternalMcpRepository {
   revokeApproval(orgId: string, approvalId: string): Promise<boolean>;
 }
 
-/** The requested snapshot version is no longer latest+1 (a concurrent snapshot won). */
-/** SQLSTATE of create_mcp_snapshot's version conflict; PostgREST maps PTxyz to HTTP xyz and never retries it. */
-export const SNAPSHOT_CONFLICT_SQLSTATE = 'PT409';
-
-export class SnapshotVersionConflictError extends Error {
-  constructor() { super('snapshot version conflict'); this.name = 'SnapshotVersionConflictError'; }
-}
-
-/** SQLSTATE create_mcp_snapshot raises when a lock other than the endpoint row is not available within
- * lock_timeout (e.g. DDL on external_tools). PostgREST answers HTTP 503; the client does not retry a POST. */
+/** SQLSTATE the snapshot RPCs raise when a lock other than the endpoint row is not available within
+ * lock_timeout (e.g. DDL on external_tools). PostgREST answers HTTP 503; the client does not retry a POST.
+ * (The legacy key-less create_mcp_snapshot and its PT409 version-conflict mapping were removed in F-M9-2;
+ * 20261120000007 revokes the function from every API role.) */
 export const SNAPSHOT_BUSY_SQLSTATE = 'PT503';
 
 /** The snapshot store is briefly locked by something other than a concurrent snapshot; retry later. */
@@ -152,6 +148,19 @@ function idempotentRpcError(error: PgError, fallback: string): Error {
   return new Error(fallback);
 }
 
+/**
+ * F-M9-1: the endpoint lookup failed, so whether the endpoint exists is unknown. Only a NULL answer means "not
+ * found"; treating an error as null turned a locked table or a timed-out request into 404 NOT_FOUND, which
+ * made the UI drop its Idempotency-Key. 42501 is the RPC's owner/admin check (403). Everything else (our fetch
+ * timed out or was aborted, 55P03 lock_not_available from the 2 s lock_timeout, 57014, a network failure,
+ * PostgREST unable to reach the database, any other SQLSTATE) is reported as DatabaseTimeoutError, which every
+ * caller maps to a retryable 503 DATABASE_TIMEOUT.
+ */
+export function endpointLookupError(error: PgError): Error {
+  if (error?.code === '42501') return new RepoError('42501', 'not permitted to read this endpoint');
+  return new DatabaseTimeoutError();
+}
+
 function isUuid(v: unknown): v is string {
   return typeof v === 'string' && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(v);
 }
@@ -179,8 +188,12 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
     },
 
     async getEndpointUrl(orgId, endpointId) {
+      // A malformed id cannot name an endpoint: genuinely missing, no database round trip.
+      if (!isUuid(endpointId)) return null;
       const { data, error } = await u.rpc('get_mcp_endpoint_url', { p_organization_id: orgId, p_endpoint_id: endpointId });
-      if (error || typeof data !== 'string') return null;
+      if (error) throw endpointLookupError(error as PgError);
+      if (data === null || data === undefined) return null; // the RPC's NULL: no such endpoint in this org
+      if (typeof data !== 'string') throw new Error('invalid endpoint lookup result');
       return data;
     },
 
@@ -225,28 +238,6 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       if (v === undefined || v === null) return 0;
       if (!Number.isInteger(v) || (v as number) < 1) throw new Error('invalid snapshot version');
       return v as number;
-    },
-
-    async createSnapshot(orgId, endpointId, version, contentSha256, tools) {
-      const { data, error } = await u.rpc('create_mcp_snapshot', {
-        p_organization_id: orgId, p_endpoint_id: endpointId, p_version: version, p_content_sha256: contentSha256,
-        p_tools: tools.map((t) => ({ name: t.name, description: t.description, input_schema: t.inputSchema })),
-      });
-      if (error) {
-        // create_mcp_snapshot raises PT409 when p_version is not latest+1 (concurrent or stale caller) or the
-        // endpoint lock is busy (20261120000004). PT409 is deliberately NOT 40001: PostgREST re-runs 40001
-        // transactions with the same arguments, which looped until the bridge JWT expired (Agent 1, M4).
-        // 23505 is the UNIQUE (endpoint_id, version) backstop. Anything else is an internal error.
-        // PT503 (20261120000005): a lock other than the endpoint row timed out -> busy, retry later.
-        // A transport timeout means the app gave up first: the outcome is unknown (see DatabaseTimeoutError).
-        const code = (error as { code?: string }).code;
-        if (code === SNAPSHOT_CONFLICT_SQLSTATE || code === '23505') throw new SnapshotVersionConflictError();
-        if (code === SNAPSHOT_BUSY_SQLSTATE) throw new SnapshotStoreBusyError();
-        if (isTransportTimeout(error)) throw new DatabaseTimeoutError();
-        throw new Error('failed to persist the tool snapshot');
-      }
-      if (typeof data !== 'string') throw new Error('failed to persist the tool snapshot');
-      return data;
     },
 
     async createSnapshotIdempotent(orgId, endpointId, idempotencyKey, contentSha256, tools, deadlineIso) {

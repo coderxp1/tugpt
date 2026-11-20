@@ -10,6 +10,7 @@ import { crossOriginMutationResponse } from '@/lib/http/mutations';
 import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { AuthService } from '@tugpt/auth';
 import { createExternalMcpRepository } from '@/lib/connect/external-mcp-repo';
+import { endpointLookupFailure } from '@/lib/connect/endpoint-lookup-response';
 import type { ApiError } from '@/lib/draft-api/types';
 
 function errorResponse(status: number, code: string, message: string) {
@@ -43,7 +44,8 @@ export async function DELETE(request: Request, { params }: { params: Promise<{ e
 
     await repo.deleteEndpoint(tenant.organizationId, endpointId);
     return NextResponse.json({ endpointId, deleted: true });
-  } catch {
-    return errorResponse(500, 'INTERNAL', 'Failed to delete the MCP endpoint');
+  } catch (err) {
+    // F-M9-1: a lookup that could not be answered is a retryable 503 (or 403), not a 404 or a generic 500.
+    return endpointLookupFailure(err) ?? errorResponse(500, 'INTERNAL', 'Failed to delete the MCP endpoint');
   }
 }

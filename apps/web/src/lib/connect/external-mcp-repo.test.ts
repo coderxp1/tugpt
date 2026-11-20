@@ -1,12 +1,12 @@
 /**
- * The REAL repository's createSnapshot error mapping (the route tests mock the repository, which is how
+ * The REAL repository's error mapping (the route tests mock the repository, which is how
  * the M4 40001 defect escaped them). The client here is a minimal stand-in for supabase-js `rpc` that
  * returns the PostgREST error codes measured against real PostgREST 14.14 (labelled stand-in).
  */
 import { describe, expect, it } from 'vitest';
 import {
-  createExternalMcpRepository, DatabaseTimeoutError, isTransportTimeout, SNAPSHOT_BUSY_SQLSTATE, SNAPSHOT_CONFLICT_SQLSTATE,
-  SnapshotStoreBusyError, SnapshotVersionConflictError, SnapshotRequestInProgressError, SnapshotEndpointBusyError,
+  createExternalMcpRepository, DatabaseTimeoutError, isTransportTimeout, RepoError, SNAPSHOT_BUSY_SQLSTATE,
+  SnapshotStoreBusyError, SnapshotRequestInProgressError, SnapshotEndpointBusyError,
   SnapshotDeadlineExceededError, SnapshotEndpointNotFoundError, SnapshotRequestInvalidError, IDEMPOTENCY_KEY_PATTERN,
 } from './external-mcp-repo';
 
@@ -18,37 +18,6 @@ function clientReturning(result: { data?: unknown; error?: { code: string; messa
   return { client, calls };
 }
 const TOOLS = [{ name: 'search', description: 'd', inputSchema: { type: 'object' } }] as never;
-
-describe('createSnapshot error mapping', () => {
-  it('the conflict SQLSTATE is PT409 (PostgREST: HTTP 409, never retried), not 40001', () => {
-    expect(SNAPSHOT_CONFLICT_SQLSTATE).toBe('PT409');
-  });
-
-  it('PT409 -> SnapshotVersionConflictError (route answers 409)', async () => {
-    const { client } = clientReturning({ error: { code: 'PT409', message: 'SNAPSHOT_VERSION_CONFLICT' } });
-    await expect(createExternalMcpRepository(client as never).createSnapshot('o', 'e', 2, 'x'.repeat(64), TOOLS))
-      .rejects.toBeInstanceOf(SnapshotVersionConflictError);
-  });
-
-  it('23505 (UNIQUE backstop) -> SnapshotVersionConflictError', async () => {
-    const { client } = clientReturning({ error: { code: '23505' } });
-    await expect(createExternalMcpRepository(client as never).createSnapshot('o', 'e', 2, 'x'.repeat(64), TOOLS))
-      .rejects.toBeInstanceOf(SnapshotVersionConflictError);
-  });
-
-  it.each([['40001'], ['28000'], ['42501'], ['P0002'], ['PGRST303']])('%s is NOT a version conflict', async (code) => {
-    const { client } = clientReturning({ error: { code } });
-    const p = createExternalMcpRepository(client as never).createSnapshot('o', 'e', 2, 'x'.repeat(64), TOOLS);
-    await expect(p).rejects.toThrow('failed to persist the tool snapshot');
-    await expect(p).rejects.not.toBeInstanceOf(SnapshotVersionConflictError);
-  });
-
-  it('passes the caller-computed version through unchanged and returns the snapshot id', async () => {
-    const { client, calls } = clientReturning({ data: 'snap-id' });
-    await expect(createExternalMcpRepository(client as never).createSnapshot('o', 'e', 7, 'x'.repeat(64), TOOLS)).resolves.toBe('snap-id');
-    expect(calls).toEqual([{ fn: 'create_mcp_snapshot', args: expect.objectContaining({ p_version: 7, p_organization_id: 'o', p_endpoint_id: 'e' }) }]);
-  });
-});
 
 /**
  * M7 (Agent 1: lock wait outlived the 5 s app timeout -> 500). The error shapes below are what
@@ -65,25 +34,9 @@ function readClientReturning(error: { code: string; message?: string } | null, d
   return { from: () => chain };
 }
 
-describe('createSnapshot: busy and timeout are 503-class, never a generic (500) error (M7)', () => {
+describe('busy and transport-timeout primitives (M7)', () => {
   it('the busy SQLSTATE is PT503 (PostgREST: HTTP 503, not retried by the client for POST)', () => {
     expect(SNAPSHOT_BUSY_SQLSTATE).toBe('PT503');
-  });
-  it('PT503 -> SnapshotStoreBusyError', async () => {
-    const { client } = clientReturning({ error: { code: 'PT503', message: 'SNAPSHOT_STORE_BUSY' } });
-    await expect(createExternalMcpRepository(client as never).createSnapshot('o', 'e', 2, 'x'.repeat(64), TOOLS))
-      .rejects.toBeInstanceOf(SnapshotStoreBusyError);
-  });
-  it.each([['TimeoutError', TIMEOUT_ERR], ['AbortError', ABORT_ERR]])('a transport %s -> DatabaseTimeoutError (outcome unknown)', async (_n, err) => {
-    const { client } = clientReturning({ error: err });
-    await expect(createExternalMcpRepository(client as never).createSnapshot('o', 'e', 2, 'x'.repeat(64), TOOLS))
-      .rejects.toBeInstanceOf(DatabaseTimeoutError);
-  });
-  it.each([['55P03'], ['57014'], ['']])('%s with a non-timeout message stays a generic failure', async (code) => {
-    const { client } = clientReturning({ error: { code, message: 'TypeError: fetch failed' } });
-    const p = createExternalMcpRepository(client as never).createSnapshot('o', 'e', 2, 'x'.repeat(64), TOOLS);
-    await expect(p).rejects.toThrow('failed to persist the tool snapshot');
-    await expect(p).rejects.not.toBeInstanceOf(DatabaseTimeoutError);
   });
   it('isTransportTimeout only matches a code-less TimeoutError/AbortError, not a database error that mentions it', () => {
     expect(isTransportTimeout(TIMEOUT_ERR)).toBe(true);
@@ -197,5 +150,60 @@ describe('snapshot reads: a timeout is DatabaseTimeoutError, not "not found" or 
     const p = createExternalMcpRepository(readChain({ code: '42501' }) as never).listSnapshotTools('o', SID);
     await expect(p).rejects.toThrow('failed to list snapshot tools');
     await expect(p).rejects.not.toBeInstanceOf(DatabaseTimeoutError);
+  });
+});
+
+/**
+ * F-M9-1 (Agent 1): getEndpointUrl returned null for ANY error, so a locked endpoints table or a timed-out
+ * request became 404 NOT_FOUND and the UI dropped its Idempotency-Key. null now means exactly one thing: the
+ * RPC answered NULL (no such endpoint in this org). Stand-in rpc client (labelled), PostgREST error shapes.
+ */
+const EP_ID = 'a9000000-0000-4000-8000-0000000e000a';
+describe('getEndpointUrl: null only for a genuinely missing endpoint (F-M9-1)', () => {
+  it('returns the URL the RPC answered', async () => {
+    const { client, calls } = clientReturning({ data: 'https://mcp.example.test/mcp' });
+    await expect(createExternalMcpRepository(client as never).getEndpointUrl('o', EP_ID)).resolves.toBe('https://mcp.example.test/mcp');
+    expect(calls).toEqual([{ fn: 'get_mcp_endpoint_url', args: { p_organization_id: 'o', p_endpoint_id: EP_ID } }]);
+  });
+  it('NULL from the RPC (no such endpoint in this org) -> null', async () => {
+    const { client } = clientReturning({ data: null });
+    await expect(createExternalMcpRepository(client as never).getEndpointUrl('o', EP_ID)).resolves.toBeNull();
+  });
+  it('a malformed endpoint id cannot name an endpoint -> null, without a database call', async () => {
+    const { client, calls } = clientReturning({ data: 'https://never' });
+    await expect(createExternalMcpRepository(client as never).getEndpointUrl('o', 'not-a-uuid')).resolves.toBeNull();
+    expect(calls).toHaveLength(0);
+  });
+  it.each([
+    ['our fetch timed out (TimeoutError)', TIMEOUT_ERR],
+    ['our fetch was aborted (AbortError)', ABORT_ERR],
+    ['55P03 lock_not_available (locked endpoints table)', { code: '55P03', message: 'canceling statement due to lock timeout' }],
+    ['57014 statement timeout', { code: '57014', message: 'canceling statement due to statement timeout' }],
+    ['network failure', { code: '', message: 'TypeError: fetch failed' }],
+    ['PostgREST cannot reach the database', { code: 'PGRST000', message: 'Database client error' }],
+    ['an unexpected SQLSTATE', { code: 'XX000', message: 'internal error' }],
+  ])('%s -> DatabaseTimeoutError (route: 503), never null (404)', async (_n, error) => {
+    const { client } = clientReturning({ error });
+    const p = createExternalMcpRepository(client as never).getEndpointUrl('o', EP_ID);
+    await expect(p).rejects.toBeInstanceOf(DatabaseTimeoutError);
+  });
+  it('42501 FORBIDDEN -> RepoError 42501 (route: 403), never null', async () => {
+    const { client } = clientReturning({ error: { code: '42501', message: 'FORBIDDEN' } });
+    const p = createExternalMcpRepository(client as never).getEndpointUrl('o', EP_ID);
+    await expect(p).rejects.toBeInstanceOf(RepoError);
+    await expect(p).rejects.toMatchObject({ pgCode: '42501' });
+  });
+  it('a non-string answer is an error, not "missing"', async () => {
+    const { client } = clientReturning({ data: 42 });
+    await expect(createExternalMcpRepository(client as never).getEndpointUrl('o', EP_ID)).rejects.toThrow('invalid endpoint lookup result');
+  });
+  it('getEndpoint (delete / activate / deactivate) propagates the same errors and keeps null for missing', async () => {
+    await expect(createExternalMcpRepository(clientReturning({ error: TIMEOUT_ERR }).client as never).getEndpoint('o', EP_ID))
+      .rejects.toBeInstanceOf(DatabaseTimeoutError);
+    await expect(createExternalMcpRepository(clientReturning({ data: null }).client as never).getEndpoint('o', EP_ID)).resolves.toBeNull();
+  });
+  it('the legacy key-less createSnapshot is gone from the repository (F-M9-2)', () => {
+    const repo = createExternalMcpRepository(clientReturning({}).client as never) as unknown as Record<string, unknown>;
+    expect(repo.createSnapshot).toBeUndefined();
   });
 });
