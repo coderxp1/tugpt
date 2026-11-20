@@ -124,3 +124,22 @@ Recovery order:
 Never delete audit or approval rows to make a constraint pass; map invalid
 legacy rows to a documented value in a new migration, or leave them for manual
 review behind a `NOT VALID` constraint.
+
+## Recorded renumbering: B-2 (MCP vs Workspace version collision)
+
+The M9 follow-up migration `20261120200001_mcp_snapshot_legacy_revoke_owner_first.sql` (Agent 2,
+never merged or deployed) collided with the Workspace migration
+`20261120200001_workspace_agent_instructions_confidential.sql` (Agent 4). Under rule 2 it was renumbered
+to `20261120000007_mcp_snapshot_legacy_revoke_owner_first.sql`. The SQL is byte-identical
+(sha256 `b476315003d05b2d3a2cc9786ea7989ed47a95fe8ed9d12824d3bb7b55f4edd5`), so its header comment and the
+`COMMENT ON FUNCTION` text it stores still name the old id; only the file name and the manifest key changed.
+
+Combined order with the Workspace series: `20261119100001-100004` (Workspace),
+`20261120000001-000007` (MCP), `20261120100001-100011` and `20261120200001-200003` (Workspace).
+
+The rename commit deletes a file that earlier commits on the same branch added. `verify --history` treats
+any deletion as a violation, so that commit must not reach a protected branch's history: land the branch
+by squash merge, or use the equivalent branch whose history creates the migration as `20261120000007` from
+the start (same final tree). Agent 2 applied the old file name only to its own disposable harness databases; it was never merged or
+deployed. Any other database that recorded version `20261120200001` for this file must be checked before the
+Workspace migration of that version is applied there.
