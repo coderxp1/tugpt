@@ -1,13 +1,16 @@
 import type { BackendGap } from '@/lib/connect-ui/contract';
 import s from './connect.module.css';
 
-/** States plainly that a feature waits on the backend, and on exactly what. */
-export function GapNote({ gap, children }: { gap: BackendGap; children?: React.ReactNode }) {
+/**
+ * States plainly, in customer words, that something is not available yet.
+ * The internal dependency id stays on the element (data-gap) for support and
+ * tests; the technical "needs" text is not shown to customers.
+ */
+export function GapNote({ gap, children, label = 'Not available yet' }: { gap: BackendGap; children?: React.ReactNode; label?: string }) {
   return (
-    <div className={s.gap} role="note">
-      <strong>Waiting on backend · {gap.id}</strong>
+    <div className={s.gap} role="note" data-gap={gap.id}>
+      <strong>{label}</strong>
       <span>{children ?? gap.title}</span>
-      <small>Needs: {gap.needs}</small>
     </div>
   );
 }

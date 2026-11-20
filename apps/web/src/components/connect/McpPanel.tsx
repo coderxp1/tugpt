@@ -13,6 +13,8 @@ export interface McpPanelProps {
   routes: RouteAvailability;
   /** Server switch TUGPT_CUSTOMER_MCP_ENABLED. Off until the egress proxy passes its probe (B-8). */
   enabled: boolean;
+  /** Server switch TUGPT_CHAT_MCP_EXECUTION_ENABLED: whether Chat may call active MCP tools at all. */
+  chatEnabled?: boolean;
   /** Injectable for tests. */
   fetcher?: typeof fetch;
 }
@@ -24,7 +26,7 @@ interface Row extends McpEndpoint { snapshot?: SnapshotState; tools?: McpTool[];
  * their permission classes from GET /mcp/snapshots/{id}/tools. Nothing is shown
  * as active, approved or connected unless a backend response said so.
  */
-export function McpPanel({ canManage, routes, enabled, fetcher }: McpPanelProps) {
+export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetcher }: McpPanelProps) {
   const [rows, setRows] = useState<Row[] | null>(null);
   const [loadProblem, setLoadProblem] = useState<string | null>(null);
   const [url, setUrl] = useState(''); const [name, setName] = useState('');
@@ -127,14 +129,21 @@ export function McpPanel({ canManage, routes, enabled, fetcher }: McpPanelProps)
 
   const closeDelete = () => { setDeleting(null); deleteTrigger.current?.focus(); };
   const lockedNote = !enabled
-    ? <p className={s.muted}>Approving is switched off while customer MCP is off ({BACKEND_GAPS.EGRESS.id}).</p>
-    : <p className={s.muted}>Approving is not part of this build. It needs <code>POST /api/v1/connect/mcp/snapshots/[id]/approve</code>.</p>;
+    ? <p className={s.muted}>Approving tools is switched off for your organization right now.</p>
+    : <p className={s.muted}>Approving tools is not available in this version of TuGPT.</p>;
 
   return (
     <section className={s.section} aria-labelledby="mcp-title">
       <h2 id="mcp-title">Your own tools (MCP)</h2>
-      <p className={s.lead}>Connect a Model Context Protocol server your organization runs. TuGPT reads the tools it offers; an owner or admin reviews each one and sets its permission level before anything can be switched on.</p>
-      {!enabled && <GapNote gap={BACKEND_GAPS.EGRESS}>Adding servers, discovering tools, approving and activating are switched off. You can still see, turn off and remove servers that already exist.</GapNote>}
+      <p className={s.lead}>Connect a tool server your organization runs (Model Context Protocol). TuGPT reads the tools it offers; an owner or admin reviews each one and decides what it may do before anything is switched on.</p>
+      <ol className={s.steps} aria-label="How it works">
+        <li><strong>Add</strong> the server&rsquo;s https address.</li>
+        <li><strong>Discover</strong> the tools it offers.</li>
+        <li><strong>Review</strong> each tool: read only, or may make changes (always asks first).</li>
+        <li><strong>Switch on</strong> the server.</li>
+      </ol>
+      <p className={s.muted} data-testid="mcp-chat-status"><strong>In Chat:</strong> {chatEnabled ? 'tools of active servers can be used with @ in Chat. Tools that make changes ask for approval each time.' : 'not usable yet. Chat does not call MCP tools until this is switched on for your organization, even when a server is active.'}</p>
+      {!enabled && <GapNote gap={BACKEND_GAPS.EGRESS} label="Not enabled">Adding servers, discovering tools, approving and switching on are not enabled for your organization yet. You can still see, turn off and remove servers that already exist.</GapNote>}
 
       {!canManage ? <p className={s.muted}>Only an organization owner or admin can see and manage MCP servers.</p> : (
         <>
@@ -149,7 +158,7 @@ export function McpPanel({ canManage, routes, enabled, fetcher }: McpPanelProps)
             {formProblem && <p className={s.error} role="alert">{formProblem}</p>}
           </form>
 
-          {!canList && <p className={s.muted} role="note">Listing servers is not part of this build. It needs <code>GET /api/v1/connect/mcp/endpoints</code>.</p>}
+          {!canList && <p className={s.muted} role="note">The server list is not available in this version of TuGPT.</p>}
           {canList && rows === null && <p className={s.muted} role="status">Loading servers…</p>}
           {loadProblem && (
             <div className={s.actionsRow}>
@@ -167,15 +176,16 @@ export function McpPanel({ canManage, routes, enabled, fetcher }: McpPanelProps)
                     <span className={`${s.badge} ${e.status === 'active' ? s.ok : s.off}`}>{ENDPOINT_STATUS_TEXT[e.status]}</span>
                   </div>
                   <p className={s.url}>{e.url}</p>
+                  <p className={s.muted}>{e.status === 'active' ? (chatEnabled ? 'Available in Chat with @.' : 'Active, but not usable in Chat yet.') : e.snapshot?.approved ? 'Tools reviewed. Switch the server on to make them available.' : e.snapshot ? `${e.snapshot.toolCount} ${e.snapshot.toolCount === 1 ? 'tool' : 'tools'} found. Review them below.` : 'Next step: discover its tools.'}</p>
                   <div className={s.actionsRow}>
                     <button type="button" className={s.secondary} disabled={!can.discover || busy !== null} onClick={() => void discover(e)}>
                       {busy === `snapshot:${e.id}` ? 'Discovering…' : e.snapshot ? 'Discover again' : 'Discover tools'}
                     </button>
                     {e.status === 'active'
                       ? <button type="button" className={s.secondary} disabled={!can.deactivate || busy !== null} onClick={() => void toggle(e, 'deactivate')}>{busy === `deactivate:${e.id}` ? 'Turning off…' : 'Turn off'}</button>
-                      : <button type="button" className={s.secondary} disabled={!can.activate || !e.snapshot?.approved || busy !== null} onClick={() => void toggle(e, 'activate')}>{busy === `activate:${e.id}` ? 'Activating…' : 'Activate'}</button>}
+                      : <button type="button" className={s.secondary} disabled={!can.activate || !e.snapshot?.approved || busy !== null} onClick={() => void toggle(e, 'activate')}>{busy === `activate:${e.id}` ? 'Switching on…' : 'Switch on'}</button>}
                     <button type="button" className={s.secondary} disabled={!can.remove || busy !== null} onClick={(ev) => { deleteTrigger.current = ev.currentTarget; setDeleting(e); }}>Remove…</button>
-                    {e.status !== 'active' && enabled && !e.snapshot?.approved && <p className={s.muted}>Activate unlocks after you discover and approve this server&rsquo;s tools. TuGPT checks again when you activate.</p>}
+                    {e.status !== 'active' && enabled && !e.snapshot?.approved && <p className={s.muted}>&ldquo;Switch on&rdquo; unlocks after you discover and approve this server&rsquo;s tools. TuGPT checks again when you switch it on.</p>}
                   </div>
                   {e.snapshot && e.tools && (
                     <McpToolReview
@@ -191,10 +201,10 @@ export function McpPanel({ canManage, routes, enabled, fetcher }: McpPanelProps)
               ))}
             </ul>
           )}
-          <GapNote gap={BACKEND_GAPS.MCP_STATE}>After a reload TuGPT cannot tell which tool list was last reviewed, so the review starts again from Discover tools.</GapNote>
+          <GapNote gap={BACKEND_GAPS.MCP_STATE} label="Good to know">After you reload this page, a review starts again from &ldquo;Discover tools&rdquo;.</GapNote>
         </>
       )}
-      <GapNote gap={BACKEND_GAPS.MCP_RUNTIME}>Approved tools from an active MCP server can be used in Chat with <kbd>@</kbd> once your administrator switches on MCP in Chat. Every call is recorded in your organization&rsquo;s audit log. While it is switched off, the <kbd>@</kbd> menu shows these tools as &ldquo;Not available in chat yet&rdquo; with the reason.</GapNote>
+      {!chatEnabled && <GapNote gap={BACKEND_GAPS.MCP_RUNTIME} label="Not enabled">Active servers appear in the Chat <kbd>@</kbd> menu as &ldquo;Not available in chat yet&rdquo;. Chat does not call them until MCP tools in Chat are switched on for your organization.</GapNote>}
       {deleting && (
         <ConfirmDialog
           title={`Remove ${deleting.displayName}?`}

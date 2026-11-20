@@ -13,7 +13,7 @@ export const PERMISSION_TEXT: Record<PermissionLevel, { label: string; help: str
 };
 
 export type EndpointStatus = 'pending' | 'active' | 'disabled';
-export const ENDPOINT_STATUS_TEXT: Record<EndpointStatus, string> = { pending: 'Not active', active: 'Active', disabled: 'Turned off' };
+export const ENDPOINT_STATUS_TEXT: Record<EndpointStatus, string> = { pending: 'Not switched on', active: 'Active', disabled: 'Turned off' };
 
 /** Snapshot facts the UI learnt from real responses in this session (the list route does not return them, B-10). */
 export interface SnapshotState { id: string; toolCount: number; approved: boolean }

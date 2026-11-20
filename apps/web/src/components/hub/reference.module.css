@@ -32,3 +32,5 @@ a.profile:hover strong{text-decoration:underline}
 /* Dashboard -> Workspace: always visible in the top bar, every screen size. */
 .openWorkspace{display:inline-flex;align-items:center;min-height:40px;padding:0 16px;border-radius:100px;background:var(--yellow);color:#171715!important;font-weight:700;font-size:14px;box-shadow:inset 0 0 0 1.5px #171715;white-space:nowrap}.openWorkspace:hover{background:#ffed78}
 @media(max-width:720px){.openWorkspace{min-height:38px;padding:0 13px;font-size:13px}}
+.topOrg{font-size:13px;font-weight:600;color:#4a4b45;background:#f3f1e8;border:1px solid #e0ddd1;border-radius:100px;padding:6px 12px;max-width:260px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+@media(max-width:720px){.topOrg{max-width:55vw;font-size:12px;padding:5px 10px}}

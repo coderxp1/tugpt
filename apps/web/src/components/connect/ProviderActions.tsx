@@ -62,7 +62,7 @@ export function ProviderActions({ provider, state, canManage, start, disconnect,
     return (
       <div className={s.actionsRow}>
         <button type="button" className={s.primary} disabled aria-describedby={`${provider}-start-missing`}>Connect {name}</button>
-        <p id={`${provider}-start-missing`} className={s.muted}>Connecting is not part of this build. It needs the Connect sign-in route <code>{START_PATH[provider]}</code>.</p>
+        <p id={`${provider}-start-missing`} className={s.muted}>Connecting {name} is not available in this version of TuGPT yet.</p>
       </div>
     );
   }

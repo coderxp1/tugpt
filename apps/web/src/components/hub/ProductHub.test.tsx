@@ -40,8 +40,8 @@ describe('reference-based working Dashboard', () => {
   expect(screen.queryAllByText(/Available \u00b7 0/)).toHaveLength(0);
  });
  it('searches capabilities and provides a useful empty state', () => {
-  renderHub(); fireEvent.change(screen.getByRole('searchbox'),{target:{value:'CRM'}}); expect(screen.getByText('CRM Hub')).toBeTruthy(); expect(screen.queryByText('Media Studio')).toBeNull();
-  fireEvent.change(screen.getByRole('searchbox'),{target:{value:'no-matches'}}); expect(screen.getByText(/No capabilities found/)).toBeTruthy(); fireEvent.click(screen.getByRole('button',{name:'Clear search'})); expect(screen.getByText('Media Studio')).toBeTruthy();
+  renderHub(); fireEvent.change(screen.getByRole('searchbox'),{target:{value:'CRM'}}); expect(screen.getByText('CRM Hub')).toBeTruthy(); expect(within(screen.getByRole('list',{name:'TuGPT products'})).queryByText('Media Studio')).toBeNull();
+  fireEvent.change(screen.getByRole('searchbox'),{target:{value:'no-matches'}}); expect(screen.getByText(/No capabilities found/)).toBeTruthy(); fireEvent.click(screen.getByRole('button',{name:'Clear search'})); expect(within(screen.getByRole('list',{name:'TuGPT products'})).getByText('Media Studio')).toBeTruthy();
  });
  it('refreshes server data through Next, not simulated counts', () => { renderHub(); fireEvent.click(screen.getByRole('button',{name:'Refresh activity'})); expect(refresh).toHaveBeenCalledOnce(); });
  it('does not offer module actions without organization context', () => { renderHub(signals,null); expect(within(screen.getByRole('list',{name:'TuGPT products'})).queryAllByRole('link')).toHaveLength(0); expect(screen.getByText(/Organization unavailable. Capabilities require/)).toBeTruthy(); });

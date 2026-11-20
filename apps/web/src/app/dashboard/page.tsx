@@ -18,6 +18,8 @@ import { createAuthenticatedServerClient } from '@/lib/supabase/server';
 import { loadHubSignals, UNAVAILABLE_SIGNALS, type HubSignals } from '@/lib/hub/signals';
 import { resolveProducts } from '@/lib/hub/products';
 import { ProductHub } from '@/components/hub/ProductHub';
+import { loadOrgFeatures } from '@/lib/hub/features.server';
+import { featureMap } from '@/lib/hub/features';
 
 export const dynamic = 'force-dynamic';
 
@@ -48,6 +50,8 @@ export default async function DashboardHubPage() {
       fullName={session?.fullName ?? null}
       email={session?.email || null}
       role={role ? t.maybe(`hub.role.${role}`, role) : null}
+      roleKey={role}
+      features={featureMap(await loadOrgFeatures())}
       products={resolveProducts(signals)}
       t={t}
     />

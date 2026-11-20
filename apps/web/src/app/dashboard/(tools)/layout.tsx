@@ -16,11 +16,13 @@ import { createTranslator } from '@/i18n';
 import { getRequestLocale } from '@/i18n/server';
 import { getSessionContext } from '@/lib/tenant/server';
 import { AppShell } from '@/components/shell/AppShell';
+import { loadOrgFeatures } from '@/lib/hub/features.server';
+import { featureMap } from '@/lib/hub/features';
 
 export default async function DashboardLayout({
   children,
 }: Readonly<{ children: React.ReactNode }>) {
-  const [session, locale] = await Promise.all([getSessionContext(), getRequestLocale()]);
+  const [session, locale, features] = await Promise.all([getSessionContext(), getRequestLocale(), loadOrgFeatures()]);
   const t = createTranslator(locale);
 
   // `session` is null only when Supabase could not be reached, or the user
@@ -34,6 +36,7 @@ export default async function DashboardLayout({
       fullName={session?.fullName ?? null}
       email={session?.email || null}
       role={session?.tenant?.role ?? null}
+      features={featureMap(features)}
       t={t}
     >
       {children}

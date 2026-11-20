@@ -221,7 +221,7 @@ export function ImageStudio() {
           </div>
         )}
         {loadState === 'ready' && !selected && (
-          <div className={s.placeholder}><p className={s.emptyTitle}>No images yet</p><p>Describe what you want to see and choose Generate image. Results appear here and stay in your history.</p></div>
+          <div className={s.placeholder}><p className={s.emptyTitle}>No images yet</p><p>{service?.available ? 'Describe what you want to see and choose Generate image. Results appear here and stay in your history.' : 'Image generation is not switched on for your organization yet, so nothing can be generated here today.'}</p></div>
         )}
         {loadState === 'ready' && selected && (
           <figure className={s.result}>

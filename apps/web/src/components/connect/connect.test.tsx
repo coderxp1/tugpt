@@ -36,7 +36,9 @@ describe('ProviderActions', () => {
   it('disables Connect with the exact missing route when the build lacks it', () => {
     render(<ProviderActions provider="microsoft" state="requires_connection" canManage start="missing" disconnect="missing" />);
     expect((screen.getByRole('button', { name: 'Connect Microsoft 365' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('/api/v1/connect/microsoft/start')).toBeTruthy();
+    expect(screen.getByText('Connecting Microsoft 365 is not available in this version of TuGPT yet.')).toBeTruthy();
+    // Customers never see an API path.
+    expect(document.body.textContent).not.toContain('/api/v1/');
   });
   it('keeps Disconnect locked when the route is missing; Escape closes and restores focus', () => {
     render(<ProviderActions provider="google" state="connected" canManage start="available" disconnect="missing" />);
@@ -91,7 +93,8 @@ describe('DisconnectDialog', () => {
     await waitFor(() => expect(onDone).toHaveBeenCalled());
     unmount();
     render(<DisconnectDialog providerName="Google" onClose={vi.fn()} gap={BACKEND_GAPS.EGRESS} />);
-    expect(screen.getByRole('note').textContent).toContain('B-8');
+    expect(screen.getByRole('note').getAttribute('data-gap')).toBe('B-8');
+    expect(screen.getByRole('note').textContent).not.toMatch(/B-8|Needs:/);
   });
 });
 
@@ -128,7 +131,7 @@ describe('McpToolReview', () => {
     expect(approve.disabled).toBe(true);
     fireEvent.change(screen.getByLabelText('Permission level for search'), { target: { value: 'read' } });
     fireEvent.change(screen.getByLabelText('Permission level for refund'), { target: { value: 'financial' } });
-    expect(screen.getByText(/B-11/)).toBeTruthy();
+    expect(document.querySelector('[data-gap="B-11"]')).toBeTruthy();
     expect(approve.disabled).toBe(true);
     fireEvent.click(screen.getByRole('checkbox'));
     expect(approve.disabled).toBe(false);
@@ -189,15 +192,16 @@ describe('McpPanel', () => {
     const docs = (await screen.findByRole('heading', { name: 'Docs' })).closest('li')!;
     const kb = screen.getByRole('heading', { name: 'Knowledge base' }).closest('li')!;
     expect(screen.getAllByRole('listitem').filter((li) => li.querySelector('h3'))).toHaveLength(2); // malformed row dropped
-    expect(within(docs).getByText('Not active')).toBeTruthy();
+    expect(within(docs).getByText('Not switched on')).toBeTruthy();
     expect(within(kb).getByText('Active')).toBeTruthy();
     expect(f.mock.calls[0][1]).toMatchObject({ method: 'GET', cache: 'no-store' });
     expect((screen.getByRole('button', { name: 'Add server' }) as HTMLButtonElement).disabled).toBe(true);
     expect((within(docs).getByRole('button', { name: 'Discover tools' }) as HTMLButtonElement).disabled).toBe(true);
-    expect((within(docs).getByRole('button', { name: 'Activate' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(docs).getByRole('button', { name: 'Switch on' }) as HTMLButtonElement).disabled).toBe(true);
     expect((within(kb).getByRole('button', { name: 'Turn off' }) as HTMLButtonElement).disabled).toBe(false);
     expect((within(docs).getByRole('button', { name: 'Remove…' }) as HTMLButtonElement).disabled).toBe(false);
-    expect(screen.getAllByRole('note').map((n) => n.textContent).join(' ')).toContain('B-8');
+    expect(screen.getAllByRole('note').map((n) => n.getAttribute('data-gap'))).toContain('B-8');
+    expect(screen.getByTestId('mcp-chat-status').textContent).toMatch(/not usable yet/);
   });
 
   it('removes a server only after confirmation, via DELETE, then re-reads the list', async () => {
@@ -247,7 +251,7 @@ describe('McpPanel', () => {
   it('names the missing list route and locks everything when the build lacks the MCP routes', () => {
     const f = api(() => json({ endpoints: [] }));
     render(<McpPanel canManage routes={all('missing')} enabled fetcher={f as unknown as typeof fetch} />);
-    expect(screen.getByText('GET /api/v1/connect/mcp/endpoints')).toBeTruthy();
+    expect(screen.getByText('The server list is not available in this version of TuGPT.')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Add server' }) as HTMLButtonElement).disabled).toBe(true);
     expect(f).not.toHaveBeenCalled();
   });
@@ -264,7 +268,7 @@ describe('McpPanel', () => {
     });
     render(<McpPanel canManage routes={all('available')} enabled fetcher={f as unknown as typeof fetch} />);
     const card = (await screen.findByRole('heading', { name: 'Docs' })).closest('li')!;
-    expect((within(card).getByRole('button', { name: 'Activate' }) as HTMLButtonElement).disabled).toBe(true);
+    expect((within(card).getByRole('button', { name: 'Switch on' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(card).getByRole('button', { name: 'Discover tools' }));
     expect(await within(card).findByText('Refund an order')).toBeTruthy();
     expect(within(within(card).getByRole('table')).getAllByText('default until reviewed')).toHaveLength(2);
@@ -275,11 +279,11 @@ describe('McpPanel', () => {
     expect(await within(card).findByText('Approved. This list is frozen.')).toBeTruthy();
     expect(within(within(card).getByRole('table')).getByText('Moves money')).toBeTruthy();
     expect(within(within(card).getByRole('table')).getByText('Read only')).toBeTruthy();
-    const activate = within(card).getByRole('button', { name: 'Activate' }) as HTMLButtonElement;
+    const activate = within(card).getByRole('button', { name: 'Switch on' }) as HTMLButtonElement;
     expect(activate.disabled).toBe(false);
     fireEvent.click(activate);
     expect((await within(card).findByRole('alert')).textContent).toContain('egress proxy not reachable');
-    expect(within(card).getByText('Not active')).toBeTruthy();
+    expect(within(card).getByText('Not switched on')).toBeTruthy();
   });
 
   it('keeps the same Idempotency-Key across retryable failures and starts a new one only after an outcome (F-M9-1)', async () => {

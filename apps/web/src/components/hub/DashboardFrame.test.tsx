@@ -10,7 +10,7 @@ import { DashboardFrame } from './DashboardFrame';
 afterEach(cleanup);
 
 describe('DashboardFrame', () => {
-  it('shows the signed-in person and the TuGPT brand, not an organization block', () => {
+  it('shows the signed-in person and the TuGPT brand; no organization line without one', () => {
     render(<DashboardFrame fullName="Anna Berger" email="anna@example.test"><p>x</p></DashboardFrame>);
     const nav = screen.getByLabelText('Dashboard navigation');
     expect(nav.textContent).toContain('Anna Berger');
@@ -26,7 +26,24 @@ describe('DashboardFrame', () => {
     expect(nav.textContent).toContain('Media Studio, On hold pending review');
   });
 
-  it('shows the same person on every dashboard page and never an organization or company name', () => {
+  it('shows the active organization and role when the session has one, and only that one', () => {
+    render(<DashboardFrame fullName="Ben Kraus" email="ben@nordwind.example" organizationName="Nordwind Spedition (test)" role="owner"><p>x</p></DashboardFrame>);
+    expect(screen.getByTestId('active-org').textContent).toBe('Nordwind Spedition (test) · Owner');
+    expect(screen.getByLabelText('Dashboard navigation').textContent).not.toMatch(/Hartmann/);
+  });
+
+  it('labels each module with the organization feature state and keeps held and planned modules unclickable', () => {
+    render(<DashboardFrame email="anna@example.test" features={{ inbox: 'disabled', drafts: 'available', analytics: 'partial', media: 'disabled' }}><p>x</p></DashboardFrame>);
+    const mods = screen.getByLabelText('Application modules');
+    expect(mods.querySelector('a[href="/dashboard/inbox"]')?.textContent).toContain('Not enabled');
+    expect(mods.querySelector('a[href="/dashboard/drafts"]')?.textContent).toBe('AI Drafts');
+    expect(mods.querySelector('a[href="/dashboard/analytics"]')?.textContent).toContain('Partly available');
+    expect(mods.querySelector('a[href="/dashboard/media"]')).toBeNull();
+    expect(mods.querySelector('a[href="/dashboard/agents"]')).toBeNull();
+    expect(screen.getByRole('link', { name: 'Settings' }).getAttribute('href')).toBe('/dashboard/settings');
+  });
+
+  it('shows the same person on every dashboard page and no company name unless the session gives one', () => {
     for (const [path, overview] of [['/dashboard', true], ['/dashboard/create', false], ['/dashboard/connect', false], ['/dashboard/settings', false], ['/dashboard/inbox', false]] as const) {
       nav.path = path;
       render(<DashboardFrame fullName="Ben Kraus" email="ben@nordwind.example" overview={overview}><p>x</p></DashboardFrame>);
@@ -52,5 +69,14 @@ describe('DashboardFrame', () => {
     render(<DashboardFrame fullName={null} email="clara@example.test"><p>x</p></DashboardFrame>);
     expect(screen.getByLabelText('Dashboard navigation').textContent).toContain('clara@example.test');
     expect(screen.getByRole('link', { name: 'Your account: clara@example.test' })).toBeTruthy();
+  });
+  it('tags Create with the real image-generation state and leaves it untagged when available', () => {
+    const { unmount } = render(<DashboardFrame fullName="Anna" email="anna@example.test" features={{ images: 'disabled' }}><p>x</p></DashboardFrame>);
+    const create = screen.getByRole('link', { name: /^Create/ });
+    expect(create.textContent).toContain('Not enabled');
+    expect(create.getAttribute('data-state')).toBe('disabled');
+    unmount();
+    render(<DashboardFrame fullName="Anna" email="anna@example.test" features={{ images: 'available' }}><p>x</p></DashboardFrame>);
+    expect(screen.getByRole('link', { name: /^Create/ }).textContent).toBe('Create');
   });
 });

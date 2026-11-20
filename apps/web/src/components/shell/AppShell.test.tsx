@@ -61,14 +61,14 @@ afterEach(() => {
 });
 
 describe('what the header tells a reviewer', () => {
-  it('shows the signed-in person, not the customer company, in the frame', () => {
-    // 2026-11-15 product decision: the frame is the person's. Organization
-    // membership stays in the session and RLS, and is shown where it is the
-    // subject (Settings → Organization, with the explicit switcher).
+  it('shows the signed-in person and their own active organization in the frame', () => {
+    // 2026-11-20 owner directive supersedes the 2026-11-15 decision: the frame
+    // shows the signed-in customer's name, email and the organization they are
+    // working in now (from their own session; never another tenant's).
     renderShell({ fullName: 'Anna Berger' });
     expect(screen.getByText('Anna Berger')).toBeTruthy();
     expect(screen.getByText('revisor@example.com')).toBeTruthy();
-    expect(screen.queryByText('Panadería La Espiga')).toBeNull();
+    expect(screen.getAllByText(/Panadería La Espiga/).length).toBeGreaterThan(0);
   });
 
   it('does not invent an organization line when none resolves', () => {

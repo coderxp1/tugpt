@@ -5,6 +5,7 @@ import { asChatDb, listCapabilities, type CapabilityRow, type CapabilityState } 
 import { hasRegisteredTool } from '@/lib/chat/connect';
 import { canManageConnections, isConnectProvider, oauthBanner, parseOAuthReturn, type ConnectProvider } from '@/lib/connect-ui/contract';
 import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
+import { CHAT_MCP_EXECUTION_ENV } from '@/lib/chat/mcp';
 import { routeAvailability } from '@/lib/connect-ui/routes.server';
 import { McpPanel } from '@/components/connect/McpPanel';
 import { OAuthBanner } from '@/components/connect/OAuthBanner';
@@ -78,7 +79,14 @@ export default async function ConnectPage({ searchParams }: { searchParams: Sear
       {banner && <OAuthBanner {...banner} />}
       {rows === null
         ? <p className={s.error} role="alert">Connection status could not be loaded. Nothing is shown as connected until it can be checked.</p>
-        : <StatusFreshness checkedAt={checkedAt} />}
+        : <>
+          <StatusFreshness checkedAt={checkedAt} />
+          <p className={s.lead} data-testid="connect-summary" role="status">
+            <strong>Your services:</strong>{' '}
+            {(['connected', 'requires_connection', 'disabled_by_policy', 'not_available'] as const).map((st) => [st, providers.filter((p) => p.state === st).length] as const)
+              .filter(([, n]) => n > 0).map(([st, n]) => `${n} ${STATE[st].label.toLowerCase()}`).join(' · ') || 'none listed'}
+          </p>
+        </>}
       <ul className={s.grid}>
         {providers.map((p) => {
           const copy = isConnectProvider(p.key) ? PROVIDER_COPY[p.key] : undefined;
@@ -115,7 +123,7 @@ export default async function ConnectPage({ searchParams }: { searchParams: Sear
           );
         })}
       </ul>
-      <McpPanel canManage={canManage} routes={routes} enabled={customerMcpEnabled()} />
+      <McpPanel canManage={canManage} routes={routes} enabled={customerMcpEnabled()} chatEnabled={process.env[CHAT_MCP_EXECUTION_ENV]?.trim() === 'true'} />
       <p className={s.foot}>You sign in on the provider&rsquo;s own page, so TuGPT never sees your password. Access is limited to the permissions listed on each card, and every use in Chat is recorded in your organization&rsquo;s audit log.</p>
     </div>
   );
