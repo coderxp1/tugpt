@@ -65,7 +65,7 @@ describe('MCP contract parsing', () => {
 
 describe('chat wording', () => {
   it('covers every runtime tool error code in words', () => {
-    for (const code of ['INVALID_ARGUMENTS', 'OUTPUT_TOO_LARGE', 'CALL_BUDGET_EXCEEDED', 'INTERNAL', 'APPROVAL_REQUIRED']) {
+    for (const code of ['INVALID_ARGUMENTS', 'TOOL_ERROR', 'OUTPUT_TOO_LARGE', 'CALL_BUDGET_EXCEEDED', 'INTERNAL', 'APPROVAL_REQUIRED']) {
       expect(toolProblem(code).text).not.toBe('The app could not complete this step.');
       expect(toolProblem(code).text).not.toContain(code);
     }
