@@ -45,6 +45,17 @@ database built from the 114 committed migrations (latest `20261120100011`).
    have to land on `main` and be applied **before** 20261120100001+ reach a
    database, or else be renumbered by Agent 2. That decision is Agent 2's and
    is still open.
+   Scratch check (not committed; this tree plus Agent 2's six migrations and
+   four pgTAP files from `47ea476`), with the same results in both orders:
+   - Fresh database in sorted order: 123 migrations applied.
+   - Agent 2's six applied by psql *after* all 117 of this tree, the order
+     `--include-all` would produce.
+   - In both, pgTAP gave 75 files, 2223 ok. The only failures were the
+     pre-existing `appointment_requests` #26 and the `draft_attribution_and_audit`
+     `schema_migrations` error. `table_privilege_hygiene` H1–H3 pass once Agent 2's
+     000001 is present.
+   - The two sets touch no common object. Agent 2 should still confirm the order
+     on their side.
 2. Deploy web and worker together; the worker writes chunks the web reads.
 3. Migrations are frozen once committed; checksums live in
    `supabase/migrations/checksums.json`.
