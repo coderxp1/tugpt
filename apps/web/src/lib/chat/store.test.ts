@@ -34,11 +34,14 @@ function fakeDb(tables: Record<string, unknown>, fail: Set<string> = new Set(), 
     from(table: string) {
       const start = (op: string, values?: Record<string, unknown>) => {
         const c: Call = { table, op, values, eq: {}, in: {} }; calls.push(c);
+        let desc = false; let limit = Infinity;
+        // Like PostgREST: order and limit apply to the table's rows (stored oldest first here).
+        const shape = (v: unknown) => (Array.isArray(v) ? (desc ? [...v].reverse() : v).slice(0, limit) : v);
         const result = (): DbResult => (fail.has(table) ? { data: null, error: { message: 'down' } }
-          : { data: op === 'insert' ? { ...values, id: id(99), created_at: '2026-11-20T10:00:00Z' } : (table in tables ? tables[table] : []), error: null });
+          : { data: op === 'insert' ? { ...values, id: id(99), created_at: '2026-11-20T10:00:00Z' } : shape(table in tables ? tables[table] : []), error: null });
         const q: DbQuery = {
           select: (cols) => { c.cols = cols; return q; }, eq: (k, v) => { c.eq[k] = v; return q; }, is: (k, v) => { c.eq[k] = v; return q; },
-          in: (k, vs) => { c.in[k] = vs; return q; }, order: () => q, limit: () => q,
+          in: (k, vs) => { c.in[k] = vs; return q; }, order: (_k, o) => { desc = o.ascending === false; return q; }, limit: (n) => { limit = n; return q; },
           single: () => Promise.resolve(result()), maybeSingle: () => Promise.resolve(result()),
           then: (ok, ko) => Promise.resolve(result()).then(ok, ko),
         };
@@ -235,5 +238,19 @@ describe('chat store: pre-Q-9c schema compatibility (expand/contract, Q-10)', ()
       await expect(appendServerMessage(c.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'assistant', content: 'A' }, l.db)).rejects.toEqual(new ChatStoreError(code));
       expect(l.calls).toHaveLength(0);
     }
+  });
+});
+
+describe('chat store: long threads (Q-13)', () => {
+  it('returns the LATEST 400 messages, oldest first (not the first 400)', async () => {
+    const all = Array.from({ length: 450 }, (_, i) => ({
+      id: `m${i}`, role: i % 2 ? 'assistant' : 'user', content: `c${i}`, created_at: new Date(Date.UTC(2026, 10, 1, 0, 0, i)).toISOString(),
+      status: 'complete', mentions: [], capability_key: null, knowledge_unavailable: false, citations: [],
+    }));
+    const f = fakeDb({ chat_messages: all });
+    const msgs = await listMessages(f.db, ORG, THREAD);
+    expect(msgs).toHaveLength(400);
+    expect(msgs[0].content).toBe('c50');
+    expect(msgs[399].content).toBe('c449');
   });
 });

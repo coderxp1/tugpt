@@ -1,4 +1,4 @@
-import { isMissingColumn, isMissingFunction } from '@/lib/supabase/schema-compat';
+import { isMissingColumn, isMissingFunction, isMissingTable } from '@/lib/supabase/schema-compat';
 
 /**
  * Chat persistence through the caller's own RLS-bound client.
@@ -25,6 +25,8 @@ export interface DbQuery extends PromiseLike<DbResult> {
   single(): PromiseLike<DbResult>;
   maybeSingle(): PromiseLike<DbResult>;
 }
+/** The PostgREST builder also has lt(); only loadTurn needs it, so test fakes of DbQuery need not implement it. */
+interface RangeQuery extends DbQuery { lt(column: string, value: unknown): DbQuery }
 export interface ChatDb {
   from(table: string): { select(columns: string): DbQuery; insert(values: object): DbQuery; update(values: object): DbQuery };
   rpc(fn: string, args: object): PromiseLike<DbResult>;
@@ -166,14 +168,24 @@ export async function getThread(db: ChatDb, organizationId: string, threadId: st
  * as a second layer. The remaining entries keep their original n, so [n]
  * markers in the answer still point at the right source.
  */
+/** The most recent messages a thread read returns (and the citations RPC's id cap). */
+export const THREAD_MESSAGE_LIMIT = 400;
+
 export async function listMessages(db: ChatDb, organizationId: string, threadId: string): Promise<StoredMessage[]> {
+  // The LATEST messages, oldest first. (Before Q-13 this read the oldest 400, so a long thread lost its
+  // recent messages in the view, in the model's history and in turn lookups.)
   const page = (cols: string) => db.from('chat_messages').select(cols)
-    .eq('thread_id', threadId).eq('organization_id', organizationId).order('created_at', { ascending: true }).limit(400);
+    .eq('thread_id', threadId).eq('organization_id', organizationId).order('created_at', { ascending: false }).limit(THREAD_MESSAGE_LIMIT);
   let res = await page(MESSAGE_TURN_COLS);
   if (isMissingColumn(res.error)) res = await page(MESSAGE_COLS); // pre-Q-12 schema: no turn ids
   const data = check(res);
-  const raw = (Array.isArray(data) ? data : []) as Record<string, unknown>[];
-  // Only assistant messages can carry citations; the limit above (400) is the RPC's id cap.
+  const raw = ((Array.isArray(data) ? data : []) as Record<string, unknown>[]).reverse();
+  return withCitations(db, organizationId, threadId, raw);
+}
+
+/** Parses rows and attaches their citations, re-authorised for the reader (see listMessages). */
+async function withCitations(db: ChatDb, organizationId: string, threadId: string, raw: readonly Record<string, unknown>[]): Promise<StoredMessage[]> {
+  // Only assistant messages can carry citations; callers pass at most THREAD_MESSAGE_LIMIT rows (the RPC's id cap).
   const cited = raw.filter((r) => r.role === 'assistant').map((r) => str(r.id));
   const citations = new Map<string, unknown>();
   if (cited.length > 0) {
@@ -196,6 +208,102 @@ export async function listMessages(db: ChatDb, organizationId: string, threadId:
     }
   }
   return authorizeCitations(db, organizationId, raw.map((r) => toMessage({ ...r, citations: citations.get(str(r.id)) ?? [] })));
+}
+
+/** A turn's live run as the owner sees it (20261122100001); the run token is never readable by clients. */
+export interface TurnRunInfo { readonly claimedAt: string; readonly expiresAt: string }
+
+/** One turn read by indexed lookups (Q-13): independent of how long the thread is. */
+export interface TurnParts {
+  readonly turnId: string;
+  readonly userMessage: StoredMessage;
+  /** The turn's latest assistant message (a retried turn has several), with citations re-authorised. */
+  readonly latestAnswer: StoredMessage | null;
+  /** True when no user message was sent after this turn's (only that turn can be retried). */
+  readonly latest: boolean;
+  /** Messages before the user message, oldest first (only with withHistory; no citations: model history only). */
+  readonly before: readonly StoredMessage[];
+  /** The live or expired run row; null when none. */
+  readonly run: TurnRunInfo | null;
+  /** False on a database without chat_turn_runs (pre-Q-13): run is then unknown, not absent. */
+  readonly runsSupported: boolean;
+}
+
+/**
+ * Loads one turn under the caller's RLS. null when the turn was never stored in this
+ * thread, or the database has no turn ids yet (pre-Q-12: every send is then turn-less).
+ */
+export async function loadTurn(db: ChatDb, organizationId: string, threadId: string, turnId: string,
+  opts: { withHistory?: boolean } = {}): Promise<TurnParts | null> {
+  const inThread = (cols: string) => db.from('chat_messages').select(cols).eq('thread_id', threadId).eq('organization_id', organizationId);
+  const u = await inThread(MESSAGE_TURN_COLS).eq('turn_id', turnId).eq('role', 'user').maybeSingle();
+  if (isMissingColumn(u.error)) return null;
+  const userRow = check(u) as Record<string, unknown> | null;
+  if (!userRow) return null;
+  const userMessage = toMessage({ ...userRow, citations: [] });
+  const [answers, lastUser, runRes, beforeRes] = await Promise.all([
+    inThread(MESSAGE_TURN_COLS).eq('turn_id', turnId).eq('role', 'assistant').order('created_at', { ascending: false }).limit(1),
+    inThread('id').eq('role', 'user').order('created_at', { ascending: false }).limit(1),
+    db.from('chat_turn_runs').select('claimed_at,expires_at').eq('thread_id', threadId).eq('turn_id', turnId).maybeSingle(),
+    opts.withHistory
+      ? (inThread(MESSAGE_TURN_COLS) as RangeQuery).lt('created_at', userMessage.createdAt).order('created_at', { ascending: false }).limit(THREAD_MESSAGE_LIMIT)
+      : Promise.resolve({ data: [], error: null } as DbResult),
+  ]);
+  const answerRows = (check(answers) as Record<string, unknown>[] | null) ?? [];
+  const [latestAnswer = null] = await withCitations(db, organizationId, threadId, answerRows.slice(0, 1));
+  const lastUserRows = (check(lastUser) as Record<string, unknown>[] | null) ?? [];
+  const runsSupported = !isMissingTable(runRes.error);
+  const runRow = runsSupported ? (check(runRes) as Record<string, unknown> | null) : null;
+  const beforeRows = ((check(beforeRes) as Record<string, unknown>[] | null) ?? []).reverse();
+  return {
+    turnId, userMessage, latestAnswer,
+    latest: lastUserRows.length > 0 && str(lastUserRows[0].id) === userMessage.id,
+    before: beforeRows.map((r) => toMessage({ ...r, citations: [] })),
+    run: runRow ? { claimedAt: str(runRow.claimed_at), expiresAt: str(runRow.expires_at) } : null,
+    runsSupported,
+  };
+}
+
+export type ClaimOutcome =
+  | { readonly outcome: 'claimed'; readonly runId: string }
+  | { readonly outcome: 'busy' | 'stale' | 'not_latest' | 'unsupported' };
+
+/**
+ * Takes the turn's run lease on the sso_control client (claim_chat_turn_run_server). The database
+ * re-checks owner, tenant, membership and that the turn exists in this thread (else NOT_FOUND).
+ * 'unsupported': the database predates 20261122100001 (no lease; Q-12 behaviour).
+ */
+export async function claimTurnRun(control: ChatDb, input: {
+  organizationId: string; userId: string; threadId: string; turnId: string;
+  expectedAnswerId: string | null; requireLatest: boolean;
+}): Promise<ClaimOutcome> {
+  const r = await control.rpc('claim_chat_turn_run_server', {
+    p_organization_id: input.organizationId, p_user_id: input.userId, p_thread_id: input.threadId, p_turn_id: input.turnId,
+    p_expected_answer_id: input.expectedAnswerId, p_require_latest: input.requireLatest, p_ttl_seconds: TURN_RUN_TTL_SECONDS,
+  });
+  if (isMissingFunction(r.error)) return { outcome: 'unsupported' };
+  if (r.error?.code === 'P0002') throw new ChatStoreError('NOT_FOUND');
+  const v = check(r) as Record<string, unknown> | null;
+  const outcome = v?.outcome;
+  if (outcome === 'claimed' && typeof v?.run_id === 'string') return { outcome, runId: v.run_id };
+  if (outcome === 'busy' || outcome === 'stale' || outcome === 'not_latest') return { outcome };
+  throw new ChatStoreError('STORE_UNAVAILABLE');
+}
+
+/** Above the routes' maxDuration (120 s), so a live request never loses its lease. */
+export const TURN_RUN_TTL_SECONDS = 150;
+
+/** Releases the caller's own lease; never throws (an unreleased lease simply expires). */
+export async function releaseTurnRun(control: ChatDb, input: {
+  organizationId: string; userId: string; threadId: string; turnId: string; runId: string;
+}): Promise<boolean> {
+  try {
+    const r = await control.rpc('release_chat_turn_run_server', {
+      p_organization_id: input.organizationId, p_user_id: input.userId, p_thread_id: input.threadId,
+      p_turn_id: input.turnId, p_run_id: input.runId,
+    });
+    return !r.error && r.data === true;
+  } catch { return false; }
 }
 
 export async function authorizeCitations(db: ChatDb, organizationId: string, messages: StoredMessage[]): Promise<StoredMessage[]> {

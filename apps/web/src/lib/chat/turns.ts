@@ -13,14 +13,21 @@
  *   2. POST .../messages { content, turnId, retry: true } re-runs the turn on the
  *      EXISTING user message: no second user message is ever written.
  *
- * Statuses: complete | error | stopped come from the turn's latest assistant
- * message. Without one, the turn is 'pending' while the request can still be
- * running (PENDING_WINDOW_MS, above the route's maxDuration) and 'interrupted'
- * after that (the server died before it could store an answer).
+ * Statuses: 'pending' while a run of the turn holds its lease (Q-13,
+ * 20261122100001) and has not stored its answer yet, including a RETRY of a
+ * failed turn. Otherwise complete | error | stopped come from the turn's latest
+ * assistant message. Without one, the turn is 'pending' while the request can
+ * still be running (PENDING_WINDOW_MS, above the route's maxDuration) and
+ * 'interrupted' after that (the server died before it could store an answer).
+ *
+ * Concurrency (Q-13): the routes take the run lease in the database before
+ * calling the model, so two retries of one turn can never both run; the loser
+ * gets 409 TURN_IN_PROGRESS, and a retry that raced a finished attempt gets 409
+ * with the turn as it is now (TURN_EXISTS / TURN_CHANGED / TURN_NOT_LATEST).
  *
  * Pure functions only; the routes do the I/O.
  */
-import type { StoredMessage } from './store';
+import type { StoredMessage, TurnParts, TurnRunInfo } from './store';
 
 export const PENDING_WINDOW_MS = 150_000;
 
@@ -54,28 +61,43 @@ export function parseTurnRequest(body: Record<string, unknown>): { turnId: strin
   return { turnId: turnId.toLowerCase(), retry: retry === true };
 }
 
-/** The turn in a thread's messages (ascending by created_at), or null when no user message opened it. */
-export function resolveTurn(messages: readonly StoredMessage[], turnId: string, now: number): TurnView | null {
-  const idx = messages.findIndex((m) => m.role === 'user' && m.turnId === turnId);
-  if (idx < 0) return null;
-  const userMessage = messages[idx];
-  let assistantMessage: StoredMessage | null = null;
-  for (const m of messages) if (m.role === 'assistant' && m.turnId === turnId) assistantMessage = m;
+/** True while the run holds its lease and has not stored an answer newer than its claim. */
+export function runInFlight(run: TurnRunInfo | null, latestAnswer: StoredMessage | null, now: number): boolean {
+  if (!run || !(Date.parse(run.expiresAt) > now)) return false;
+  return !latestAnswer || Date.parse(latestAnswer.createdAt) < Date.parse(run.claimedAt);
+}
+
+/** The turn's view from indexed parts (store.loadTurn). */
+export function assembleTurn(parts: TurnParts, now: number): TurnView {
+  const { userMessage, latestAnswer } = parts;
   let status: TurnStatus;
-  if (assistantMessage) status = assistantMessage.status;
+  if (runInFlight(parts.run, latestAnswer, now)) status = 'pending';
+  else if (latestAnswer) status = latestAnswer.status;
   else {
     const age = now - Date.parse(userMessage.createdAt);
     status = Number.isFinite(age) && age < PENDING_WINDOW_MS ? 'pending' : 'interrupted';
   }
+  return { id: parts.turnId, status, userMessage, assistantMessage: latestAnswer, latest: parts.latest, before: parts.before };
+}
+
+/** The turn in a thread's messages (ascending by created_at), or null when no user message opened it. */
+export function resolveTurn(messages: readonly StoredMessage[], turnId: string, now: number, run: TurnRunInfo | null = null): TurnView | null {
+  const idx = messages.findIndex((m) => m.role === 'user' && m.turnId === turnId);
+  if (idx < 0) return null;
+  let latestAnswer: StoredMessage | null = null;
+  for (const m of messages) if (m.role === 'assistant' && m.turnId === turnId) latestAnswer = m;
   let lastUser = -1;
   messages.forEach((m, i) => { if (m.role === 'user') lastUser = i; });
-  return { id: turnId, status, userMessage, assistantMessage, latest: lastUser === idx, before: messages.slice(0, idx) };
+  return assembleTurn({
+    turnId, userMessage: messages[idx], latestAnswer, latest: lastUser === idx,
+    before: messages.slice(0, idx), run, runsSupported: true,
+  }, now);
 }
 
 export type SendDecision =
   | { readonly kind: 'fresh' }
   | { readonly kind: 'retry'; readonly turn: TurnView }
-  | { readonly kind: 'conflict'; readonly code: 'TURN_EXISTS' | 'TURN_IN_PROGRESS' | 'TURN_NOT_LATEST' | 'TURN_CONFLICT'; readonly turn: TurnView };
+  | { readonly kind: 'conflict'; readonly code: 'TURN_EXISTS' | 'TURN_IN_PROGRESS' | 'TURN_NOT_LATEST' | 'TURN_CONFLICT' | 'TURN_CHANGED'; readonly turn: TurnView };
 
 /** What a POST with this turn id does, given the turn's current state. Never calls the model for a settled turn. */
 export function decideSend(existing: TurnView | null, retry: boolean, content: string): SendDecision {
@@ -92,6 +114,7 @@ export const TURN_CONFLICT_TEXT: Record<Extract<SendDecision, { kind: 'conflict'
   TURN_IN_PROGRESS: 'This message is still being answered',
   TURN_NOT_LATEST: 'Only the latest message can be retried',
   TURN_CONFLICT: 'This turn id was used for a different message',
+  TURN_CHANGED: 'This message was answered again in the meantime',
 };
 
 /**
@@ -107,4 +130,18 @@ export function modelHistory(messages: readonly StoredMessage[], limit: number):
     .filter((m) => m.role !== 'assistant' || !m.turnId || lastForTurn.get(m.turnId) === m.id)
     .slice(-limit)
     .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content }));
+}
+
+export type ClaimRefusal = 'busy' | 'stale' | 'not_latest';
+
+/**
+ * The 409 code for a retry whose lease claim was refused, given the turn as it is NOW.
+ * busy: another run holds the lease. stale / not_latest: the turn changed after this
+ * request decided to retry (another attempt stored an answer, or a newer message was sent).
+ */
+export function claimRefusalCode(refusal: ClaimRefusal, now: TurnView): Extract<SendDecision, { kind: 'conflict' }>['code'] {
+  if (refusal === 'busy' || now.status === 'pending') return 'TURN_IN_PROGRESS';
+  if (now.status === 'complete') return 'TURN_EXISTS';
+  if (refusal === 'not_latest' || !now.latest) return 'TURN_NOT_LATEST';
+  return 'TURN_CHANGED';
 }

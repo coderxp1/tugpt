@@ -35,3 +35,13 @@ export function isMissingFunction(error: { code?: string } | null | undefined): 
 export function isMissingColumn(error: { code?: string } | null | undefined): boolean {
   return error?.code === '42703' || error?.code === 'PGRST204';
 }
+
+/**
+ * Expand/contract window for 20261122100001 (Q-13 turn runs): on a database
+ * without public.chat_turn_runs PostgREST reports the table as unknown
+ * (PGRST205; 42P01 from older versions). The turn status then falls back to
+ * the Q-12 rule (no run information). Every other error still fails closed.
+ */
+export function isMissingTable(error: { code?: string } | null | undefined): boolean {
+  return error?.code === 'PGRST205' || error?.code === '42P01';
+}
