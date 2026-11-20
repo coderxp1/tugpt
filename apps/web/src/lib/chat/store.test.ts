@@ -185,3 +185,55 @@ describe('chat store: citations (Q-9)', () => {
     expect(u.calls[0].cols?.split(',')).not.toContain('citations');
   });
 });
+
+describe('chat store: pre-Q-9c schema compatibility (expand/contract, Q-10)', () => {
+  const MISSING = { message: 'Could not find the function', code: 'PGRST202' };
+  const USER = id(7);
+  const docs = [{ id: DOC1, collection_id: COL, file_id: FILE1 }];
+
+  it('reads citations from the column only when the RPC does not exist, still authorizing each document', async () => {
+    const stored = [cite(1, DOC1, FILE1), cite(2, DOC2, FILE2)];
+    const { db, calls } = fakeDb({ chat_messages: [row({ id: id(52), citations: stored })], knowledge_documents: docs }, new Set(),
+      { chat_message_citations: () => ({ data: null, error: MISSING }) });
+    const [m] = await listMessages(db, ORG, THREAD);
+    expect(m.citations).toEqual([stored[0]]); // DOC2 is not readable: still dropped
+    expect(calls.map((c) => c.table)).toEqual(['chat_messages', 'rpc:chat_message_citations', 'chat_messages', 'knowledge_documents']);
+    expect(calls[2]).toMatchObject({ cols: 'id,citations', eq: { thread_id: THREAD, organization_id: ORG }, in: { id: [id(52)] } });
+  });
+
+  it('never falls back on permission denied or any other error (fail closed)', async () => {
+    for (const [error, code] of [[{ message: 'x', code: '42501' }, 'FORBIDDEN'], [{ message: 'x', code: 'PGRST301' }, 'STORE_UNAVAILABLE'], [{ message: 'x' }, 'STORE_UNAVAILABLE']] as const) {
+      const { db, calls } = fakeDb({ chat_messages: [row({ id: id(52), citations: [cite(1, DOC1, FILE1)] })], knowledge_documents: docs }, new Set(),
+        { chat_message_citations: () => ({ data: null, error }) });
+      await expect(listMessages(db, ORG, THREAD)).rejects.toEqual(new ChatStoreError(code));
+      expect(calls.filter((c) => c.cols === 'id,citations')).toHaveLength(0);
+    }
+  });
+
+  it('server messages use the legacy writer only when the RPC does not exist', async () => {
+    const control = fakeDb({}, new Set(), { append_chat_message_server: () => ({ data: null, error: MISSING }) });
+    const legacy = fakeDb({});
+    const saved = await appendServerMessage(control.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'assistant', content: 'A', modelKey: 'm',
+      citations: [{ ...cite(1, DOC1, FILE1), extra: 'drop me' } as MessageCitation], knowledgeUnavailable: true }, legacy.db);
+    expect(legacy.calls).toHaveLength(1);
+    expect(legacy.calls[0]).toMatchObject({ table: 'chat_messages', op: 'insert' });
+    expect(legacy.calls[0].values).toMatchObject({ organization_id: ORG, thread_id: THREAD, role: 'assistant', content: 'A', model_key: 'm', status: 'complete',
+      capability_key: null, citations: [cite(1, DOC1, FILE1)], knowledge_unavailable: true });
+    expect(legacy.calls[0].cols?.split(',')).toContain('citations');
+    expect(saved.citations).toEqual([cite(1, DOC1, FILE1)]);
+
+    const tool = fakeDb({});
+    await appendServerMessage(control.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'tool', content: 'T', capabilityKey: 'cal', citations: [cite(1, DOC1, FILE1)] }, tool.db);
+    expect(tool.calls[0].values).toMatchObject({ role: 'tool', capability_key: 'cal', citations: [], knowledge_unavailable: false });
+
+    // No legacy writer: fail closed.
+    await expect(appendServerMessage(control.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'assistant', content: 'A' })).rejects.toEqual(new ChatStoreError('STORE_UNAVAILABLE'));
+    // Other errors never reach the legacy writer.
+    for (const [error, code] of [[{ message: 'x', code: '42501' }, 'FORBIDDEN'], [{ message: 'x', code: 'P0002' }, 'NOT_FOUND'], [{ message: 'x' }, 'STORE_UNAVAILABLE']] as const) {
+      const c = fakeDb({}, new Set(), { append_chat_message_server: () => ({ data: null, error }) });
+      const l = fakeDb({});
+      await expect(appendServerMessage(c.db, { organizationId: ORG, userId: USER, threadId: THREAD, role: 'assistant', content: 'A' }, l.db)).rejects.toEqual(new ChatStoreError(code));
+      expect(l.calls).toHaveLength(0);
+    }
+  });
+});

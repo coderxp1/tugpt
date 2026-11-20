@@ -244,7 +244,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
               organizationId: orgId, userId: ctx.userId, threadId, role: 'tool', capabilityKey: cap?.providerKey === MCP_PROVIDER ? undefined : cap?.capabilityKey,
               content: ev.ok ? `${cap?.providerName ?? 'Integration'} responded` : `${cap?.providerName ?? 'Integration'} failed: ${ev.code ?? 'ERROR'}`,
               status: ev.ok ? 'complete' : 'error',
-            }).catch(() => undefined);
+            }, ctx.db).catch(() => undefined);
           }
           send(ev.type === 'tool_start' || ev.type === 'tool_result' ? { ...ev, provider: toolset.describe(ev.tool)?.providerName ?? null } : ev);
           if (ev.type === 'tool_result' && ev.code === 'APPROVAL_REQUIRED') {
@@ -263,7 +263,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
           content: answer || (status === 'error' ? 'The model could not be reached. Try again in a moment.' : ''),
           // Persist what was streamed, so a reloaded thread shows the same sources (re-authorised on read by chat_message_citations).
           citations, knowledgeUnavailable,
-        });
+        }, ctx.db);
         await touchThread(ctx.db, orgId, threadId, { modelKey: model.key, ...(isFirst ? { title: titleFrom(content) } : {}) });
         if (!signal.aborted) send(errorCode ? { type: 'error', code: errorCode, message: saved } : { type: 'done', message: saved });
       } catch {

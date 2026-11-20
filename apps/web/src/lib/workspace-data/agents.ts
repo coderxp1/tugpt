@@ -15,6 +15,7 @@ import type { TenantContext } from '@tugpt/auth';
 import type { Collection, FileVisibility, SearchHit } from './contracts';
 import { check, num, oneOf, optStr, rows, str, type WorkspaceDb } from './db';
 import { WorkspaceError } from './errors';
+import { isMissingFunction } from '@/lib/supabase/schema-compat';
 import { cleanName, isUuid, optionalText } from './http';
 import { configuredModels, findModel } from '@/lib/chat/models';
 import { searchLibrary, toCollection, type QueryEmbedder } from './library';
@@ -213,9 +214,19 @@ async function editorInstructions(db: WorkspaceDb, tenant: TenantContext, userId
   const ids = list.filter((r) => canEditAgent(str(r.owner_user_id), userId, tenant.role)).map((r) => str(r.id));
   const out = new Map<string, string>();
   if (ids.length === 0) return out;
-  for (const row of rows(await db.rpc('custom_agent_instructions', { p_organization_id: tenant.organizationId, p_agent_ids: ids }))) {
-    const r = row as Record<string, unknown>;
-    out.set(str(r.agent_id), str(r.instructions));
+  const r = await db.rpc('custom_agent_instructions', { p_organization_id: tenant.organizationId, p_agent_ids: ids });
+  if (isMissingFunction(r.error)) {
+    // Pre-Q-9c schema only (see schema-compat): the column is still readable there; `ids` holds only editable agents,
+    // which is exactly what the app showed before Q-9c.
+    for (const row of rows(await db.from('custom_agents').select('id,instructions').eq('organization_id', tenant.organizationId).in('id', ids))) {
+      const x = row as Record<string, unknown>;
+      out.set(str(x.id), str(x.instructions));
+    }
+    return out;
+  }
+  for (const row of rows(r)) {
+    const x = row as Record<string, unknown>;
+    out.set(str(x.agent_id), str(x.instructions));
   }
   return out;
 }
@@ -331,7 +342,14 @@ export async function loadAgentForThread(db: WorkspaceDb, organizationId: string
  */
 export async function loadAgentForRun(db: WorkspaceDb, control: WorkspaceDb, organizationId: string, userId: string, id: string): Promise<AgentForThread & { instructions: string }> {
   const agent = await loadAgentForThread(db, organizationId, id);
-  const instructions = check(await control.rpc('custom_agent_run_instructions', { p_organization_id: organizationId, p_user_id: userId, p_agent_id: id }));
+  const r = await control.rpc('custom_agent_run_instructions', { p_organization_id: organizationId, p_user_id: userId, p_agent_id: id });
+  if (isMissingFunction(r.error)) {
+    // Pre-Q-9c schema only (see schema-compat): the caller's own RLS-bound read, as before Q-9c.
+    const row = check(await db.from('custom_agents').select('instructions').eq('id', id).eq('organization_id', organizationId).maybeSingle());
+    if (!row) throw new WorkspaceError(404, 'NOT_FOUND');
+    return { ...agent, instructions: str((row as Record<string, unknown>).instructions) };
+  }
+  const instructions = check(r);
   if (typeof instructions !== 'string') throw new WorkspaceError(404, 'NOT_FOUND');
   return { ...agent, instructions };
 }
