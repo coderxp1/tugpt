@@ -5,6 +5,7 @@ import type { TypedSupabaseClient } from '@tugpt/database';
 function createMockSupabase(memberships: Array<{
   organization_id: string;
   role: 'owner' | 'admin' | 'manager' | 'agent' | 'viewer';
+  created_at?: string | null;
   // `locale` is optional here on purpose: most of these fixtures do not care
   // about it, and a row that omits it exercises the same coercion path as a row
   // holding something the CHECK constraint should have refused.
@@ -219,5 +220,59 @@ describe('AuthService locale resolution', () => {
     const service = new AuthService(supabase);
 
     expect((await service.resolveTenantContext('user-1'))?.locale).toBe('es');
+  });
+});
+
+describe('AuthService deterministic active organization', () => {
+  const org = (id: string, created_at?: string | null) => ({
+    organization_id: id,
+    role: 'agent' as const,
+    created_at,
+    organizations: { id, name: id, deleted_at: null },
+  });
+
+  it('asks the database for membership created_at', async () => {
+    const supabase = createMockSupabase([]);
+    await new AuthService(supabase).getUserOrganizations('user-1');
+    const select = (supabase as unknown as { __memberSelect: { mock: { calls: string[][] } } })
+      .__memberSelect;
+    expect(select.mock.calls[0][0]).toContain('created_at');
+  });
+
+  it('defaults to the oldest membership regardless of returned row order', async () => {
+    const rows = [
+      org('org-c', '2026-03-01T00:00:00Z'),
+      org('org-a', '2026-02-01T00:00:00Z'),
+      org('org-b', '2026-01-01T00:00:00Z'),
+    ];
+    for (const order of [rows, [...rows].reverse(), [rows[1], rows[2], rows[0]]]) {
+      const service = new AuthService(createMockSupabase(order));
+      expect((await service.resolveTenantContext('user-1'))?.organizationId).toBe('org-b');
+      expect((await service.getUserOrganizations('user-1')).map((o) => o.organizationId)).toEqual([
+        'org-b',
+        'org-a',
+        'org-c',
+      ]);
+    }
+  });
+
+  it('breaks created_at ties by organization id and puts missing timestamps last', async () => {
+    const ts = '2026-01-01T00:00:00Z';
+    const service = new AuthService(
+      createMockSupabase([org('org-z', null), org('org-y', ts), org('org-x', ts), org('org-w', 'garbage')])
+    );
+    expect((await service.getUserOrganizations('user-1')).map((o) => o.organizationId)).toEqual([
+      'org-x',
+      'org-y',
+      'org-w',
+      'org-z',
+    ]);
+  });
+
+  it('an explicitly requested tenant still wins over the default', async () => {
+    const service = new AuthService(
+      createMockSupabase([org('org-old', '2025-01-01T00:00:00Z'), org('org-new', '2026-01-01T00:00:00Z')])
+    );
+    expect((await service.resolveTenantContext('user-1', 'org-new'))?.organizationId).toBe('org-new');
   });
 });

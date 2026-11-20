@@ -80,7 +80,9 @@ export async function DELETE(request: Request, { params }: Params) {
     const r = data as Result;
     const left = userId === ctx.user.id;
     defaultLogger.info(left ? 'Member left organization' : 'Member removed', { requestId, organizationId: ctx.tenant.organizationId });
-    const response = privateJson({ member: body(r), left });
+    // The RPC reports p_action ('remove'); the audit trail records self-removal
+    // as membership.leave, and the API contract reports the same.
+    const response = privateJson({ member: { ...body(r), action: left ? 'leave' : 'remove' }, left });
     // Leaving the active organization: drop the stale selection so the next
     // request falls back to another membership instead of answering 403.
     if (left) response.cookies.set('tugpt_tenant_id', '', { httpOnly: true, sameSite: 'lax', secure: true, path: '/', maxAge: 0 });

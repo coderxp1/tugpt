@@ -151,7 +151,7 @@ export class AuthService {
   async getUserOrganizations(userId: string): Promise<TenantContext[]> {
     const { data, error } = await this.supabase
       .from('organization_members')
-      .select('organization_id, role, organizations!inner(id, name, locale, deleted_at)')
+      .select('organization_id, role, created_at, organizations!inner(id, name, locale, deleted_at)')
       .eq('user_id', userId);
 
     if (error || !data) return [];
@@ -159,6 +159,7 @@ export class AuthService {
     type QueryRow = {
       organization_id: string;
       role: OrganizationRole;
+      created_at?: string | null;
       organizations: {
         id: string;
         name: string;
@@ -173,8 +174,25 @@ export class AuthService {
 
     const rows = data as unknown as QueryRow[];
 
+    // Deterministic order: the default active tenant (orgs[0]) must not depend
+    // on PostgREST/heap row order. Oldest membership first, then organization id
+    // as a stable tie-breaker. Sorted here rather than via .order() so the
+    // contract holds regardless of the query builder.
+    const joinedAt = (m: QueryRow) => {
+      const t = typeof m.created_at === 'string' ? Date.parse(m.created_at) : NaN;
+      return Number.isFinite(t) ? t : Number.POSITIVE_INFINITY;
+    };
+
     return rows
       .filter((m) => m.organizations && !m.organizations.deleted_at)
+      .sort((a, b) => {
+        const ta = joinedAt(a);
+        const tb = joinedAt(b);
+        if (ta !== tb) return ta < tb ? -1 : 1;
+        const ia = a.organizations!.id;
+        const ib = b.organizations!.id;
+        return ia < ib ? -1 : ia > ib ? 1 : 0;
+      })
       .map((m) => ({
         organizationId: m.organizations!.id,
         organizationName: m.organizations!.name,
@@ -186,7 +204,8 @@ export class AuthService {
   /**
    * Resolve and validate server-side active tenant context for user.
    * If requestedTenantId is supplied, verifies user is a valid active member of that tenant.
-   * If not supplied, defaults to user's first active organization.
+   * If not supplied, defaults to the user's oldest active membership
+   * (membership created_at ascending, organization id as tie-breaker).
    * Returns null if user has no access to requested tenant.
    */
   async resolveTenantContext(

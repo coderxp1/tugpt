@@ -132,13 +132,16 @@ describe('DELETE /members/:userId', () => {
     const r = await json(res);
     expect(r.status).toBe(200);
     expect(r.body.left).toBe(false);
+    expect(r.body.member.action).toBe('remove');
     expect(mockRpc).toHaveBeenCalledWith('manage_organization_member', { p_organization_id: ORG, p_user_id: BOB, p_action: 'remove', p_role: null });
     expect(res.headers.get('set-cookie')).toBeNull();
   });
   it('leaving clears the stale active-organization cookie', async () => {
-    mockRpc.mockResolvedValue({ data: { organization_id: ORG, user_id: ME, action: 'leave', previous_role: 'agent', role: null, changed: true }, error: null });
+    // Real RPC result for self-removal (verified over HTTP): action is p_action, i.e. 'remove'.
+    mockRpc.mockResolvedValue({ data: { organization_id: ORG, user_id: ME, action: 'remove', previous_role: 'agent', role: null, changed: true }, error: null });
     const res = await memberDELETE(req('DELETE'), userParams(ME));
     expect((await res.clone().json()).left).toBe(true);
+    expect((await res.clone().json()).member.action).toBe('leave');
     expect(res.headers.get('set-cookie')).toMatch(/tugpt_tenant_id=;.*Max-Age=0/i);
   });
 });
