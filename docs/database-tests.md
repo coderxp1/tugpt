@@ -241,6 +241,8 @@ it, so a snapshot never commits after the app (5 s) has given up, except for com
 | `slow-write` ≤ 2.5 s / 4.5 s | 201 / 503 `SNAPSHOT_DEADLINE_EXCEEDED` before 5 s, rolled back; replay → 201 |
 | `replay-under-ddl` | replay of a committed key during DDL on `external_tools` → 503 `SNAPSHOT_STORE_BUSY` (never 500) |
 | `read-timeout 9` | `GET /snapshots/{id}/tools` with `external_tool_snapshots` locked 9 s → 503 `DATABASE_TIMEOUT` at ~5 s, exactly one database attempt (postgrest-js no longer retries a timed-out GET) |
+| `endpoint-lookup-locked post\|get SECS` (M9 follow-up, F-M9-1) | `external_tool_endpoints` locked `ACCESS EXCLUSIVE` for SECS: ≥ 2 s → 503 `DATABASE_TIMEOUT` + `Retry-After: 2` at ~2 s (`get_mcp_endpoint_url` `lock_timeout=2s`), the `Idempotency-Key` echoed, nothing written — never 404 `NOT_FOUND`; a retry with the same key → 201 (POST) / `committed` (GET). 1 s → waits, then 201 / 200 |
+| `cross-tenant-in-progress` (M9 follow-up, F-M9-3) | while org A's request for key K is in flight, an owner of org B calling `create_mcp_snapshot_idempotent` / `get_mcp_snapshot_request` with A's endpoint and K gets `P0002` NOT_FOUND in < 1 s (not `PT409` IN_PROGRESS after waiting on A's advisory lock); naming org A is `42501`; A is still in flight after the probes and then 201, exactly one snapshot; nothing written for B. Uses a persistent harness fixture (org `a3100000-…0b`, owner `…b1`) that the case upserts and never deletes (organizations are soft-deleted and the last owner cannot be removed) |
 
 Every case also asserts: no 500, no idle-in-transaction sessions, no ungranted locks, contiguous versions, no
 partial snapshots, one idempotency record per snapshot, no `40001` in the Postgres log.

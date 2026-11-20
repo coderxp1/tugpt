@@ -23,6 +23,16 @@ Usage: snapshot-idempotency.py CASE [ARGS...]      (prints one JSON line; exit 1
                         (never 500); after the lock, 200 with the original
   read-timeout SECS     GET /snapshots/{id}/tools while external_tool_snapshots is ACCESS EXCLUSIVE locked SECS:
                         expected 503 DATABASE_TIMEOUT within ~5 s and exactly ONE database attempt (no client retries)
+  endpoint-lookup-locked post|get SECS
+                        (F-M9-1) external_tool_endpoints ACCESS EXCLUSIVE locked SECS after the request is sent:
+                        >= 2 s -> 503 DATABASE_TIMEOUT within 3 s (get_mcp_endpoint_url lock_timeout 2 s), never 404,
+                        nothing written, key echoed; afterwards the SAME key gives the real outcome (POST: 201 then a
+                        200 replay of it; GET: the committed snapshot). < 2 s -> the request simply succeeds
+  cross-tenant-in-progress
+                        (F-M9-3) while org A's request (2.5 s write) holds its per-key lock, the owner of another org B
+                        calls create_mcp_snapshot_idempotent / get_mcp_snapshot_request with A's endpoint and key
+                        (psql as authenticated with B's JWT claims): immediate P0002 NOT_FOUND, never PT409 and never
+                        a wait on A's lock; A's own status meanwhile is in_progress (control); A -> 201, one snapshot
 After every case: no idle-in-transaction sessions, no ungranted locks, no running snapshot call, contiguous versions,
 no partial snapshots, one idempotency record per snapshot, no 500, no 40001 in the Postgres log since the case started.
 
@@ -30,7 +40,7 @@ Environment (all required; nothing secret is printed):
   SNAP_BASE_URL, SNAP_ORIGIN, SNAP_ORG_ID, SNAP_ENDPOINT_ID, SNAP_ENDPOINT_URL,
   SNAP_COOKIE_FILE (holds the __Host-tugpt_session value), SNAP_PG_CONTAINER, SNAP_PG_PW_FILE
 """
-import datetime, json, os, socket, subprocess, sys, threading, time, urllib.error, urllib.request, uuid
+import datetime, json, os, re, socket, subprocess, sys, threading, time, urllib.error, urllib.request, uuid
 
 def env(k):
     v = os.environ.get(k)
@@ -65,11 +75,12 @@ def call(method, path, key=None, timeout=60):
         with urllib.request.urlopen(rq, timeout=timeout) as x:
             b = json.loads(x.read().decode())
             r = {'status': x.status, 'code': '', 'snapshot_id': b.get('snapshotId'), 'version': b.get('version'),
-                 'replayed': b.get('replayed'), 'state': b.get('state'), 'replayed_header': x.headers.get('idempotent-replayed')}
+                 'replayed': b.get('replayed'), 'state': b.get('state'), 'replayed_header': x.headers.get('idempotent-replayed'),
+                 'key_header': x.headers.get('idempotency-key')}
     except urllib.error.HTTPError as e:
         try: c = json.loads(e.read().decode()).get('error', {}).get('code')
         except Exception: c = '?'
-        r = {'status': e.code, 'code': c, 'retry_after': e.headers.get('retry-after')}
+        r = {'status': e.code, 'code': c, 'retry_after': e.headers.get('retry-after'), 'key_header': e.headers.get('idempotency-key')}
     except (socket.timeout, TimeoutError, urllib.error.URLError) as e:
         if isinstance(e, urllib.error.URLError) and not isinstance(getattr(e, 'reason', None), (socket.timeout, TimeoutError)): raise
         r = {'status': 'client-timeout', 'code': ''}
@@ -120,12 +131,23 @@ class Holder:
     def kill(self):
         if self.p.poll() is None: self.p.kill()
 
+def as_user(sub_id, q):
+    """Run q as the authenticated role with sub_id's JWT claims (one rolled-back transaction); SQLSTATE + latency."""
+    script = ("\\set VERBOSITY verbose\nBEGIN;\nSET LOCAL ROLE authenticated;\n"
+              f"SELECT set_config('request.jwt.claims', '{{\"sub\":\"{sub_id}\",\"role\":\"authenticated\"}}', true);\n{q}\nROLLBACK;\n")
+    t = time.monotonic(); r = subprocess.run(PSQL + ['-f', '-'], input=script, capture_output=True, text=True, env=ENV)
+    m = re.search(r'ERROR:\s+([0-9A-Z]{5}):\s*([^\n]*)', r.stderr)
+    return {'sqlstate': m.group(1) if m else ('' if r.returncode == 0 else '?'), 'message': m.group(2)[:80] if m else '',
+            'ok': r.returncode == 0, 'latency_s': round(time.monotonic() - t, 2)}
+
 def bg(fn, *a):
     out = {}; th = threading.Thread(target=lambda: out.update(fn(*a))); th.start(); return th, out
 
 LOCKS = {'row': f"SELECT 1 FROM public.external_tool_endpoints WHERE id='{EP}' FOR UPDATE;",
          'tools-ddl': "LOCK TABLE public.external_tools IN ACCESS EXCLUSIVE MODE;",
-         'snap-read': "LOCK TABLE public.external_tool_snapshots IN ACCESS EXCLUSIVE MODE;"}
+         'snap-read': "LOCK TABLE public.external_tool_snapshots IN ACCESS EXCLUSIVE MODE;",
+         'endpoints': "LOCK TABLE public.external_tool_endpoints IN ACCESS EXCLUSIVE MODE;"}
+ORG_B = 'a3100000-0000-4000-8000-00000000000b'; OWNER_B = 'a3100000-0000-4000-8000-0000000000b1'  # cross-tenant case only (persistent harness fixture, upserted by it)
 
 # ---- setup: fresh endpoint + one seed snapshot through the route ----
 drop_trigger()
@@ -259,6 +281,75 @@ try:
         checks = {'is_503_database_timeout': (res.get('status'), res.get('code')) == (503, 'DATABASE_TIMEOUT'),
                   'answered_within_app_timeout': (res.get('latency_s') or 99) < 6.0,
                   'exactly_one_database_attempt': len(attempts) == 1}
+    elif CASE == 'endpoint-lookup-locked':
+        method, secs = ARGS[0], float(ARGS[1]); k = new_key()
+        base = f'/api/v1/connect/mcp/endpoints/{EP}/snapshot'
+        pre = post(k) if method == 'get' else None          # GET: a committed key whose status must not become 404
+        n_before = len(versions())
+        holder = Holder(LOCKS['endpoints'])
+        req = (lambda: post(k)) if method == 'post' else (lambda: call('GET', f'{base}?idempotencyKey={k}'))
+        th, res = bg(req)
+        time.sleep(secs); holder.release(); th.join(timeout=60)
+        written_during = len(versions()) - n_before
+        after = req(); again = post(k) if method == 'post' else None
+        detail = {'method': method, 'seconds_locked_at_least': secs, 'committed_before': pre, 'response': res,
+                  'written_while_locked': written_during, 'after': after, 'replay_after': again}
+        if secs >= 2.0 and method == 'post':
+            checks = {'is_503_database_timeout_not_404': (res.get('status'), res.get('code')) == (503, 'DATABASE_TIMEOUT'),
+                      'retry_after_and_key_echoed': res.get('retry_after') == '2' and res.get('key_header') == k,
+                      'answered_within_3s': (res.get('latency_s') or 99) < 3.0,
+                      'nothing_written_while_locked': written_during == 0,
+                      'same_key_then_creates_201': after['status'] == 201,
+                      'replay_returns_it': again['status'] == 200 and again.get('snapshot_id') == after.get('snapshot_id'),
+                      'exactly_one_for_key': key_snapshots(k) == 1 and len(versions()) == N0 + 1}
+        elif secs >= 2.0:
+            checks = {'is_503_database_timeout_not_404': (res.get('status'), res.get('code')) == (503, 'DATABASE_TIMEOUT'),
+                      'retry_after_and_key_echoed': res.get('retry_after') == '2' and res.get('key_header') == k,
+                      'answered_within_3s': (res.get('latency_s') or 99) < 3.0,
+                      'then_committed_original': after['status'] == 200 and after.get('state') == 'committed'
+                                                 and pre['status'] == 201 and key_snapshot_id(k) == (pre.get('snapshot_id') or '-'),
+                      'exactly_one_for_key': key_snapshots(k) == 1 and len(versions()) == N0 + 1}
+        elif method == 'post':
+            checks = {'short_lock_201': res.get('status') == 201, 'replay_200_same': after['status'] == 200 and after.get('snapshot_id') == res.get('snapshot_id'),
+                      'exactly_one_for_key': key_snapshots(k) == 1 and len(versions()) == N0 + 1}
+        else:
+            checks = {'short_lock_committed': res.get('status') == 200 and res.get('state') == 'committed',
+                      'exactly_one_for_key': key_snapshots(k) == 1 and len(versions()) == N0 + 1}
+    elif CASE == 'cross-tenant-in-progress':
+        sql(f"INSERT INTO auth.users (id, email) VALUES ('{OWNER_B}', 'regression-owner-b@example.test') ON CONFLICT (id) DO NOTHING; "
+            f"INSERT INTO public.profiles (id, email) VALUES ('{OWNER_B}', 'regression-owner-b@example.test') ON CONFLICT (id) DO NOTHING; "
+            f"INSERT INTO public.organizations (id, name, slug) VALUES ('{ORG_B}', 'Regression Org B', 'regression-org-b') ON CONFLICT (id) DO UPDATE SET deleted_at = NULL; "
+            f"INSERT INTO public.organization_members (organization_id, user_id, role) VALUES ('{ORG_B}', '{OWNER_B}', 'owner') ON CONFLICT DO NOTHING;")
+        try:
+            k = new_key(); slow_trigger(2.5)
+            th, first = bg(post, k)
+            t = time.monotonic()
+            while not running() and time.monotonic() - t < 10: time.sleep(0.05)
+            in_flight = running()
+            control = call('GET', f'/api/v1/connect/mcp/endpoints/{EP}/snapshot?idempotencyKey={k}')
+            b_create = as_user(OWNER_B, f"SELECT public.create_mcp_snapshot_idempotent('{ORG_B}', '{EP}', '{k}', repeat('b', 64), '[]'::jsonb, clock_timestamp() + interval '3 seconds');")
+            b_status = as_user(OWNER_B, f"SELECT public.get_mcp_snapshot_request('{ORG_B}', '{EP}', '{k}');")
+            b_org_a = as_user(OWNER_B, f"SELECT public.create_mcp_snapshot_idempotent('{ORG}', '{EP}', '{k}', repeat('b', 64), '[]'::jsonb, clock_timestamp() + interval '3 seconds');")
+            still_running = running()
+            th.join(timeout=60)
+            b_rows = int(sql(f"SELECT count(*) FROM public.external_tool_snapshot_requests WHERE organization_id = '{ORG_B}'"))
+            detail = {'a_in_flight_when_probed': in_flight, 'a_status_control': control, 'b_create_with_a_endpoint_and_key': b_create,
+                      'b_status_with_a_endpoint_and_key': b_status, 'b_naming_org_a': b_org_a, 'a_still_running_after_probes': still_running,
+                      'a_first': first, 'org_b_request_rows': b_rows}
+            checks = {'a_was_in_flight': in_flight > 0 and control.get('state') == 'in_progress',
+                      'b_create_is_p0002_not_pt409': b_create['sqlstate'] == 'P0002',
+                      'b_create_did_not_wait_on_a': b_create['latency_s'] < 1.0,
+                      'b_status_is_p0002': b_status['sqlstate'] == 'P0002' and b_status['latency_s'] < 1.0,
+                      'b_naming_org_a_is_42501': b_org_a['sqlstate'] == '42501',
+                      'a_still_in_flight_after_b_probes': still_running > 0,
+                      'a_201_exactly_one': first.get('status') == 201 and key_snapshots(k) == 1 and len(versions()) == N0 + 1,
+                      'nothing_written_for_org_b': b_rows == 0}
+        finally:
+            drop_trigger()
+            # ORG_B / OWNER_B are a persistent harness fixture and are deliberately NOT removed:
+            # organizations has a soft-delete trigger (DELETE only sets deleted_at, so nothing cascades)
+            # and the last-owner trigger forbids removing the only owner. Hard-deleting would need
+            # trigger bypass, which also skips FK cascades. Setup above is idempotent and un-deletes it.
     else:
         sys.exit(f'unknown case {CASE}')
 finally:
