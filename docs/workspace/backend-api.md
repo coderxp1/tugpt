@@ -86,8 +86,8 @@ optional: a client that sends no `turnId` behaves exactly as before.
 | `complete` | answered | show `assistantMessage` |
 | `error` | the model call failed; the error answer is stored | offer **Retry** |
 | `stopped` | the stream ended early (client disconnected or pressed stop); the partial answer is stored | offer **Retry** / **Continue** |
-| `pending` | stored user message, no answer yet, younger than 150 s (`maxDuration` is 120 s) | poll the GET (e.g. every 1–2 s) |
-| `interrupted` | no answer and older than 150 s (the server died mid-turn) | offer **Retry** |
+| `pending` | a run holds the turn's lease (Q-13; this includes a **retry** of an `error`/`stopped` turn that is running now), or, without a lease, a stored user message with no answer that is younger than 150 s (`maxDuration` is 120 s) | poll the GET (e.g. every 1–2 s) |
+| `interrupted` | no answer, no live lease, and older than 150 s (the server died mid-turn) | offer **Retry** |
 
 **Stream changes (additive):** the `user` event gains `turnId` and `retried`; `done` and `error` gain `turnId`;
 every message carries `turnId` (`null` when sent without one). `GET /chat/threads/{id}` returns `turnId` on
@@ -104,7 +104,9 @@ each message too.
 | `retry: true`, not the thread's latest user turn | `409 TURN_NOT_LATEST` |
 | different `content` for the same `turnId` | `409 TURN_CONFLICT` |
 | `retry: true` for a turn the server never stored | treated as a fresh send |
-| two identical sends at the same moment | one stream; the other gets `409 TURN_EXISTS` or `TURN_IN_PROGRESS` (unique index) |
+| two identical sends at the same moment | one stream; the other gets `409 TURN_IN_PROGRESS` (unique index + run lease) |
+| two `retry: true` at the same moment | **one** model call; the other gets `409 TURN_IN_PROGRESS` (run lease, Q-13) |
+| `retry: true` that lost a race with an attempt that has **finished** | `409` with the turn as it is now: `TURN_EXISTS` (now `complete`), `TURN_NOT_LATEST` (a newer message was sent) or `TURN_CHANGED` (another attempt stored a new non-complete answer; re-read and offer Retry again) |
 
 `400 "Invalid request"`: a malformed `turnId` (not a UUID), a non-boolean `retry`, or `retry` without a `turnId`.
 
@@ -128,6 +130,22 @@ each message too.
 - Assistant and tool rows get it only through the server-only `append_chat_turn_message_server`, which
   also requires the turn to have been opened in that very thread.
 - Other users and tenants get `404`.
+
+### Turn runs: one model call per turn (Q-13, migration `20261122100001`)
+
+- Before calling the model, the server claims a **lease** on the turn (`chat_turn_runs`, one row per turn,
+  server-only `claim_chat_turn_run_server` / `release_chat_turn_run_server`; TTL 150 s). A claim fails if
+  another run holds a live lease, if the turn changed since the request read it, or if it is no longer the
+  thread's latest user turn. A refused claim never calls the model.
+- The lease is released when the answer is stored. If the process dies, it expires after 150 s and the
+  turn reads `interrupted`, so Retry works again. (Lease expiry is covered by pgTAP and unit tests; the
+  HTTP runner does not kill a server mid-turn.)
+- `GET .../turns/{id}` and the retry decision read the lease, so a running retry reads `pending`
+  instead of the old `error`.
+- **Long threads:** `GET /chat/threads/{id}` returns the **latest** 400 messages, oldest first. (Before
+  Q-13 it returned the oldest 400, so the newest turns of a long thread were missing.) Turn status and
+  `latest` are computed with indexed per-turn queries, independent of thread length.
+- On a database without `20261122100001` the app behaves as in Q-12 (no lease; see operations §1c).
 
 ## 3. Approvals (persistent)
 
@@ -186,16 +204,30 @@ are extracted into searchable text when a file is added to a knowledge collectio
 | docx | yes | visible text of `word/document.xml`; field codes and tracked deletions dropped |
 | xlsx | yes | every sheet, one paragraph per non-empty row; ≤100 sheets, ≤500 000 cells (`DOCUMENT_TOO_LARGE`) |
 | pdf | yes, if it has a text layer | worker-side extractor; `PDF_ENCRYPTED`, `PDF_NO_TEXT_LAYER` (scans; no OCR yet), `PDF_EXTRACTION_UNAVAILABLE` |
-| pptx, png, jpg/jpeg, gif, webp | **no** | stored and attachable, but not searchable: `UNSUPPORTED_FOR_INDEXING` |
+| pptx | yes (Q-13) | slide text in presentation order, then speaker notes: `Slide N: …` / `Slide N notes: …`; text boxes and tables included; ≤1 000 slides (`DOCUMENT_TOO_LARGE`) |
+| png, jpg/jpeg, gif, webp | **no** | stored and attachable, but not searchable: `UNSUPPORTED_FOR_INDEXING` (no OCR yet) |
 
 Text is capped at 2 000 000 characters and 2 000 chunks. Other outcomes: `EMPTY_DOCUMENT` and `EXTRACTION_FAILED`.
 
-**Upload retries:** `POST /api/v1/files` is **not** idempotent; every successful call creates a new file.
+**Upload retries (Q-13, migration `20261122100002`):** send an `Idempotency-Key: <uuid>` header and reuse it
+when retrying the same upload. Keys are scoped per tenant and user.
+
+| situation | response |
+|---|---|
+| first request with a key | `201 {file}` as usual |
+| same key, same bytes (SHA-256 and size), first upload `ready` | **`200 {file, replayed: true}`**: the original file; nothing is stored again; `filename`/`visibility` of the retry are ignored |
+| same key, different bytes | `409 IDEMPOTENCY_KEY_REUSED` |
+| same key while the first request is still storing | `409 UPLOAD_IN_PROGRESS` with `Retry-After: 2`; retry with the same key |
+| same key, earlier attempt `failed` | treated as fresh (`failed` rows don't hold the key): `201` |
+| same key, earlier attempt abandoned (`uploading` for more than 120 s, e.g. a crash) | its row and blob are removed, then `201` |
+| malformed key (not a UUID) | `400 INVALID_IDEMPOTENCY_KEY` |
+| no header | not idempotent (pre-Q-13 behaviour): every successful call creates a new file |
+
 - Failures roll back: if storage or the database fails, the row and blob are removed, and you get
   `503 STORAGE_UNAVAILABLE` / `STORE_UNAVAILABLE`. Nothing is left visible as `ready`.
-- After an **ambiguous** failure (network error, timeout), do not blindly re-upload. Call
-  `GET /api/v1/files?scope=mine` and look for a `ready` file with the same `filename`, `sizeBytes` and
-  `sha256`. The client can compute SHA-256 with `crypto.subtle.digest`. Re-upload only if none matches.
+- Without a key, after an **ambiguous** failure, look in `GET /api/v1/files?scope=mine` for a `ready` file
+  with the same `filename`, `sizeBytes` and `sha256` before re-uploading.
+- On a database without `20261122100002` the header is accepted but ignored (no de-duplication).
 - Adding the same content to the same collection twice is de-duplicated by the database (one document
   per content per collection).
 - There are no file folders in the API yet; files are listed per owner (`scope=mine`) or per organization.
@@ -241,7 +273,8 @@ or log. The blob key is derived on the server as `org/<orgId>/files/<fileId>`, a
   An expired lease is reclaimed; an exhausted one ends as `PROCESSING_ABANDONED`.
 - **Formats:** txt, md, csv, json, log; **DOCX** and **XLSX** (bounded ZIP reader, 20 MB XML cap against zip
   bombs; tracked deletions and field codes dropped; shared strings and inline strings for XLSX); **PDF** via
-  pdfjs in the worker (page/char/time limits; image-only or corrupt PDFs end as `EXTRACTION_FAILED`). Chunks
+  pdfjs in the worker (page/char/time limits; image-only scans end as `failed` with `PDF_NO_TEXT_LAYER`, corrupt
+  PDFs as `EXTRACTION_FAILED`; **no OCR yet**); **PPTX** (slides in order plus speaker notes, Q-13). Chunks
   of about 1,500 characters with 150 overlap, at most 2,000 per document.
 - **Search (hybrid):** `search_knowledge_hybrid` is `SECURITY INVOKER`, so chunk and embedding RLS decide per
   row at query time. Full-text uses the `simple` config (language-neutral) with `ts_rank`. When a query
@@ -380,11 +413,11 @@ Details hold IDs, hashes and classes only: no arguments, file content, filenames
 
 | Status | Codes |
 |---|---|
-| 400 | `INVALID_REQUEST`, `INVALID_FILENAME`, `INVALID_SCOPE`, `INVALID_STATUS`, `INVALID_THREAD`, `INVALID_ENDPOINT`, `INVALID_CAPABILITY`, `INVALID_ARGUMENTS_HASH`, `INVALID_PREVIEW`, `INVALID_REASON`, `INVALID_DECISION`, `INVALID_NOTE`, `INVALID_TTL`, `QUERY_REQUIRED`, `QUERY_TOO_LONG`, `TOO_MANY_COLLECTIONS`, `INVALID_REQUESTER`, `INVALID_EMBEDDING`, `INVALID_ACTION`, `MESSAGE_INVALID`, `UNKNOWN_MODEL` |
+| 400 | `INVALID_REQUEST`, `INVALID_FILENAME`, `INVALID_SCOPE`, `INVALID_STATUS`, `INVALID_THREAD`, `INVALID_ENDPOINT`, `INVALID_CAPABILITY`, `INVALID_ARGUMENTS_HASH`, `INVALID_PREVIEW`, `INVALID_REASON`, `INVALID_DECISION`, `INVALID_NOTE`, `INVALID_TTL`, `QUERY_REQUIRED`, `QUERY_TOO_LONG`, `TOO_MANY_COLLECTIONS`, `INVALID_REQUESTER`, `INVALID_EMBEDDING`, `INVALID_ACTION`, `MESSAGE_INVALID`, `UNKNOWN_MODEL`, `INVALID_IDEMPOTENCY_KEY` |
 | 401 | `UNAUTHENTICATED` |
 | 403 | `FORBIDDEN`, `INVALID_ORIGIN` |
 | 404 | `NOT_FOUND` |
-| 409 | `ALREADY_EXISTS`, `CONFLICT`, `ALREADY_DECIDED`, `REQUEST_EXPIRED`, `INVALID_STATUS_TRANSITION`, `FILE_CONTENT_IMMUTABLE`, `AGENT_MODEL_UNAVAILABLE`, `AGENT_TOOL_CONFLICT`, `THREAD_AGENT_MISMATCH` |
+| 409 | `ALREADY_EXISTS`, `CONFLICT`, `ALREADY_DECIDED`, `REQUEST_EXPIRED`, `INVALID_STATUS_TRANSITION`, `FILE_CONTENT_IMMUTABLE`, `AGENT_MODEL_UNAVAILABLE`, `AGENT_TOOL_CONFLICT`, `THREAD_AGENT_MISMATCH`, `TURN_EXISTS`, `TURN_IN_PROGRESS`, `TURN_NOT_LATEST`, `TURN_CONFLICT`, `TURN_CHANGED` (chat turns, body has `turn`), `IDEMPOTENCY_KEY_REUSED`, `UPLOAD_IN_PROGRESS` (with `Retry-After`) |
 | 413 | `PAYLOAD_TOO_LARGE`, `ARGUMENTS_TOO_LARGE` |
 | 415 | `UNSUPPORTED_MEDIA_TYPE`, `MEDIA_TYPE_MISMATCH` |
 | 429 | `RATE_LIMITED` (with `Retry-After`), `LIMIT_EXCEEDED`, `TOO_MANY_PENDING`, `TOO_MANY_CHUNKS` |
@@ -408,7 +441,7 @@ Details hold IDs, hashes and classes only: no arguments, file content, filenames
 `…100004_workspace_library` (frozen), then `20261120100001_workspace_knowledge_vectors` ·
 `…100002_workspace_document_jobs` · `…100003_workspace_rate_limits` · `…100004_workspace_custom_agents` ·
 `…100005_workspace_storage_maintenance` · `…100006_workspace_document_dedupe` (one document per content per collection) ·
-`…100007_workspace_conversation_cursor` (composite thread cursor) · `…100008_workspace_agent_save` (atomic agent save) · `…100009_workspace_agent_owner_edit` (owner-only editing in the database, atomic single link) · `…100010_workspace_message_citations` (persisted citations and `knowledge_unavailable` on assistant messages, Q-9) · `…100011_workspace_message_citations_strict` (validator fix: `[{}]` and every other NULL-producing input were accepted by 100010; the function now never returns NULL, existing rows are re-validated, Q-9b), then the Q-9c security fixes `20261120200001_workspace_agent_instructions_confidential` (no column read of `custom_agents.instructions`; editors read it via `custom_agent_instructions`, runs via the server-only `custom_agent_run_instructions`, F-1) · `…200002_workspace_message_citations_confidential` (no column read of `chat_messages.citations`; `chat_message_citations` returns each entry only while the reader can still read that document in the same collection and file, F-2) · `…200003_workspace_server_authored_messages` (clients insert `role = 'user'` rows with seven columns only; assistant/tool rows only via the server-only `append_chat_message_server`, which re-checks thread owner, tenant, membership and that the thread is not archived, F-3), then `20261121100001_workspace_chat_turns` (Q-12: nullable `chat_messages.turn_id`, one user message per thread and turn, owner-writable on user messages only, assistant/tool rows stamped via the server-only `append_chat_turn_message_server`; additive). All are registered in `supabase/migrations/checksums.json`. Any
+`…100007_workspace_conversation_cursor` (composite thread cursor) · `…100008_workspace_agent_save` (atomic agent save) · `…100009_workspace_agent_owner_edit` (owner-only editing in the database, atomic single link) · `…100010_workspace_message_citations` (persisted citations and `knowledge_unavailable` on assistant messages, Q-9) · `…100011_workspace_message_citations_strict` (validator fix: `[{}]` and every other NULL-producing input were accepted by 100010; the function now never returns NULL, existing rows are re-validated, Q-9b), then the Q-9c security fixes `20261120200001_workspace_agent_instructions_confidential` (no column read of `custom_agents.instructions`; editors read it via `custom_agent_instructions`, runs via the server-only `custom_agent_run_instructions`, F-1) · `…200002_workspace_message_citations_confidential` (no column read of `chat_messages.citations`; `chat_message_citations` returns each entry only while the reader can still read that document in the same collection and file, F-2) · `…200003_workspace_server_authored_messages` (clients insert `role = 'user'` rows with seven columns only; assistant/tool rows only via the server-only `append_chat_message_server`, which re-checks thread owner, tenant, membership and that the thread is not archived, F-3), then `20261121100001_workspace_chat_turns` (Q-12: nullable `chat_messages.turn_id`, one user message per thread and turn, owner-writable on user messages only, assistant/tool rows stamped via the server-only `append_chat_turn_message_server`; additive), then Q-13 `20261122100001_workspace_chat_turn_runs` (`chat_turn_runs` lease table, server-only claim/release functions; additive) · `20261122100002_workspace_file_upload_request_ids` (nullable `workspace_files.upload_request_id`, partial unique index per tenant, owner and key, excluding `failed`; additive). All are registered in `supabase/migrations/checksums.json`. Any
 further change needs a **new** migration ID.
 
 ## 10. Tests
