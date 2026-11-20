@@ -41,6 +41,8 @@ export interface ChatToolContext {
   readonly organizationId: string;
   readonly userId: string;
   readonly threadId: string;
+  /** Which path claims approvals; the database classifies refusals by it. Default: a chat turn. */
+  readonly approvalSource?: 'chat_turn' | 'approved_call';
 }
 
 /**
@@ -84,18 +86,26 @@ export function conflictingAttachments(attached: readonly CapabilityRow[], regis
   return null;
 }
 
-/** Per-call approval port. Only owners/admins can record approvals (record_tool_approval); claiming consumes one atomically. */
-export function dbApprovals(db: ChatDb, ctx: Pick<ChatToolContext, 'organizationId' | 'userId' | 'threadId'>): ApprovalChecker {
+/**
+ * Per-call approval port. Only owners/admins can record approvals (record_tool_approval).
+ * Claiming goes through claim_tool_approval_audited() (20261120000010): it consumes one
+ * approval atomically and writes one classified audit event in the same transaction.
+ * Anything but exactly one row with claimed === true is a refusal (fail closed).
+ */
+export function dbApprovals(db: ChatDb, ctx: Pick<ChatToolContext, 'organizationId' | 'userId' | 'threadId' | 'approvalSource'>): ApprovalChecker {
   return {
     async claimApproval(input) {
       if (input.organizationId !== ctx.organizationId || input.actorUserId !== ctx.userId || !UUID.test(input.connectionId)) return false;
       try {
-        const r = await db.rpc('claim_tool_approval', {
+        const r = await db.rpc('claim_tool_approval_audited', {
           p_organization_id: input.organizationId, p_connection_id: input.connectionId,
           p_capability: input.capability, p_arguments_sha256: input.argumentsSha256,
-          p_thread_id: ctx.threadId,
+          p_thread_id: ctx.threadId, p_source: ctx.approvalSource ?? 'chat_turn',
         });
-        return !r.error && r.data === true;
+        if (r.error) return false;
+        const rows: unknown[] = Array.isArray(r.data) ? r.data : r.data == null ? [] : [r.data];
+        const row = rows.length === 1 ? rows[0] : null;
+        return row !== null && typeof row === 'object' && (row as { claimed?: unknown }).claimed === true;
       } catch { return false; }
     },
   };

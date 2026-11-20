@@ -378,14 +378,15 @@ export function fakeDb(state: FakeState, userId: string, identity: FakeIdentity 
         const claimable = exact.find((x) => x.requested_by === userId && x.expires_at > now && x.used_at === null && x.revoked_at === null);
         if (claimable) { claimable.used_at = now; log('claimed', null, claimable.id); return { data: [{ claimed: true, reason: 'OK' }], error: null }; }
         const mine = exact.filter((x) => x.requested_by === userId);
-        const rejected = state.approvalEvents.some((e) => e.event === 'rejected_by_user' && e.reason === 'REJECTED_BY_USER' && e.thread_id === args.p_thread_id && e.arguments_sha256 === args.p_arguments_sha256 && e.capability === args.p_capability);
+        const rejected = source === 'approved_call' && state.approvalEvents.some((e) => e.event === 'rejected_by_user' && e.reason === 'REJECTED_BY_USER' && e.thread_id === args.p_thread_id && e.arguments_sha256 === args.p_arguments_sha256 && e.capability === args.p_capability);
+        const open = (x: Approval) => x.requested_by === userId && x.expires_at > now && x.used_at === null && x.revoked_at === null;
         const [event, reason] = rejected ? ['rejected_by_user', 'CLAIM_AFTER_REJECT']
+          : source === 'chat_turn' ? ['approval_requested', 'APPROVAL_REQUIRED']
           : mine.some((x) => x.used_at !== null) ? ['replayed', 'ALREADY_USED']
           : mine.some((x) => x.revoked_at !== null) ? ['revoked', 'CLAIM_AFTER_REVOKE']
           : mine.some((x) => x.expires_at <= now) ? ['expired', 'EXPIRED']
           : exact.length > 0 ? ['authorization_denied', 'NOT_REQUESTER']
-          : source === 'chat_turn' ? ['approval_requested', 'APPROVAL_REQUIRED']
-          : state.approvals.some((x) => same(x) && x.requested_by === userId) ? ['invalid_arguments', 'ARGUMENTS_MISMATCH']
+          : state.approvals.some((x) => same(x) && open(x)) ? ['invalid_arguments', 'ARGUMENTS_MISMATCH']
           : ['authorization_denied', 'NO_APPROVAL'];
         log(event, reason);
         return { data: [{ claimed: false, reason }], error: null };

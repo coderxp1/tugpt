@@ -83,9 +83,9 @@ SELECT throws_ok($$SELECT * FROM public.claim_tool_approval_audited('b0000000-00
   'c0000000-0000-4000-8000-000000000001','external.create_entities', repeat('a',64), 'f0000000-0000-4000-8000-000000000001','other')$$,
   '22023', NULL, 'A14: unknown source is refused');
 RESET ROLE;
-SELECT is((SELECT array_agg(event || ':' || coalesce(reason,'-') ORDER BY created_at, event) FROM public.mcp_approval_events
+SELECT is((SELECT array_agg(event || ':' || coalesce(reason,'-') ORDER BY created_at) FROM public.mcp_approval_events
            WHERE actor_user_id = 'a0000000-0000-4000-8000-000000000002'),
-  ARRAY['approval_requested:APPROVAL_REQUIRED','authorization_denied:NO_APPROVAL','claimed:-','invalid_arguments:ARGUMENTS_MISMATCH','replayed:ALREADY_USED'],
+  ARRAY['approval_requested:APPROVAL_REQUIRED','invalid_arguments:ARGUMENTS_MISMATCH','claimed:-','replayed:ALREADY_USED','authorization_denied:NO_APPROVAL'],
   'A15: one classified event per decision');
 SELECT is((SELECT count(*)::int FROM public.mcp_approval_events e JOIN public.tool_approvals a ON a.id = e.approval_id
            WHERE e.event = 'claimed' AND a.arguments_sha256 = repeat('a',64) AND a.used_at IS NOT NULL), 1,
@@ -138,9 +138,9 @@ SELECT is((SELECT row(claimed, reason)::text FROM public.claim_tool_approval_aud
   'c0000000-0000-4000-8000-000000000001','external.create_entities', repeat('d',64), 'f0000000-0000-4000-8000-000000000001','approved_call')),
   '(f,CLAIM_AFTER_REVOKE)', 'A29: revoked approval is refused');
 RESET ROLE;
-SELECT is((SELECT array_agg(event || ':' || coalesce(reason,'-') || ':' || (actor_user_id = 'a0000000-0000-4000-8000-000000000001')::text ORDER BY created_at, event)
+SELECT is((SELECT array_agg(event || ':' || coalesce(reason,'-') || ':' || (actor_user_id = 'a0000000-0000-4000-8000-000000000001')::text ORDER BY created_at)
            FROM public.mcp_approval_events WHERE arguments_sha256 = repeat('d',64)),
-  ARRAY['approved:-:true','revoked:CLAIM_AFTER_REVOKE:false','revoked:REVOKED_BY_ADMIN:true'], 'A30: revoke recorded with the revoking admin');
+  ARRAY['approved:-:true','revoked:REVOKED_BY_ADMIN:true','revoked:CLAIM_AFTER_REVOKE:false'], 'A30: revoke recorded with the revoking admin');
 
 -- Not the requester ----------------------------------------------------------
 SET LOCAL ROLE authenticated;
