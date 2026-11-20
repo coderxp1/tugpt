@@ -137,9 +137,13 @@ each message too.
   server-only `claim_chat_turn_run_server` / `release_chat_turn_run_server`; TTL 150 s). A claim fails if
   another run holds a live lease, if the turn changed since the request read it, or if it is no longer the
   thread's latest user turn. A refused claim never calls the model.
-- The lease is released when the answer is stored. If the process dies, it expires after 150 s and the
-  turn reads `interrupted`, so Retry works again. (Lease expiry is covered by pgTAP and unit tests; the
-  HTTP runner does not kill a server mid-turn.)
+- The lease is released when the answer is stored. If the server process dies mid-answer, nothing partial
+  is stored and the turn reads `pending` (retries get `409 TURN_IN_PROGRESS`) until the lease expires
+  150 s after the claim. Then a fresh turn reads `interrupted` and a retried turn reads its last stored
+  answer (e.g. `error`), and Retry runs it once. Clients should therefore keep polling a `pending` turn
+  for up to ~155 s before treating it as stuck. Measured over HTTP with a real `SIGKILL` of the server
+  (`chat-crash-recovery-http.e2e.mjs`): `pending` from 3 s to 150 s, `interrupted`/`error` at 152 s,
+  then Retry completed on the same user message with one model call.
 - `GET .../turns/{id}` and the retry decision read the lease, so a running retry reads `pending`
   instead of the old `error`.
 - **Long threads:** `GET /chat/threads/{id}` returns the **latest** 400 messages, oldest first. (Before
@@ -423,6 +427,25 @@ Details hold IDs, hashes and classes only: no arguments, file content, filenames
 | 429 | `RATE_LIMITED` (with `Retry-After`), `LIMIT_EXCEEDED`, `TOO_MANY_PENDING`, `TOO_MANY_CHUNKS` |
 | 503 | `STORE_UNAVAILABLE`, `STORAGE_NOT_CONFIGURED`, `STORAGE_UNAVAILABLE`, `INTEGRITY_CHECK_FAILED` |
 
+### 7a. Client handling (frontend quick reference)
+
+Every error body is JSON with `code`; turn conflicts also carry `turn` (the turn as it is now).
+
+| Response | Meaning | Client action |
+|---|---|---|
+| `409 TURN_EXISTS` | the turn already has a stored answer | render `turn` (`complete` → done; otherwise offer Retry) |
+| `409 TURN_IN_PROGRESS` | another request (tab, double click, crashed server's lease) is answering | no error toast; poll `GET .../turns/{turnId}` every 1–2 s (up to ~155 s) |
+| `409 TURN_CHANGED` | another attempt stored a new answer meanwhile | render `turn`; offer Retry again if it is not `complete` |
+| `409 TURN_NOT_LATEST` | a newer message was sent after this turn | render `turn`; no Retry for this turn |
+| `409 TURN_CONFLICT` | same `turnId` with different content | client bug: new message → new `turnId` |
+| `200 {file, replayed: true}` | upload retry, same file | treat like `201` |
+| `409 UPLOAD_IN_PROGRESS` + `Retry-After` | first upload with this key still storing | wait `Retry-After` seconds, retry with the same key |
+| `409 IDEMPOTENCY_KEY_REUSED` | key used for different bytes | client bug: new file → new key |
+| `400 INVALID_IDEMPOTENCY_KEY` | key is not a UUID | client bug |
+| `429 RATE_LIMITED` + `Retry-After` | rate limit | wait, then retry |
+| document `failed` + `PDF_NO_TEXT_LAYER` | scanned PDF, no OCR yet | "This PDF has no text layer (a scan). OCR is not available yet." |
+| document `unsupported` + `UNSUPPORTED_FOR_INDEXING` | images | stored and attachable, not searchable |
+
 ## 8. Configuration (server-only environment)
 
 | Variable | Meaning |
@@ -451,6 +474,9 @@ further change needs a **new** migration ID.
 | Unit | `pnpm --filter web test` (includes `workspace-data.test.ts`, `agents.test.ts`); `pnpm --filter @tugpt/workspace-core test`; `pnpm --filter worker test` | Hermetic. SigV4 AWS vectors, path traversal, validation, DOCX/XLSX/PDF extraction and zip bombs, embeddings client, worker retry/lease logic, maintenance, agent prompt fencing and retrieval query, CSRF and the client |
 | pgTAP | `supabase/tests/database/workspace_{conversations,approval_requests,files,library,document_jobs,rate_limits,custom_agents,storage_maintenance}.test.sql` | RLS, grants, RPCs, job state machine, hybrid search isolation, cross-tenant rules, audit |
 | Integration (real PostgREST and RLS) | see `apps/web/tests/workspace-it/README.md` | Skipped unless `WS_IT_POSTGREST_URL` is set. Disposable DB only. Runs the real knowledge worker as `service_role`, a loopback fake embeddings server (hashed trigrams) and a loopback fake LLM (SSE) |
+| Unit (Q-13 regressions) | `pnpm --filter web test`; `pnpm --filter @tugpt/workspace-core test` | `upload-idempotency.test.ts` (key parsing, replay / mismatch / in-progress / abandoned, `Retry-After`); `turns.test.ts` (lease claims and 409 mapping); `workspace-core.test.ts` PPTX suite (slide order, speaker notes, tables, slide cap) |
+| pgTAP (Q-13) | `workspace_chat_turn_runs.test.sql`, `workspace_file_upload_request_ids.test.sql` | lease claim/release/expiry, server-only grants, per-owner upload-id uniqueness, isolation |
+| HTTP E2E (fake model, SIMULATED; disposable DB only) | `tests/workspace-e2e/chat-turns-http.e2e.mjs`, `files-reliability-http.e2e.mjs`, `chat-crash-recovery-http.e2e.mjs` (needs a harness that SIGKILLs and restarts the server between `--phase=start` and `--phase=verify`) | retries, concurrent retries, long threads; upload idempotency, real-producer documents incl. PPTX notes and scanned PDF, isolation; server crash and 150 s lease recovery. Not real-provider validation |
 
 
 ### F-4: edit permission and resulting visibility
