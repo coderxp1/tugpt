@@ -27,7 +27,7 @@
  * translator, which is the same one this file builds.
  */
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { screen, waitFor, cleanup } from '@testing-library/react';
+import { screen, waitFor, cleanup, configure } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { DraftDetail } from './DraftDetail';
 import { DraftActions } from './DraftActions';
@@ -357,6 +357,13 @@ describe('DraftActions in isolation', () => {
 });
 
 import { render } from '../../../tests/support/render-spanish';
+
+// F-M9-4 (Agent 1: 1 failure in the full parallel web suite, 0 in isolation). The default 1 s async-util
+// timeout of findBy*/waitFor is what ran out when the machine was busy (reproduced: 1 of 10 runs failed with
+// 24 CPU burners on 12 cores). Waiting longer changes nothing about what is asserted: a query that can never
+// succeed still fails, only later. testTimeout is raised so the larger wait cannot hit vitest's 5 s per-test limit.
+configure({ asyncUtilTimeout: 10_000 });
+vi.setConfig({ testTimeout: 30_000 });
 
 // Every mutation emitted by the retained behavioral cases must satisfy the browser contract.
 afterEach(() => {
