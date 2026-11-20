@@ -24,10 +24,9 @@
  * no provider calls, no flags.
  */
 
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useState, type ReactNode } from 'react';
 import type { UsageSummary } from '@tugpt/database';
 import { useT } from '@/i18n/provider';
-import { formatDateTime } from '@/i18n';
 import { apiErrorText } from '@/lib/draft-api/error-text';
 import {
   DEFAULT_USAGE_RANGE,
@@ -35,6 +34,13 @@ import {
   type UsageRange,
 } from '@/lib/analytics/window';
 import { formatMicroCost, formatQuantity } from '@/lib/analytics/format';
+import s from '@/components/connect/connect.module.css';
+
+/** Date only: the period is whole days, so a clock time adds noise. */
+function formatDay(value: string, locale: string): string {
+  const d = new Date(value);
+  return Number.isNaN(d.getTime()) ? value : d.toLocaleDateString(locale, { day: 'numeric', month: 'short', year: 'numeric' });
+}
 
 interface UsageResponse {
   range: UsageRange;
@@ -42,7 +48,8 @@ interface UsageResponse {
   summary: UsageSummary;
 }
 
-export function UsageAnalytics() {
+/** `intro` renders directly under the page heading, e.g. what is and is not tracked yet. */
+export function UsageAnalytics({ intro }: { intro?: ReactNode } = {}) {
   const t = useT();
   const [range, setRange] = useState<UsageRange>(DEFAULT_USAGE_RANGE);
   const [data, setData] = useState<UsageResponse | null>(null);
@@ -89,10 +96,18 @@ export function UsageAnalytics() {
   const isEmpty = totals !== null && totals.events === 0;
 
   return (
-    <div>
-      <h1>{t('analytics.title')}</h1>
+    <div className={s.page}>
+      <header className={s.head}>
+        <p className={s.eyebrow}>{t('analytics.eyebrow')}</p>
+        <h1>{t('analytics.title')}</h1>
+        <p>{t('analytics.lead')}</p>
+      </header>
+      {intro}
 
-      <div role="group" aria-label={t('analytics.rangeLabel')}>
+      <section className={s.card} aria-labelledby="analytics-period">
+      <div className={s.periodHead}>
+      <h2 id="analytics-period">{t('analytics.rangeLabel')}</h2>
+      <div role="group" aria-label={t('analytics.rangeLabel')} className={s.seg}>
         {USAGE_RANGES.map((r) => (
           <button
             key={r}
@@ -104,13 +119,14 @@ export function UsageAnalytics() {
           </button>
         ))}
       </div>
+      </div>
 
-      {loading && <p>{t('analytics.loading')}</p>}
+      {loading && <p className={s.muted} role="status">{t('analytics.loading')}</p>}
 
       {error !== null && !loading && (
-        <div role="alert">
+        <div role="alert" className={s.notice}>
           <p>{error}</p>
-          <button type="button" onClick={retry}>
+          <button type="button" className={s.secondary} onClick={retry}>
             {t('analytics.retry')}
           </button>
         </div>
@@ -118,28 +134,28 @@ export function UsageAnalytics() {
 
       {summary !== null && totals !== null && !loading && error === null && (
         <>
-          <p>
+          <p className={s.muted}>
             {t('analytics.window', {
-              from: formatDateTime(summary.window.from, t.locale),
-              to: formatDateTime(summary.window.to, t.locale),
+              from: formatDay(summary.window.from, t.locale),
+              to: formatDay(summary.window.to, t.locale),
             })}
           </p>
 
           {isEmpty ? (
-            <p>{t('analytics.empty')}</p>
+            <p className={s.emptyUsage} data-testid="analytics-empty">{t('analytics.empty')}</p>
           ) : (
             <>
-              <section aria-labelledby="analytics-totals">
+              <section aria-labelledby="analytics-totals" className={s.usageBlock}>
                 <h2 id="analytics-totals">{t('analytics.totalsTitle')}</h2>
-                <dl>
-                  <dt>{t('analytics.events')}</dt>
-                  <dd>{formatQuantity(totals.events)}</dd>
+                <dl className={s.stats}>
+                  <div><dt>{t('analytics.events')}</dt>
+                  <dd>{formatQuantity(totals.events)}</dd></div>
 
-                  <dt>{t('analytics.pricedEvents')}</dt>
-                  <dd>{formatQuantity(totals.priced_events)}</dd>
+                  <div><dt>{t('analytics.pricedEvents')}</dt>
+                  <dd>{formatQuantity(totals.priced_events)}</dd></div>
 
-                  <dt>{t('analytics.unpricedEvents')}</dt>
-                  <dd>{formatQuantity(totals.unpriced_events)}</dd>
+                  <div><dt>{t('analytics.unpricedEvents')}</dt>
+                  <dd>{formatQuantity(totals.unpriced_events)}</dd></div>
 
                   {totals.costs_by_currency.map((c) => (
                     <CostRow
@@ -203,9 +219,9 @@ export function UsageAnalytics() {
                 )}
               </section>
 
-              <section aria-labelledby="analytics-by-provider">
+              <section aria-labelledby="analytics-by-provider" className={s.usageBlock}>
                 <h2 id="analytics-by-provider">{t('analytics.byProviderTitle')}</h2>
-                <table>
+                <div className={s.tableWrap}><table className={s.table}>
                   <thead>
                     <tr>
                       <th scope="col">{t('analytics.provider')}</th>
@@ -244,12 +260,13 @@ export function UsageAnalytics() {
                       </tr>
                     ))}
                   </tbody>
-                </table>
+                </table></div>
               </section>
             </>
           )}
         </>
       )}
+      </section>
     </div>
   );
 }

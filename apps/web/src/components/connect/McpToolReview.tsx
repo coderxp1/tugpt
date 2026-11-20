@@ -30,7 +30,7 @@ export function McpToolReview({ tools, approved, onApprove, lockedNote }: McpToo
   const id = useId();
   const editable = !approved && Boolean(onApprove);
 
-  if (tools.length === 0) return <p className={s.muted}>The server offered no tools in this snapshot.</p>;
+  if (tools.length === 0) return <p className={s.muted}>The server did not offer any tools when TuGPT checked it.</p>;
   const complete = tools.every((t) => levels[t.name]);
   const risky = (editable ? tools.map((t) => levels[t.name]) : tools.map((t) => t.permissionClass)).some((l) => l && l !== 'read');
 
@@ -52,7 +52,7 @@ export function McpToolReview({ tools, approved, onApprove, lockedNote }: McpToo
         <table className={s.table}>
           <thead>
             <tr>
-              <th scope="col">Tool</th><th scope="col">What it says it does</th><th scope="col">Stored level</th>
+              <th scope="col">Tool</th><th scope="col">What it says it does</th><th scope="col">Current setting</th>
               {editable && <th scope="col">Your decision</th>}
             </tr>
           </thead>
@@ -61,7 +61,7 @@ export function McpToolReview({ tools, approved, onApprove, lockedNote }: McpToo
               <tr key={t.name}>
                 <th scope="row"><code>{t.name}</code></th>
                 <td>{t.description || <em>No description provided by the server.</em>}</td>
-                <td>{PERMISSION_TEXT[t.permissionClass].label}{!approved && t.permissionClass === 'write' && <><br /><small className={s.soon}>default until reviewed</small></>}</td>
+                <td>{PERMISSION_TEXT[t.permissionClass].label}{!approved && t.permissionClass === 'write' && <><br /><small className={s.soon}>safe default until you choose</small></>}</td>
                 {editable && (
                   <td>
                     <label className={s.sr} htmlFor={`${id}-${t.name}`}>Permission level for {t.name}</label>

@@ -190,3 +190,13 @@
 .conversationIdentity span{min-width:0;overflow-wrap:anywhere}
 
 .recovery{min-width:0;max-height:40vh;overflow:auto;overflow-wrap:anywhere}.recovery details{margin:8px 0}.recovery details p{white-space:pre-wrap}
+/* M3: tool states and grouped history */
+.toolPill{display:inline-flex;align-items:center;gap:4px;font-size:11px;font-weight:700;border-radius:100px;padding:2px 8px;border:1px solid #deded6;background:#fff;color:#3e3f3a;white-space:nowrap}
+.tool_running{color:#5c4a00;background:#fff8c9;border-color:#e3d782}.tool_completed{color:#1f5137;background:#eaf6ef;border-color:#b9dcc7}
+.tool_awaiting{color:#3b3486;background:#f0efff;border-color:#c9c5f3}.tool_failed{color:#9b1c1c;background:#fff6f6;border-color:#f0c4c4}.tool_not_run{color:#4e4f49;background:#f3f1e8}
+.toolOk,.toolFail{display:flex;flex-wrap:wrap;gap:6px;align-items:center;border-radius:12px}
+.threadGroups{display:grid;gap:10px;overflow-y:auto;min-height:0}
+.histGroup{font-size:11px;letter-spacing:.08em;text-transform:uppercase;color:#686963;margin:6px 10px 4px;font-weight:700}
+.threadList .thread,.threadList .threadActive{display:flex!important;align-items:center;gap:8px}
+.threadTitle{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.threadTime{flex:none;font-size:11px;color:#686963;font-weight:400}.threadActive .threadTime{color:#d8d8d0}

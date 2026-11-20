@@ -13,7 +13,8 @@
  * server logs, proxies or Referer headers; it is shown once and never stored by this component.
  * Authorization is enforced by the database; the UI only hides controls the server would refuse.
  */
-import { useCallback, useEffect, useId, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useId, useRef, useState, type FormEvent } from 'react';
+import { EmailText } from './EmailText';
 import s from '@/components/connect/connect.module.css';
 import { GENERIC_ERROR as GENERIC, readInvitationError } from '@/lib/team/invitation-errors';
 
@@ -82,6 +83,11 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
   const [confirmId, setConfirmId] = useState<string | null>(null);
   const [rowError, setRowError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
+  // Focus moves to the outcome after an async action, so keyboard and screen-reader users never land on <body>.
+  const createdRef = useRef<HTMLDivElement>(null);
+  const noticeRef = useRef<HTMLParagraphElement>(null);
+  useEffect(() => { if (created) createdRef.current?.focus(); }, [created]);
+  useEffect(() => { if (notice) noticeRef.current?.focus(); }, [notice]);
 
   const apply = useCallback((r: LoadResult) => {
     if ('items' in r) { setLoadError(null); setItems(r.items); } else { setLoadError(r.error); }
@@ -131,8 +137,8 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
 
   if (!manage) {
     return (
-      <section className={s.card} aria-labelledby="team-h">
-        <h2 id="team-h">Team</h2>
+      <section className={s.card} aria-labelledby="team-h" id="team">
+        <h2 id="team-h">Invitations</h2>
         <p className={s.next}>Owners and administrators of {organizationName ?? 'this organization'} can invite colleagues. Ask one of them to send you or your colleague an invitation link.</p>
       </section>
     );
@@ -141,8 +147,8 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
   const link = created && typeof window !== 'undefined' ? inviteLink(window.location.origin, created.token) : '';
 
   return (
-    <section className={s.card} aria-labelledby="team-h" style={{ gridColumn: '1 / -1' }}>
-      <h2 id="team-h">Team</h2>
+    <section className={s.card} aria-labelledby="team-h" id="team">
+      <h2 id="team-h">Invite colleagues</h2>
       <p className={s.next}>Invite a colleague to {organizationName ?? 'this organization'}. TuGPT creates a one-time link; you send it to them yourself. They must sign in with the same e-mail address to join.</p>
 
       <form className={s.form} onSubmit={submit} noValidate aria-describedby={formError ? ids.status : undefined}>
@@ -166,8 +172,8 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
       </form>
 
       {created && (
-        <div className={s.bannerOk} role="status" style={{ marginTop: '1rem' }}>
-          <p><strong>Invitation created for {created.email}</strong> as {ROLE_LABEL[created.role] ?? created.role}. Valid until {formatDate(created.expires_at)}.</p>
+        <div className={s.bannerOk} role="status" ref={createdRef} tabIndex={-1} style={{ marginTop: '1rem' }}>
+          <p><strong>Invitation created for <EmailText value={created.email} /></strong> as {ROLE_LABEL[created.role] ?? created.role}. Valid until {formatDate(created.expires_at)}.</p>
           <p>Copy this link now and send it to them. For security it is shown only once.</p>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', alignItems: 'center' }}>
             <label htmlFor={ids.link} className={s.sr}>Invitation link</label>
@@ -179,9 +185,9 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
         </div>
       )}
 
-      {notice && <p className={s.bannerOk} role="status" style={{ marginTop: '1rem' }}>{notice}</p>}
+      {notice && <p className={s.bannerOk} role="status" ref={noticeRef} tabIndex={-1} style={{ marginTop: '1rem' }}>{notice}</p>}
 
-      <h3 style={{ marginTop: '1.5rem' }}>Invitations</h3>
+      <h3 style={{ marginTop: '1.5rem' }}>Sent invitations</h3>
       {loadError ? (
         <div role="alert" className={s.bannerError}><p>{loadError}</p><button type="button" className={s.secondary} onClick={() => { setLoadError(null); setItems(null); void load(); }}>Try again</button></div>
       ) : items === null ? (
@@ -190,7 +196,7 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
         <p className={s.muted}>No invitations yet. Invite your first colleague above.</p>
       ) : (
         <div className={s.tableWrap}>
-          <table className={s.table}>
+          <table className={`${s.table} ${s.stack}`}>
             <caption className={s.sr}>Invitations for {organizationName ?? 'this organization'}</caption>
             <thead><tr><th scope="col">E-mail</th><th scope="col">Role</th><th scope="col">Status</th><th scope="col">Expires</th><th scope="col"><span className={s.sr}>Actions</span></th></tr></thead>
             <tbody>
@@ -198,11 +204,11 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
                 const st = effectiveStatus(inv);
                 return (
                   <tr key={inv.id}>
-                    <td style={{ overflowWrap: 'anywhere' }}>{inv.email}</td>
-                    <td>{ROLE_LABEL[inv.role] ?? inv.role}</td>
-                    <td><span className={s.badge}>{STATUS_LABEL[st] ?? st}</span></td>
-                    <td>{st === 'pending' ? formatDate(inv.expires_at) : '—'}</td>
-                    <td>
+                    <td data-label="E-mail"><EmailText value={inv.email} /></td>
+                    <td data-label="Role">{ROLE_LABEL[inv.role] ?? inv.role}</td>
+                    <td data-label="Status"><span className={`${s.badge} ${st === 'pending' ? s.idle : s.off}`}>{STATUS_LABEL[st] ?? st}</span></td>
+                    <td data-label="Expires" className={s.nowrap}>{st === 'pending' ? formatDate(inv.expires_at) : '—'}</td>
+                    <td data-label="Action">
                       {st === 'pending' && (confirmId === inv.id ? (
                         <span role="group" aria-label={`Confirm revoking the invitation for ${inv.email}`} style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                           <button type="button" className={s.danger} disabled={busy} onClick={() => void revoke(inv)}>Revoke</button>

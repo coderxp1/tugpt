@@ -36,7 +36,7 @@ describe('ProviderActions', () => {
   it('disables Connect with the exact missing route when the build lacks it', () => {
     render(<ProviderActions provider="microsoft" state="requires_connection" canManage start="missing" disconnect="missing" />);
     expect((screen.getByRole('button', { name: 'Connect Microsoft 365' }) as HTMLButtonElement).disabled).toBe(true);
-    expect(screen.getByText('Connecting Microsoft 365 is not available in this version of TuGPT yet.')).toBeTruthy();
+    expect(screen.getByText('Connecting Microsoft 365 is not available in TuGPT yet.')).toBeTruthy();
     // Customers never see an API path.
     expect(document.body.textContent).not.toContain('/api/v1/');
   });
@@ -44,7 +44,7 @@ describe('ProviderActions', () => {
     render(<ProviderActions provider="google" state="connected" canManage start="available" disconnect="missing" />);
     fireEvent.click(screen.getByRole('button', { name: 'Disconnect…' }));
     const dialog = screen.getByRole('alertdialog', { name: 'Disconnect Google?' });
-    expect(dialog.textContent).toContain('not available on this build');
+    expect(dialog.textContent).toContain('Disconnecting from TuGPT is not available yet');
     expect((screen.getByRole('button', { name: 'Disconnect Google' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.keyDown(document, { key: 'Escape' });
     expect(screen.queryByRole('alertdialog')).toBeNull();
@@ -191,7 +191,7 @@ describe('McpPanel', () => {
     render(<McpPanel canManage routes={all('available')} enabled={false} fetcher={f as unknown as typeof fetch} />);
     const docs = (await screen.findByRole('heading', { name: 'Docs' })).closest('li')!;
     const kb = screen.getByRole('heading', { name: 'Knowledge base' }).closest('li')!;
-    expect(screen.getAllByRole('listitem').filter((li) => li.querySelector('h3'))).toHaveLength(2); // malformed row dropped
+    expect(screen.getAllByRole('listitem').filter((li) => li.querySelector('h4'))).toHaveLength(2); // malformed row dropped
     expect(within(docs).getByText('Not switched on')).toBeTruthy();
     expect(within(kb).getByText('Active')).toBeTruthy();
     expect(f.mock.calls[0][1]).toMatchObject({ method: 'GET', cache: 'no-store' });
@@ -251,7 +251,7 @@ describe('McpPanel', () => {
   it('names the missing list route and locks everything when the build lacks the MCP routes', () => {
     const f = api(() => json({ endpoints: [] }));
     render(<McpPanel canManage routes={all('missing')} enabled fetcher={f as unknown as typeof fetch} />);
-    expect(screen.getByText('The server list is not available in this version of TuGPT.')).toBeTruthy();
+    expect(screen.getByText('The server list is not available yet.')).toBeTruthy();
     expect((screen.getByRole('button', { name: 'Add server' }) as HTMLButtonElement).disabled).toBe(true);
     expect(f).not.toHaveBeenCalled();
   });
@@ -271,7 +271,7 @@ describe('McpPanel', () => {
     expect((within(card).getByRole('button', { name: 'Switch on' }) as HTMLButtonElement).disabled).toBe(true);
     fireEvent.click(within(card).getByRole('button', { name: 'Discover tools' }));
     expect(await within(card).findByText('Refund an order')).toBeTruthy();
-    expect(within(within(card).getByRole('table')).getAllByText('default until reviewed')).toHaveLength(2);
+    expect(within(within(card).getByRole('table')).getAllByText('safe default until you choose')).toHaveLength(2);
     fireEvent.change(within(card).getByLabelText('Permission level for search'), { target: { value: 'read' } });
     fireEvent.change(within(card).getByLabelText('Permission level for refund'), { target: { value: 'financial' } });
     fireEvent.click(within(card).getByRole('checkbox'));

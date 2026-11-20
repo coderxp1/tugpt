@@ -440,6 +440,8 @@ export const es = {
   // Analytics v1 — uso y costos. Los totales de costo desconocido se dicen
   // como desconocidos: nunca se muestra un cero donde falta un precio.
   'analytics.title': 'Uso y costos',
+  'analytics.eyebrow': 'Tu organización',
+  'analytics.lead': 'Consulta qué llamadas de IA ha registrado TuGPT para tu organización y, cuando se conoce el precio, cuánto han costado.',
   'analytics.loading': 'Cargando uso…',
   'analytics.loadFailed': 'No se pudo cargar el uso',
   'analytics.retry': 'Reintentar',
@@ -448,7 +450,7 @@ export const es = {
   'analytics.range.30d': '30 días',
   'analytics.range.90d': '90 días',
   'analytics.window': 'Del {from} al {to}',
-  'analytics.empty': 'No hay uso registrado en este período.',
+  'analytics.empty': 'No hay uso registrado en este período. El chat, la generación de imágenes y el uso de herramientas MCP aún no se registran, así que esto no significa que tu equipo no haya usado nada.',
   'analytics.totalsTitle': 'Resumen del período',
   'analytics.events': 'Llamadas registradas',
   'analytics.pricedEvents': 'Con precio conocido',

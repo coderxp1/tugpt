@@ -24,8 +24,8 @@ export function DisconnectDialog({ providerName, onConfirm, gap, onClose, onDone
       onClose={onClose}
       onDone={onDone}
       unavailable={gap
-        ? <GapNote gap={gap}>Disconnecting from TuGPT is not available on this build. Until it is, an admin can remove TuGPT&rsquo;s access in the {providerName} account&rsquo;s own security settings.</GapNote>
-        : <p>Disconnecting from TuGPT is not available on this build. An admin can remove TuGPT&rsquo;s access in the {providerName} account&rsquo;s own security settings.</p>}
+        ? <GapNote gap={gap}>Disconnecting from TuGPT is not available yet. Until it is, an admin can remove TuGPT&rsquo;s access in the {providerName} account&rsquo;s own security settings.</GapNote>
+        : <p>Disconnecting from TuGPT is not available yet. An admin can remove TuGPT&rsquo;s access in the {providerName} account&rsquo;s own security settings.</p>}
     >
       <p>TuGPT will revoke its access to this account:</p>
       <ul>

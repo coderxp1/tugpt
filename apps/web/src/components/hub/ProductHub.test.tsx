@@ -76,3 +76,25 @@ it.each([false, null, true] as const)('keeps ordinary feature state separate fro
     expect(container.querySelector(`[data-capability="${id}"] a`)).toBeNull();
   }
 });
+
+describe('Overview follows the organization feature map', () => {
+  const hub = (features: Record<string, string>) => render(<ProductHub organizationName="TuGPT" email="owner@example.com" role="owner" features={features as never} products={resolveProducts({ ...signals, draftFeatureEnabled: false })} t={createTranslator('en')} />);
+  it('links MCP only while it is usable and matches the sidebar wording', () => {
+    const on = hub({ mcp: 'available', chat: 'available' });
+    expect(on.container.querySelector('[data-capability="mcp"] a')?.getAttribute('href')).toBe('/dashboard/connect#mcp-title');
+    cleanup();
+    const off = hub({ mcp: 'disabled', chat: 'available' });
+    expect(off.container.querySelector('[data-capability="mcp"] a')).toBeNull();
+    expect(off.container.querySelector('[data-capability="mcp"]')?.textContent).toMatch(/Not enabled/);
+  });
+  it('labels partly available features and never shows counts for disabled ones', () => {
+    const { container } = hub({ analytics: 'partial', inbox: 'disabled', drafts: 'disabled', knowledge: 'disabled', chat: 'available' });
+    expect(container.querySelector('[data-capability="analytics"]')?.textContent).toMatch(/Partly available/);
+    expect(container.querySelector('[data-capability="conversations"]')?.textContent).not.toMatch(/\d+ (open|need)/);
+    expect(container.querySelector('[data-capability="knowledge"]')?.textContent).not.toMatch(/·\s*14/);
+  });
+  it('shows no developer wording', () => {
+    const { container } = hub({ chat: 'available' });
+    expect(container.textContent).not.toMatch(/Blueprint|feature flag|webhook|Staging|APIs exist|regardless of/i);
+  });
+});

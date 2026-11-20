@@ -1,5 +1,6 @@
 'use client';
 
+import { ToolState, type ToolRunState } from './ToolState';
 import { useEffect, useId, useReducer, useState } from 'react';
 import {
   approvalReducer, checkApproval, displayArguments, failureText, INITIAL_APPROVAL, PERMISSION_TEXT, requestApproval, revokeApproval, TTL_OPTIONS,
@@ -125,6 +126,9 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
     }
   })();
 
+  const pill: ToolRunState = state.kind === 'pending' || state.kind === 'failed' || state.kind === 'approving' ? 'awaiting'
+    : state.kind === 'running' || state.kind === 'approved' || state.kind === 'revoking' ? 'running'
+    : state.kind === 'done' ? (state.ok ? 'completed' : 'failed') : 'not_run';
   const decide = state.kind === 'pending' || state.kind === 'failed';
   const closed = state.kind === 'done' || state.kind === 'rejected' || state.kind === 'revoked' || state.kind === 'expired';
 
@@ -133,6 +137,7 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
       <header className={s.approvalHead}>
         <span className={`${s.permBadge} ${approval.permissionClass === 'write' ? '' : s.permDanger}`}>{perm.label}</span>
         <h2 id={`${id}-t`}>Approve this action?</h2>
+        <ToolState state={pill} />
       </header>
       <p className={s.approvalWhat}>
         TuGPT wants to run <code>{approval.toolName}</code> on <strong>{approval.endpointName}</strong>. {perm.effect}
@@ -165,7 +170,7 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
               <label key={o.seconds}><input type="radio" name={`${id}-ttl`} value={o.seconds} checked={ttl === o.seconds} onChange={() => setTtl(o.seconds)} /> {o.label}</label>
             ))}
           </fieldset>
-          <label className={s.confirm}><input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> I checked the endpoint, tool and arguments and want this call to run once.</label>
+          <label className={s.confirm}><input type="checkbox" checked={checked} onChange={(e) => setChecked(e.target.checked)} /> I checked the server, tool and details and want this to run once.</label>
           <div className={s.approvalActions}>
             <button type="button" className={s.approve} onClick={() => void approve()} disabled={!checked} aria-describedby={`${id}-t`}>Approve</button>
             <button type="button" className={s.reject} onClick={() => dispatch({ type: 'reject' })}>Reject</button>

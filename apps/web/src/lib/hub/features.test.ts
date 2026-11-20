@@ -8,7 +8,10 @@ describe('describeFeatures', () => {
   it('reports nothing as available that a gate did not open', () => {
     const m = by(base);
     expect(m.chat).toBe('available');
-    for (const k of ['inbox', 'drafts', 'knowledge', 'google', 'microsoft', 'mcp', 'mcp_chat', 'images', 'media'] as const) expect(m[k], k).toBe('disabled');
+    for (const k of ['inbox', 'drafts', 'knowledge', 'mcp', 'mcp_chat', 'images', 'media'] as const) expect(m[k], k).toBe('disabled');
+    // A provider TuGPT does not offer yet reads "Not available yet", as on the Connect page.
+    expect(m.google).toBe('not_implemented'); expect(m.microsoft).toBe('not_implemented');
+    expect(by({ ...base, google: 'unknown' }).google).toBe('disabled');
     expect(m.agents).toBe('not_implemented'); expect(m.crm).toBe('not_implemented'); expect(m.video).toBe('not_implemented');
     expect(m.team).toBe('partial'); expect(m.analytics).toBe('partial');
   });

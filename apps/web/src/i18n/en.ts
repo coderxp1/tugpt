@@ -427,7 +427,9 @@ export const en: Dictionary = {
 
   // Analytics v1 — usage and cost. Unknown totals are said to be unknown; a
   // zero is never shown where a price is missing.
-  'analytics.title': 'Usage & cost',
+  'analytics.title': 'Usage & Costs',
+  'analytics.eyebrow': 'Your organization',
+  'analytics.lead': 'See which AI calls TuGPT has recorded for your organization and, where a price is known, what they cost.',
   'analytics.loading': 'Loading usage…',
   'analytics.loadFailed': 'Could not load the usage',
   'analytics.retry': 'Retry',
@@ -436,7 +438,7 @@ export const en: Dictionary = {
   'analytics.range.30d': '30 days',
   'analytics.range.90d': '90 days',
   'analytics.window': 'From {from} to {to}',
-  'analytics.empty': 'No usage recorded in this period.',
+  'analytics.empty': 'No recorded usage in this period. Chat, image generation and MCP tool use are not tracked yet, so this does not mean your team used nothing.',
   'analytics.totalsTitle': 'Period summary',
   'analytics.events': 'Recorded calls',
   'analytics.pricedEvents': 'Priced',

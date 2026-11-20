@@ -5,11 +5,12 @@ import { useRouter } from 'next/navigation';
 import { createTranslator } from '@/i18n';
 import { capabilityViews, GROUPS } from '@/lib/hub/capabilities';
 import type { ProductView } from '@/lib/hub/products';
+import { isUsable, STATE_LABEL, type FeatureKey, type FeatureState } from '@/lib/hub/features';
 import { Glyph } from './glyphs';
 import s from './reference.module.css';
 
 const t = createTranslator('en');
-export function Overview({ products, hasOrganization }: { products: readonly ProductView[]; hasOrganization: boolean }) {
+export function Overview({ products, hasOrganization, features }: { products: readonly ProductView[]; hasOrganization: boolean; features?: Partial<Record<FeatureKey, FeatureState>> }) {
   const [search, setSearch] = useState('');
   const [pending, startTransition] = useTransition();
   const router = useRouter();
@@ -50,13 +51,18 @@ export function Overview({ products, hasOrganization }: { products: readonly Pro
     <div className={s.groups} role="list" aria-label="TuGPT products">
       {GROUPS.map((g, i) => {
         const entries = matches.filter(c => c.group === g.name);
-        return <section key={g.name} className={`${s.group} ${s[g.name.toLowerCase()]}`} id={`group-${g.name}`} aria-labelledby={`heading-${g.name}`} hidden={!entries.length}>
+        return <section key={g.name} role="listitem" className={`${s.group} ${s[g.name.toLowerCase()]}`} id={`group-${g.name}`} aria-labelledby={`heading-${g.name}`} hidden={!entries.length}>
           <div className={s.groupHead}><div><h3 id={`heading-${g.name}`}>{g.name}</h3><p>{g.sub}</p></div><span className={s.groupNumber}>0{i + 1}</span></div>
-          <div className={s.items}>{entries.map(c => {
+          <div className={s.items} role="list" aria-labelledby={`heading-${g.name}`}>{entries.map(c => {
             const p = c.productView;
-            const href = hasOrganization ? p?.href : null;
-            const status = p?.state === 'held' ? t('hub.state.held') : !href ? c.product && !hasOrganization ? 'Membership required' : 'Not yet available' : p?.featureAccess === 'disabled' ? 'Not enabled for this organization' : p?.featureAccess === 'unknown' ? 'Availability unknown' : p?.state === 'unknown' ? 'Activity unavailable' : p?.state === 'attention' ? 'Needs attention' : c.id === 'calendar' ? p?.state === 'connected' ? 'Connected' : 'Setup required' : 'Available';
-            const body = <><span className={s.box}><Glyph name={c.glyph} /></span><span className={s.itemText}><span className={s.itemName}>{c.title}</span><span className={s.itemDesc}>{c.description}</span><span className={`${s.itemStatus} ${href ? s.available : ''}`}>{status}{p?.metric !== null && p?.metric !== undefined && p.metricKey ? ` · ${p.metric} ${t(p.metricKey)}` : ''}</span></span>{href && <span className={s.itemArrow} aria-hidden="true">↗</span>}</>;
+            const fs = c.feature ? features?.[c.feature] : undefined;
+            // Product cards keep their destination (the page explains a disabled state); feature-only cards link only while usable.
+            const href = !hasOrganization ? null : p?.href ?? (c.href && isUsable(fs) ? c.href : null);
+            const base = p?.state === 'held' ? t('hub.state.held') : !href ? c.product && !hasOrganization ? 'Membership required' : fs && fs !== 'not_implemented' ? STATE_LABEL[fs] : 'Not yet available' : p?.featureAccess === 'disabled' || fs === 'disabled' ? 'Not enabled for this organization' : p?.featureAccess === 'unknown' ? 'Availability unknown' : p?.state === 'unknown' ? 'Activity unavailable' : p?.state === 'attention' ? 'Needs attention' : c.id === 'calendar' ? p?.state === 'connected' ? 'Connected' : 'Setup required' : fs === 'partial' ? STATE_LABEL.partial : 'Available';
+            // Counts are shown only for features that are actually on; a disabled feature never shows "0 open".
+            const showMetric = href && p?.metric !== null && p?.metric !== undefined && p.metricKey && p.featureAccess !== 'disabled' && p.featureAccess !== 'unknown' && fs !== 'disabled';
+            const status = base;
+            const body = <><span className={s.box}><Glyph name={c.glyph} /></span><span className={s.itemText}><span className={s.itemName}>{c.title}</span><span className={s.itemDesc}>{c.description}</span><span className={`${s.itemStatus} ${href ? s.available : ''}`}>{status}{showMetric ? ` · ${p!.metric} ${t(p!.metricKey!)}` : ''}</span></span>{href && <span className={s.itemArrow} aria-hidden="true">↗</span>}</>;
             return <div key={c.id} role="listitem" data-capability={c.id} data-blueprint-area={c.area}>
               {href ? <Link prefetch={false} href={href} className={s.item}>{body}</Link> : <div className={`${s.item} ${s.planned}`}>{body}</div>}
               {c.note && <p className={s.scopeNote}>{c.note}</p>}
@@ -66,6 +72,6 @@ export function Overview({ products, hasOrganization }: { products: readonly Pro
       })}
       {!matches.length && <div className={s.empty} role="status">No capabilities found. Try another search.<button type="button" onClick={() => setSearch('')}>Clear search</button></div>}
     </div>
-    <div className={s.bottomNote}><span><strong>Built for what’s next.</strong> All 14 Blueprint areas are represented. Availability reflects this deployment.</span><span>Staging data · Organization-scoped access</span></div>
+    <div className={s.bottomNote}><span><strong>What you see is what you can use.</strong> Each status shows what is switched on for your organization today.</span><Link href="/dashboard/settings#features" prefetch={false}>See all feature statuses</Link></div>
   </>;
 }

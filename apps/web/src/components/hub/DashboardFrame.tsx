@@ -116,7 +116,7 @@ export function DashboardFrame({ fullName = null, email, organizationName = null
         <div className={s.crumb}>TuGPT <span aria-hidden="true"> / </span><strong>{overview ? 'Overview' : current?.title ?? 'Dashboard'}</strong></div>
         <div className={s.topActions}>{organizationName && <span className={s.topOrg} title="Organization you are working in">{organizationName}</span>}<Link href="/workspace" prefetch={false} className={s.openWorkspace}>{t('dashboard.openWorkspace')}</Link><Link href="/dashboard/settings" prefetch={false} className={s.accountMark} aria-label={`Your account: ${displayName}`}>{initial}</Link></div>
       </header>
-      <main id="contenido" className={overview ? s.content : s.toolContent}>{children}</main>
+      <main id="contenido" tabIndex={-1} className={overview ? s.content : s.toolContent}>{children}</main>
     </div>
   </div>;
 }

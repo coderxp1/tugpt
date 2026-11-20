@@ -24,9 +24,11 @@ const STATE: Record<CapabilityState, { label: string; tone: string }> = {
 };
 const RANK: CapabilityState[] = ['connected', 'requires_connection', 'disabled_by_policy', 'not_available'];
 
-const PROVIDER_COPY: Record<ConnectProvider, { blurb: string; next: Record<CapabilityState, string> }> = {
+const PROVIDER_COPY: Record<ConnectProvider, { blurb: string; signIn: string; later: string; next: Record<CapabilityState, string> }> = {
   google: {
-    blurb: 'Calendar, Gmail and Drive for your Google Workspace account.',
+    blurb: 'Your Google Workspace calendar, so TuGPT can help you plan meetings in Chat.',
+    signIn: 'Google',
+    later: 'Gmail and Google Drive are not part of TuGPT yet.',
     next: {
       connected: 'Type @ in Chat to use it.',
       requires_connection: 'Not connected. Until it is, TuGPT has no access to your Google data.',
@@ -35,7 +37,9 @@ const PROVIDER_COPY: Record<ConnectProvider, { blurb: string; next: Record<Capab
     },
   },
   microsoft: {
-    blurb: 'Outlook calendar, mail and OneDrive for your Microsoft 365 account.',
+    blurb: 'Your Outlook calendar, so TuGPT can help you plan meetings in Chat.',
+    signIn: 'Microsoft',
+    later: 'Outlook mail and OneDrive are not part of TuGPT yet.',
     next: {
       connected: 'Type @ in Chat to use your Outlook calendar.',
       requires_connection: 'Not connected. Until it is, TuGPT has no access to your Microsoft data.',
@@ -99,7 +103,7 @@ export default async function ConnectPage({ searchParams }: { searchParams: Sear
                 <div><h2>{p.name}</h2>{copy && <p>{copy.blurb}</p>}</div>
                 <span className={`${s.badge} ${st.tone}`}>{st.label}</span>
               </div>
-              <h3 className={s.sub}>What TuGPT can do</h3>
+              <h3 className={s.sub}>{p.state === 'connected' ? 'What TuGPT can do' : 'What it will provide once connected'}</h3>
               <ul className={s.caps}>
                 {p.caps.map((c) => (
                   <li key={c.capabilityKey}>
@@ -108,7 +112,16 @@ export default async function ConnectPage({ searchParams }: { searchParams: Sear
                   </li>
                 ))}
               </ul>
-              <p className={s.next}>{copy?.next[p.state] ?? ''}</p>
+              {copy && <p className={s.muted}>{copy.later}</p>}
+              {copy && p.state !== 'connected' && <>
+                <h3 className={s.sub}>How connecting works</h3>
+                <ol className={s.howList}>
+                  <li>An owner or admin selects <strong>Connect</strong>{p.state === 'not_available' ? ' (once it is switched on)' : ''}.</li>
+                  <li>You sign in on {copy.signIn}&rsquo;s own page. TuGPT never sees your password.</li>
+                  <li>To end access later, disconnect here or remove TuGPT in your {copy.signIn} account&rsquo;s security settings.</li>
+                </ol>
+              </>}
+              <p className={s.next}><strong>Status: </strong>{copy?.next[p.state] ?? ''}</p>
               {isConnectProvider(p.key) && (
                 <ProviderActions
                   provider={p.key}
@@ -118,7 +131,7 @@ export default async function ConnectPage({ searchParams }: { searchParams: Sear
                   disconnect={p.key === 'google' ? routes.googleDisconnect : routes.microsoftDisconnect}
                 />
               )}
-              {notInChat.length > 0 && <p className={s.muted}>Chat has no tool for {notInChat.map((c) => c.description).join(', ')} on this build.</p>}
+              {notInChat.length > 0 && <p className={s.muted}>Chat has no tool for {notInChat.map((c) => c.description).join(', ')} yet.</p>}
             </li>
           );
         })}

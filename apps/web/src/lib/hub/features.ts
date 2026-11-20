@@ -48,7 +48,8 @@ const NOT_ENABLED = 'Not enabled for your organization. TuGPT switches it on per
 function provider(name: string, gate: ProviderGate): Pick<FeatureStatus, 'state' | 'detail'> {
   if (gate === 'connected') return { state: 'available', detail: `${name} is connected. Type @ in Chat to use it.` };
   if (gate === 'ready') return { state: 'available', detail: `Ready to connect. An owner or admin can connect ${name} on the Connect page.` };
-  if (gate === 'off') return { state: 'disabled', detail: `Connecting ${name} is not switched on for TuGPT yet. Nothing is connected.` };
+  // Same wording as the Connect page: the provider is not offered by TuGPT yet.
+  if (gate === 'off') return { state: 'not_implemented', detail: `Connecting ${name} is not switched on for TuGPT yet. Nothing is connected.` };
   return { state: 'disabled', detail: `The ${name} connection status could not be checked, so it is shown as not enabled.` };
 }
 
@@ -58,7 +59,7 @@ export function describeFeatures(f: FeatureFacts): FeatureStatus[] {
     ({ key, name, href, state: drafts ? 'available' : 'disabled', detail: drafts ? on : f.draftsEnabled === null ? 'Its status could not be checked, so it is shown as not enabled.' : NOT_ENABLED });
   return [
     { key: 'chat', name: 'Chat', href: '/dashboard/chat', state: f.hasChatModel ? 'available' : 'disabled',
-      detail: f.hasChatModel ? 'Chat with TuGPT’s private AI model. Your chats are kept per organization.' : 'No AI model is configured for this workspace yet.' },
+      detail: f.hasChatModel ? 'Chat with TuGPT’s private AI model. Your chats are kept per organization.' : 'No AI model is set up for your organization yet.' },
     { key: 'team', name: 'Team & invitations', href: '/dashboard/settings#team', state: 'partial',
       detail: 'Invite colleagues, manage invitations and see who is a member. Changing roles and removing members is not available yet.' },
     { key: 'google', name: 'Google Workspace', href: '/dashboard/connect', ...provider('Google', f.google) },
@@ -71,7 +72,7 @@ export function describeFeatures(f: FeatureFacts): FeatureStatus[] {
     gated('drafts', 'AI Drafts', '/dashboard/drafts', 'Review, edit and approve replies drafted by TuGPT.'),
     gated('knowledge', 'Knowledge', '/dashboard/knowledge', 'Maintain the facts TuGPT uses when drafting replies.'),
     { key: 'images', name: 'Image generation', href: '/dashboard/create', state: f.imagesConfigured ? 'available' : 'disabled',
-      detail: f.imagesConfigured ? 'Generate images on TuGPT’s own EU GPU.' : 'Image generation is not set up on this workspace yet.' },
+      detail: f.imagesConfigured ? 'Generate images on TuGPT’s own EU GPU.' : 'Image generation is not set up for your organization yet.' },
     { key: 'video', name: 'Video generation', href: '/dashboard/create', state: 'not_implemented', detail: 'Not part of TuGPT yet.' },
     { key: 'media', name: 'Media Studio', href: '/dashboard/media', state: 'disabled',
       detail: 'On hold during a security review. Nothing can be generated or uploaded until the review is complete.' },

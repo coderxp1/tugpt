@@ -18,6 +18,6 @@ export interface ProductHubProps {
 /** Server boundary: passes only session labels and redacted, RLS-scoped metrics. */
 export function ProductHub({ organizationName, fullName = null, email, roleKey = null, features, products }: ProductHubProps) {
   return <DashboardFrame fullName={fullName} email={email} organizationName={organizationName} role={roleKey} features={features} overview>
-    <Overview products={products} hasOrganization={organizationName !== null} />
+    <Overview products={products} hasOrganization={organizationName !== null} features={features} />
   </DashboardFrame>;
 }
