@@ -4,8 +4,9 @@ import { useEffect, useId, useRef, useState } from 'react';
 import { useT } from '@/i18n/provider';
 import type { MessageKey } from '@/i18n/types';
 import type { Collection, CollectionDetail, DocumentStatus, FileVisibility, LibraryDocument, SearchHit } from '@/lib/workspace-data/contracts';
-import { hasArray, messageKeyFor, problemOf, workspaceApi } from '@/lib/workspace/service';
+import { hasArray, messageKeyFor, workspaceApi } from '@/lib/workspace/service';
 import { LIBRARY_ACCEPT, UPLOAD_MAX_BYTES, formatBytes, isUploadable, mediaTypeFor } from '@/lib/workspace/uploads';
+import { uploadSafely } from '@/lib/workspace/file-upload';
 import { ActionMenu } from './ActionMenu';
 import { Dialog } from './Dialog';
 import { Icon } from './icons';
@@ -38,7 +39,7 @@ type Editing = { mode: 'new' } | { mode: 'edit'; collection: Collection } | null
  * not available yet, never as "ready"), and searches the indexed text.
  * When the API is not deployed here, it says so once and the rest of the Library still works.
  */
-export function Collections() {
+export function Collections({ uploadScope }: { uploadScope?: string }) {
   const t = useT();
   const { load, reload, update } = useLoad<{ collections: readonly Collection[] }>('collections', () => workspaceApi().listCollections(), (v) => hasArray(v, 'collections'));
   const [open, setOpen] = useState<string | null>(null);
@@ -83,7 +84,7 @@ export function Collections() {
         </>
       )}
       {current && (
-        <CollectionPanel collection={current} onBack={() => setOpen(null)} onEdit={() => setEditing({ mode: 'edit', collection: current })}
+        <CollectionPanel uploadScope={uploadScope} collection={current} onBack={() => setOpen(null)} onEdit={() => setEditing({ mode: 'edit', collection: current })}
           onDeleted={() => { update((v) => ({ collections: v.collections.filter((x) => x.id !== current.id) })); setOpen(null); setNotice(t('workspace.lib.deleted', { name: current.name })); }} />
       )}
       {editing && (
@@ -147,15 +148,17 @@ function LibrarySearch({ collections }: { collections: readonly Collection[] }) 
   );
 }
 
-type Upload = { id: string; name: string; size: number; state: 'uploading' | 'failed'; message?: string };
+type Upload = { id: string; name: string; size: number; state: 'uploading' | 'failed'; percent?: number | null; message?: string };
 
-function CollectionPanel({ collection: col, onBack, onEdit, onDeleted }: { collection: Collection; onBack(): void; onEdit(): void; onDeleted(): void }) {
+function CollectionPanel({ collection: col, uploadScope, onBack, onEdit, onDeleted }: { uploadScope?: string; collection: Collection; onBack(): void; onEdit(): void; onDeleted(): void }) {
   const t = useT();
   const { load, reload, update } = useLoad<CollectionDetail>(`col:${col.id}`, () => workspaceApi().getCollection(col.id), (v) => hasArray(v, 'documents'));
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [confirm, setConfirm] = useState<{ kind: 'collection' } | { kind: 'document'; doc: LibraryDocument } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [dragging, setDragging] = useState(false);
+  const pendingUploads = useRef(new Set<AbortController>());
+  useEffect(() => { const pending = pendingUploads.current; return () => { for (const controller of pending) controller.abort(); }; }, []);
   const fileInput = useRef<HTMLInputElement>(null);
   const heading = useRef<HTMLHeadingElement>(null);
   const docs = load.state === 'ready' ? load.value.documents : [];
@@ -170,6 +173,7 @@ function CollectionPanel({ collection: col, onBack, onEdit, onDeleted }: { colle
   }, [indexing, reload, load]);
 
   async function add(list: FileList | File[] | null) {
+    if (!uploadScope) { setMessage(t('workspace.err.storage')); return; }
     const files = [...(list ?? [])];
     const refused: string[] = [];
     for (const f of files) {
@@ -179,11 +183,19 @@ function CollectionPanel({ collection: col, onBack, onEdit, onDeleted }: { colle
       const id = `${f.name}:${f.size}:${Math.random().toString(36).slice(2, 8)}`;
       setUploads((x) => [...x, { id, name: f.name, size: f.size, state: 'uploading' }]);
       void (async () => {
-        const up = await workspaceApi().uploadFile(new Blob([f], { type: mediaTypeFor(f) }), f.name, col.visibility);
-        const fileId = up.ok && typeof up.value?.file?.id === 'string' ? up.value.file.id : null;
+        const controller = new AbortController(); pendingUploads.current.add(controller);
+        let fileId: string | null = null;
+        try {
+          const up = await uploadSafely(f, mediaTypeFor(f), uploadScope, controller.signal, percent => {
+            if (!controller.signal.aborted) setUploads(x => x.map(y => y.id === id ? { ...y, percent } : y));
+          }, workspaceApi(), localStorage, col.visibility);
+          if (controller.signal.aborted) return;
+          if (up.kind === 'stored' || up.kind === 'existing') fileId = up.file.id;
+        } catch { /* No automatic replay after a failed verification or upload. */ }
+        finally { pendingUploads.current.delete(controller); }
         if (!fileId) {
-          const msg = up.ok || problemOf(up) === 'unavailable' ? t('workspace.err.storage') : t(messageKeyFor(up));
-          setUploads((x) => x.map((y) => (y.id === id ? { ...y, state: 'failed', message: msg } : y)));
+          const msg = t.locale === 'es' ? 'Subida no confirmada. Vuelva a seleccionar el mismo archivo para comprobarlo; no se reenviará una subida sin resolver.' : 'Upload not confirmed. Reselect the same file to check it; unresolved uploads will not be resent.';
+          setUploads(x => x.map(y => y.id === id ? { ...y, state: 'failed', message: msg } : y));
           return;
         }
         const added = await workspaceApi().addDocument(col.id, fileId, f.name);
@@ -244,7 +256,7 @@ function CollectionPanel({ collection: col, onBack, onEdit, onDeleted }: { colle
               {x.state === 'failed'
                 ? <button type="button" className={u.iconButton} onClick={() => setUploads((l) => l.filter((y) => y.id !== x.id))} aria-label={t('workspace.files.remove', { name: x.name })}><Icon name="close" size={14} /></button>
                 : <small>{formatBytes(x.size, t.locale)}</small>}
-              {x.state === 'uploading' ? <span className={u.progress} aria-hidden="true"><span /></span> : <small className={c.failMsg}>{x.message}</small>}
+              {x.state === 'uploading' ? <span><progress aria-label={x.name} max={100} value={x.percent ?? undefined} />{x.percent != null && <small>{x.percent}% {x.percent === 100 ? (t.locale === 'es' ? 'Confirmando almacenamiento…' : 'Confirming storage…') : ''}</small>}</span> : <small className={c.failMsg}>{x.message}</small>}
             </li>
           ))}
         </ul>

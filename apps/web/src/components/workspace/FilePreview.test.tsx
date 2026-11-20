@@ -37,3 +37,8 @@ it('revokes object URLs and aborts when closed', async () => {
  const { unmount } = render(<FilePreview file={{ ...file, mediaType: 'image/png' }} url="/api/v1/files/f1/content" />);
  await screen.findByRole('img'); unmount(); expect(revoke).toHaveBeenCalledWith('blob:preview');
 });
+it('offers download without fetching unsupported document formats', async () => {
+ const fetcher=vi.fn();vi.stubGlobal('fetch',fetcher);
+ render(<FilePreview file={{...file,mediaType:'application/pdf'}} url="/api/v1/files/f1/content" />);
+ expect(screen.getByText(/Preview is not available for this format or size/)).toBeTruthy();expect(screen.getByRole('link',{name:'Download'})).toBeTruthy();expect(fetcher).not.toHaveBeenCalled();
+});

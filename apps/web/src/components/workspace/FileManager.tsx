@@ -4,7 +4,8 @@ import { useRef, useState } from 'react';
 import { useT } from '@/i18n/provider';
 import type { WorkspaceFile } from '@/lib/workspace-data/contracts';
 import { hasArray, messageKeyFor, workspaceApi } from '@/lib/workspace/service';
-import { UPLOAD_ACCEPT, UPLOAD_MAX_BYTES, formatBytes, isUploadable, mediaTypeFor } from '@/lib/workspace/uploads';
+import { formatBytes } from '@/lib/workspace/uploads';
+import { FileUpload } from './FileUpload';
 import { FilePreview, previewKind } from './FilePreview';
 import { Dialog } from './Dialog';
 import { LoadingRows, ServiceNotice } from './states';
@@ -19,7 +20,7 @@ const words = {
 };
 type Action = { file: WorkspaceFile; kind: 'rename' | 'delete' | 'preview' | 'link' } | null;
 
-export function FileManager({ role }: { role?: string }) {
+export function FileManager({ role, uploadScope }: { role?: string; uploadScope?: string }) {
   const t = useT(); const text = words[t.locale === 'es' ? 'es' : 'en'];
   const writable = ['owner', 'admin', 'manager', 'agent'].includes(role ?? '');
   const [scope, setScope] = useState<'mine' | 'organization'>('mine');
@@ -34,16 +35,6 @@ export function FileManager({ role }: { role?: string }) {
   const { load, reload } = useLoad(`${scope}:${cursor ?? ''}`, () => api.listFiles({ scope, before: cursor, limit: 20 }), (v) => hasArray(v, 'files'));
   const collections = useLoad(action?.kind === 'link' ? action.file.id : null, () => api.listCollections(), (v) => hasArray(v, 'collections'));
   function open(file: WorkspaceFile, kind: NonNullable<Action>['kind']) { setError(''); setName(file.filename); setCollectionId(''); setAction({ file, kind }); }
-  async function upload(file?: File) {
-    if (!file || lock.current || !writable) return;
-    if (!isUploadable(file.name) || !file.size || file.size > UPLOAD_MAX_BYTES) { setError(text.unsupported); return; }
-    lock.current = true; setBusy(true); setError(''); setNotice(text.uploading);
-    try {
-      const r = await api.uploadFile(file.slice(0, file.size, mediaTypeFor(file)), file.name, 'private');
-      if (!r.ok) { setError(t(messageKeyFor(r))); setNotice(''); }
-      else { setNotice(text.saved); setScope('mine'); setCursor(undefined); reload(); }
-    } finally { lock.current = false; setBusy(false); }
-  }
   async function mutate() {
     if (!action || lock.current || !writable) return;
     lock.current = true; setBusy(true); setError('');
@@ -62,7 +53,7 @@ export function FileManager({ role }: { role?: string }) {
       <label className={u.field}>{text.scope}<select value={scope} disabled={busy} onChange={(e) => { setScope(e.target.value as typeof scope); setCursor(undefined); }}><option value="mine">{text.mine}</option><option value="organization">{text.org}</option></select></label>
       <label className={u.field}>{text.filter}<input type="search" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
       <button className={u.button} disabled={busy} onClick={reload}>{text.refresh}</button>
-      {writable && <label className={u.field}>{text.upload}<input type="file" accept={UPLOAD_ACCEPT} disabled={busy} onChange={(e) => { void upload(e.target.files?.[0]); e.target.value = ''; }} /></label>}
+      {writable && <FileUpload recoveryScope={uploadScope} onStored={() => { setScope('mine'); setCursor(undefined); reload(); }} />}
     </div>
     <p role="status">{notice}</p>{busy && <progress aria-label={text.title} />}
     {error && !action && <p className={u.error} role="alert">{error}</p>}
@@ -73,7 +64,7 @@ export function FileManager({ role }: { role?: string }) {
         <strong>{file.filename}</strong><p>{formatBytes(file.sizeBytes, t.locale)} · {file.visibility === 'private' ? t('workspace.lib.visPrivate') : t('workspace.lib.visOrg')} · {file.status === 'ready' ? text.ready : file.status === 'failed' ? text.failed : text.uploading}</p>
         <div className={f.controls}>
           {file.status === 'ready' && <a className={u.button} href={api.fileContentUrl(file.id)} download>{text.download}</a>}
-          {file.status === 'ready' && previewKind(file) && <button className={u.button} onClick={() => open(file, 'preview')}>{previewKind(file) === 'image' ? (t.locale === 'es' ? 'Vista previa de imagen' : 'Preview image') : text.preview}</button>}
+          {file.status === 'ready' && <button className={u.button} onClick={() => open(file, 'preview')}>{previewKind(file) === 'image' ? (t.locale === 'es' ? 'Vista previa de imagen' : 'Preview image') : previewKind(file) === 'text' ? text.preview : (t.locale === 'es' ? 'Vista previa del archivo' : 'Preview file')}</button>}
           {writable && file.ownedByMe && <><button className={u.button} disabled={busy} onClick={() => open(file, 'rename')}>{text.rename}</button>{file.status === 'ready' && <button className={u.button} disabled={busy} onClick={() => open(file, 'link')}>{text.linking}</button>}</>}
           {writable && (file.ownedByMe || (file.visibility === 'organization' && ['owner', 'admin'].includes(role ?? ''))) && <button className={u.button} disabled={busy} onClick={() => open(file, 'delete')}>{text.remove}</button>}
         </div>
@@ -81,7 +72,7 @@ export function FileManager({ role }: { role?: string }) {
       {!load.value.files.some((file) => file.filename.toLocaleLowerCase().includes(query.toLocaleLowerCase())) && <p>{text.empty}</p>}
       <div className={f.controls}>{cursor && <button className={u.button} onClick={() => setCursor(undefined)}>{text.first}</button>}{load.value.nextCursor && <button className={u.button} onClick={() => setCursor(load.value.nextCursor ?? undefined)}>{text.next}</button>}</div>
     </>}
-    {action && <Dialog title={action.kind === 'delete' ? text.confirm : action.kind === 'rename' ? text.rename : action.kind === 'link' ? text.linking : previewKind(action.file) === 'image' ? (t.locale === 'es' ? 'Vista previa de imagen' : 'Preview image') : text.preview} tone={action.kind === 'delete' ? 'alert' : 'default'} onClose={() => { if (!busy) { setAction(null); setError(''); } }} footer={action.kind !== 'preview' && <><button className={u.button} disabled={busy} onClick={() => setAction(null)}>{text.cancel}</button><button className={action.kind === 'delete' ? u.buttonDanger : u.buttonPrimary} disabled={busy || (action.kind === 'rename' && !name.trim()) || (action.kind === 'link' && !collectionId)} onClick={() => void mutate()}>{action.kind === 'delete' ? text.remove : text.save}</button></>}>
+    {action && <Dialog preview={action.kind === 'preview'} title={action.kind === 'delete' ? text.confirm : action.kind === 'rename' ? text.rename : action.kind === 'link' ? text.linking : previewKind(action.file) === 'image' ? (t.locale === 'es' ? 'Vista previa de imagen' : 'Preview image') : previewKind(action.file) === 'text' ? text.preview : (t.locale === 'es' ? 'Vista previa del archivo' : 'Preview file')} tone={action.kind === 'delete' ? 'alert' : 'default'} onClose={() => { if (!busy) { setAction(null); setError(''); } }} footer={action.kind !== 'preview' && <><button className={u.button} disabled={busy} onClick={() => setAction(null)}>{text.cancel}</button><button className={action.kind === 'delete' ? u.buttonDanger : u.buttonPrimary} disabled={busy || (action.kind === 'rename' && !name.trim()) || (action.kind === 'link' && !collectionId)} onClick={() => void mutate()}>{action.kind === 'delete' ? text.remove : text.save}</button></>}>
       <p className={f.filename}>{action.file.filename}</p>
       {action.kind === 'delete' && <p>{text.warning}</p>}
       {action.kind === 'rename' && <label className={u.field}>{text.name}<input maxLength={240} value={name} onChange={(e) => setName(e.target.value)} /></label>}

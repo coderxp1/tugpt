@@ -2,7 +2,7 @@
 
 import { customerModels } from '@/lib/workspace/assistant-capabilities';
 import Link from 'next/link';
-import { useId, useMemo, useState } from 'react';
+import { useId, useMemo, useRef, useState } from 'react';
 import { useT } from '@/i18n/provider';
 import type { MessageKey } from '@/i18n/types';
 import type { PublicModel } from '@/components/chat/types';
@@ -148,6 +148,8 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
   const start = editing.mode === 'edit' ? editing.agent : null;
   const [form, setForm] = useState<AgentInput>(start ? { ...start, starters: start.starters.length ? [...start.starters] : [''] } : EMPTY);
   const [saving, setSaving] = useState(false);
+  const saveLock = useRef(false);
+  const capabilityUnavailable = !!form.modelKey && !models.some(m => m.key === form.modelKey && m.available !== false);
   const [error, setError] = useState<MessageKey | null>(null);
   const [touched, setTouched] = useState(false);
   const id = useId();
@@ -158,17 +160,17 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
   async function save(e: React.FormEvent) {
     e.preventDefault();
     setTouched(true);
-    if (problem || !canSave || (start && (!start.ownedByMe || !start.canEdit)) || (start?.visibility !== 'organization' && form.visibility === 'organization' && !canShare)) return;
-    setSaving(true); setError(null);
+    if (saveLock.current || capabilityUnavailable || problem || !canSave || (start && (!start.ownedByMe || !start.canEdit)) || (start?.visibility !== 'organization' && form.visibility === 'organization' && !canShare)) return;
+    saveLock.current = true; setSaving(true); setError(null);
     const body = cleanAgent(form);
     const r = start ? await agentsApi().updateAgent(start.id, body) : await agentsApi().createAgent(body);
-    setSaving(false);
+    saveLock.current = false; setSaving(false);
     if (r.ok && r.value?.agent) onSaved(r.value.agent, !start);
     else setError(r.ok ? 'workspace.err.generic' : messageKeyFor(r));
   }
 
   return (
-    <Dialog wide title={start ? t('workspace.agents.editTitle', { name: start.name }) : t('workspace.agents.builderTitle')} description={t('workspace.agents.builderIntro')} onClose={onClose}>
+    <Dialog wide title={start ? t('workspace.agents.editTitle', { name: start.name }) : t('workspace.agents.builderTitle')} description={t('workspace.agents.builderIntro')} onClose={() => { if (!saveLock.current) onClose(); }}>
       <form onSubmit={save} className={u.dialogBody} noValidate>
         <label className={u.field} htmlFor={`${id}-name`}><span>{t('workspace.agents.f.name')}</span>
           <input id={`${id}-name`} value={form.name} maxLength={AGENT_LIMITS.name} onChange={(e) => set('name', e.target.value)} aria-invalid={touched && problem === 'name' ? true : undefined} aria-describedby={touched && problem === 'name' ? `${id}-name-err` : undefined} />
@@ -226,11 +228,12 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
           </div>
         </fieldset>
 
+        {capabilityUnavailable && <p className={u.fieldError} role="alert">{t('workspace.capability.unavailable')}</p>}
         {!canSave && <div className={u.notice}><Icon name="alert" size={16} /><div><strong>{t('workspace.agents.saveUnavailable')}</strong><p>{t('workspace.agents.saveUnavailableBody')}</p></div></div>}
         {error && <p className={u.fieldError} role="alert">{t(error)}</p>}
         <div className={u.dialogFoot}>
-          <button type="button" className={u.button} onClick={onClose}>{t('workspace.cancel')}</button>
-          <button type="submit" className={u.buttonPrimary} disabled={!canSave || saving}>{saving ? t('workspace.saving') : start ? t('workspace.save') : t('workspace.agents.createButton')}</button>
+          <button type="button" className={u.button} disabled={saving} onClick={onClose}>{t('workspace.cancel')}</button>
+          <button type="submit" className={u.buttonPrimary} disabled={!canSave || saving || capabilityUnavailable}>{saving ? t('workspace.saving') : start ? t('workspace.save') : t('workspace.agents.createButton')}</button>
         </div>
       </form>
     </Dialog>

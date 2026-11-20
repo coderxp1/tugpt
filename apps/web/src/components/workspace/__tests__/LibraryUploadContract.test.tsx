@@ -5,6 +5,11 @@ import type { Collection, LibraryDocument } from '@/lib/workspace-data/contracts
 import { Collections } from '../Collections';
 import { fakeApi, iso } from './fake-api';
 
+// UI contract tests isolate the upload coordinator, which has its own recovery/transport tests.
+vi.mock('@/lib/workspace/file-upload', () => ({ uploadSafely: async (file: File, type: string, _scope: string, _signal: AbortSignal, _progress: unknown, api: { uploadFile: (blob: Blob, name: string, visibility: string) => Promise<{ ok: boolean; value?: { file: unknown } }> }, _storage: Storage, visibility: string) => {
+  const r = await api.uploadFile(new Blob([file], { type }), file.name, visibility);
+  return r.ok && r.value?.file ? { kind: 'stored', file: r.value.file } : { kind: 'uncertain' };
+} }));
 afterEach(() => { cleanup(); vi.useRealTimers(); vi.unstubAllGlobals(); });
 const col: Collection = { id: 'c1', name: 'Policies', description: null, visibility: 'private', ownedByMe: true, createdAt: iso(), updatedAt: iso() };
 const document = (status: LibraryDocument['status'] = 'pending'): LibraryDocument => ({
@@ -13,7 +18,7 @@ const document = (status: LibraryDocument['status'] = 'pending'): LibraryDocumen
   indexedAt: status === 'ready' ? iso() : null, createdAt: iso(), processingAttempts: 0, nextAttemptAt: null,
 });
 async function open() {
-  const { container } = render(<Collections />);
+  const { container } = render(<Collections uploadScope="test-owner" />);
   fireEvent.click(await screen.findByRole('button', { name: /^Open\s*: Policies$/ }));
   // Loading must settle before a mutation can update the collection state.
   await screen.findByRole('heading', { name: 'Policies' });

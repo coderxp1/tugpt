@@ -13,5 +13,5 @@ export const metadata: Metadata = { title: 'Library · TuGPT Workspace' };
  */
 export default async function LibraryPage() {
   const session = await getSessionContext().catch(() => null);
-  return <LibraryView role={session && !session.requestedTenantRejected ? session.tenant?.role : undefined} canManage={canManageKnowledge(session)} />;
+  return <LibraryView uploadScope={session?.tenant && !session.requestedTenantRejected ? `${session.tenant.organizationId}:${session.userId}` : undefined} role={session && !session.requestedTenantRejected ? session.tenant?.role : undefined} canManage={canManageKnowledge(session)} />;
 }

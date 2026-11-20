@@ -5,6 +5,11 @@ import type { Collection, LibraryDocument } from '@/lib/workspace-data/contracts
 import { Collections } from '../Collections';
 import { fakeApi, iso } from './fake-api';
 
+// UI contract tests isolate the upload coordinator, which has its own recovery/transport tests.
+vi.mock('@/lib/workspace/file-upload', () => ({ uploadSafely: async (file: File, type: string, _scope: string, _signal: AbortSignal, _progress: unknown, api: { uploadFile: (blob: Blob, name: string, visibility: string) => Promise<{ ok: boolean; value?: { file: unknown } }> }, _storage: Storage, visibility: string) => {
+  const r = await api.uploadFile(new Blob([file], { type }), file.name, visibility);
+  return r.ok && r.value?.file ? { kind: 'stored', file: r.value.file } : { kind: 'uncertain' };
+} }));
 afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const col: Collection = { id: 'c1', name: 'Shipping policies', description: 'Carriers, rates and SLAs', visibility: 'organization', ownedByMe: true, createdAt: iso(100), updatedAt: iso(10) };
@@ -13,7 +18,7 @@ const doc = (over: Partial<LibraryDocument>): LibraryDocument => ({ id: 'd1', co
 describe('Library collections', () => {
   it('says collections are unavailable when the Library API is not deployed', async () => {
     fakeApi({});
-    render(<Collections />);
+    render(<Collections uploadScope="test-owner" />);
     expect(await screen.findByText('Collections: not available in this workspace yet.')).toBeTruthy();
   });
 
@@ -23,7 +28,7 @@ describe('Library collections', () => {
       'POST /api/v1/library/collections': ({ body }) => ({ status: 201, body: { collection: { ...col, ...(body as object), id: 'c9' } } }),
       'GET /api/v1/library/collections/:id': () => ({ body: { collection: col, documents: [] } }),
     });
-    render(<Collections />);
+    render(<Collections uploadScope="test-owner" />);
     expect(await screen.findByText('No collections yet.')).toBeTruthy();
     fireEvent.click(screen.getAllByRole('button', { name: 'New collection' })[0]);
     const dialog = screen.getByRole('dialog', { name: 'New collection' });
@@ -40,7 +45,7 @@ describe('Library collections', () => {
       'GET /api/v1/library/collections/:id': () => ({ body: { collection: col, documents: [doc({}), doc({ id: 'd2', title: 'Contract.pdf', status: 'unsupported', errorCode: 'PDF_EXTRACTION_UNAVAILABLE', chunkCount: 0, indexedAt: null })] } }),
       'DELETE /api/v1/library/collections/:id/documents/:doc': () => ({ body: { deleted: true } }),
     });
-    render(<Collections />);
+    render(<Collections uploadScope="test-owner" />);
     fireEvent.click(await screen.findByRole('button', { name: /^Open\s*: Shipping policies$/ }));
     const table = await screen.findByRole('table', { name: 'Documents in Shipping policies' });
     expect(within(table).getByText('Ready')).toBeTruthy();
@@ -61,7 +66,7 @@ describe('Library collections', () => {
       'POST /api/v1/files': () => ({ status: 201, body: { file: { id: 'f7' } } }),
       'POST /api/v1/library/collections/:id/documents': () => ({ status: 201, body: { document: doc({ id: 'd7', fileId: 'f7', title: 'SLA.docx', status: 'pending', chunkCount: 0, indexedAt: null }) } }),
     });
-    const { container } = render(<Collections />);
+    const { container } = render(<Collections uploadScope="test-owner" />);
     fireEvent.click(await screen.findByRole('button', { name: /^Open\s*: Shipping policies$/ }));
     await screen.findByText('This collection has no documents yet.');
     const input = container.querySelector('input[type="file"]') as HTMLInputElement;
@@ -81,7 +86,7 @@ describe('Library collections', () => {
       'GET /api/v1/library/collections': () => ({ body: { collections: [col] } }),
       'GET /api/v1/library/search': () => ({ body: { hits: [{ chunkId: 'k1', documentId: 'd1', collectionId: 'c1', fileId: 'f1', title: 'Rates 2026.docx', ordinal: 3, snippet: 'Quito deliveries take two business days.', rank: 0.9 }] } }),
     });
-    render(<Collections />);
+    render(<Collections uploadScope="test-owner" />);
     fireEvent.change(await screen.findByRole('searchbox', { name: 'Search collections' }), { target: { value: 'Quito' } });
     fireEvent.click(screen.getByRole('button', { name: 'Search' }));
     expect(await screen.findByText('Quito deliveries take two business days.')).toBeTruthy();
@@ -95,7 +100,7 @@ describe('Library collections', () => {
       'POST /api/v1/files': () => ({ status: 201, body: { file: { id: 'f7' } } }),
       'POST /api/v1/library/collections/:id/documents': () => ({ status: 403, body: { error: 'FORBIDDEN' } }),
     });
-    const { container } = render(<Collections />);
+    const { container } = render(<Collections uploadScope="test-owner" />);
     fireEvent.click(await screen.findByRole('button', { name: /^Open\s*: Shipping policies$/ }));
     await screen.findByText('This collection has no documents yet.');
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(['rates'], 'rates.txt')] } });
@@ -110,7 +115,7 @@ describe('Library collections', () => {
       'GET /api/v1/library/collections/:id': () => ({ body: { collection: col, documents: [] } }),
       'POST /api/v1/files': () => ({ status: 503, body: { error: 'STORAGE_UNAVAILABLE' } }),
     });
-    const { container } = render(<Collections />);
+    const { container } = render(<Collections uploadScope="test-owner" />);
     fireEvent.click(await screen.findByRole('button', { name: /^Open\s*: Shipping policies$/ }));
     await screen.findByText('This collection has no documents yet.');
     fireEvent.change(container.querySelector('input[type="file"]')!, { target: { files: [new File(['rates'], 'rates.txt')] } });
@@ -125,7 +130,7 @@ describe('Library collections', () => {
       'GET /api/v1/library/collections': () => ({ body: { collections: [col] } }),
       'GET /api/v1/library/collections/:id': () => ({ body: { collection: col, documents: [doc({ status: 'indexing', chunkCount: 0, indexedAt: null }), doc({ id: 'd2', status: 'failed', errorCode: 'FILE_MISSING', chunkCount: 0, indexedAt: null })] } }),
     });
-    render(<Collections />);
+    render(<Collections uploadScope="test-owner" />);
     fireEvent.click(await screen.findByRole('button', { name: /^Open\s*: Shipping policies$/ }));
     expect(await screen.findByText('Indexing in progress. Search will be available when ready.')).toBeTruthy();
     expect(screen.getByText('The stored file could not be found. Contact your workspace administrator before uploading again.')).toBeTruthy();
