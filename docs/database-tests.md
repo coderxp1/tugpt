@@ -28,8 +28,7 @@ Original SQL regression files remain unchanged, including approval/enqueue, outb
 
 **Status:** active
 **Gate:** CI job `database-tests` in `.github/workflows/ci.yml`
-**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 71 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
-**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 59 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
+**Files:** <!-- database-tests-count:start -->`supabase/tests/database/*.sql` — 76 files<!-- database-tests-count:end -->, ~800 pgTAP assertions
 
 ## Why this document exists
 
