@@ -614,7 +614,7 @@ export interface UsageProviderGroup {
   costs: UsageCostTotal[];
 }
 
-/** The JSONB returned by `public.org_usage_summary(uuid, timestamptz, timestamptz)`. */
+/** The JSONB returned by `public.org_usage_summary(uuid, timestamptz, timestamptz)`. INTERNAL: service_role only since 20261121700002 (provider/model/cost); customers use org_usage_report. */
 export interface UsageSummary {
   organization_id: string;
   /** `from` inclusive, `to` exclusive. */
@@ -972,6 +972,36 @@ interface DatabaseDefinition {
           p_to: string;
         };
         Returns: UsageSummary;
+      };
+      /** Customer usage report (20261121700002): features/requests/tokens only; no provider/model/cost. */
+      org_usage_report: {
+        Args: {
+          p_organization_id: string;
+          p_from: string;
+          p_to: string;
+          p_bucket?: 'day' | 'month';
+          p_scope?: 'organization' | 'self';
+        };
+        Returns: Record<string, unknown>;
+      };
+      /** Server-only (sso_control/service_role) chat/agent usage recorder (20261121700002). */
+      record_chat_usage: {
+        Args: {
+          p_organization_id: string;
+          p_user_id: string;
+          p_thread_id: string;
+          p_turn_id: string;
+          p_call_index: number;
+          p_feature: 'chat' | 'agents';
+          p_provider: string;
+          p_model: string | null;
+          p_input_tokens: number | null;
+          p_output_tokens: number | null;
+          p_usage_basis: 'reported' | 'estimated' | 'unavailable';
+          p_outcome: 'succeeded' | 'failed' | 'cancelled';
+          p_request_id?: string | null;
+        };
+        Returns: { event_id: string; duplicate: boolean };
       };
       create_organization_with_owner: {
         Args: {

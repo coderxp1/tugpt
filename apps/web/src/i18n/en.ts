@@ -518,6 +518,8 @@ export const en: Dictionary = {
   'errors.VERIFIED_EMAIL_REQUIRED': 'Verify your account email before accepting an invitation.',
   'errors.INVALID_QUERY': 'The query parameters are not valid',
   'errors.QUERY_WINDOW_TOO_LARGE': 'The requested time window is too large',
+  'errors.INVALID_USAGE_RECORD': 'That usage record is not valid',
+  'errors.USAGE_TARGET_NOT_FOUND': 'The conversation for this usage was not found',
   'errors.INTERNAL_ERROR': 'An unexpected error occurred',
   // Media API (media-api/error-mapper.ts). Kept key-for-key with es.ts.
   'errors.QUOTA_EXCEEDED': 'Your organization reached its media generation limit',

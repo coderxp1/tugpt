@@ -4,7 +4,8 @@
 -- they are the four ways a usage report is normally wrong.
 --
 -- THE AGGREGATE IS THE ONLY READ PATH (G1-G6). The usage tables stay
--- service_role-only; `authenticated` gets EXECUTE on the public wrapper and
+-- service_role-only; since 20261121700002 so is the public wrapper (customers
+-- use org_usage_report), and
 -- nothing else. G6 is the positive control in the negative direction: a
 -- direct SELECT on the events table as `authenticated` must still be refused,
 -- or every aggregate assertion above it is decoration on an open door.
@@ -31,7 +32,7 @@
 -- summary.
 
 BEGIN;
-SELECT plan(22);
+SELECT plan(23);
 
 -- --- Fixtures ---------------------------------------------------------------
 
@@ -127,8 +128,9 @@ SELECT is(
   (SELECT count(*)::int FROM information_schema.routine_privileges
    WHERE routine_schema = 'public' AND routine_name = 'org_usage_summary'
      AND grantee = 'authenticated' AND privilege_type = 'EXECUTE'),
-  1,
-  'G5: authenticated may EXECUTE the public wrapper');
+  0,
+  'G5: authenticated may NOT EXECUTE the wrapper since 20261121700002 — it returns '
+  'provider/model/cost; customers use public.org_usage_report');
 
 -- The positive control in the negative direction. Every aggregate assertion
 -- below is worthless if the rows themselves are readable, and this is the
@@ -142,6 +144,12 @@ SELECT throws_ok(
   NULL,
   'G6: a member still cannot SELECT the events table directly — the summary '
   'is the read path, not a convenience over one');
+
+SELECT throws_ok(
+  $$SELECT public.org_usage_summary('aaaaaaaa-c057-0000-0000-0000000000a1', now() - INTERVAL '30 days', now())$$,
+  '42501',
+  NULL,
+  'G9: a member cannot call the provider/model/cost summary (20261121700002)');
 
 SELECT is(
   (SELECT count(*)::int FROM information_schema.routine_privileges
@@ -159,7 +167,11 @@ SELECT is(
 
 -- --- M: membership is the authorization --------------------------------------
 
--- M1 runs as the member (role still authenticated, claims still set).
+-- Since 20261121700002 only service_role may call the wrapper; the membership
+-- contract below still applies to it (auth.uid() comes from the claims).
+SET LOCAL ROLE postgres;
+SET LOCAL ROLE service_role;
+-- M1 runs with the member's claims.
 SELECT is(
   (public.org_usage_summary(
      'aaaaaaaa-c057-0000-0000-0000000000a1',
@@ -174,7 +186,7 @@ SET LOCAL ROLE postgres;
 -- error for one that does not. Compared side by side, they are the point —
 -- one answer, no oracle.
 SELECT pg_temp.act_as('11111111-c057-0000-0000-00000000a002');
-SET LOCAL ROLE authenticated;
+SET LOCAL ROLE service_role;
 
 SELECT throws_ok(
   $$SELECT public.org_usage_summary(
@@ -195,7 +207,7 @@ SELECT throws_ok(
 
 SET LOCAL ROLE postgres;
 SELECT set_config('request.jwt.claims', '{}', true);
-SET LOCAL ROLE authenticated;
+SET LOCAL ROLE service_role;
 
 SELECT throws_ok(
   $$SELECT public.org_usage_summary(
@@ -209,7 +221,7 @@ SELECT throws_ok(
 
 SET LOCAL ROLE postgres;
 SELECT pg_temp.act_as('11111111-c057-0000-0000-00000000a001');
-SET LOCAL ROLE authenticated;
+SET LOCAL ROLE service_role;
 
 SELECT is(
   (public.org_usage_summary(

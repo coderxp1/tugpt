@@ -535,6 +535,8 @@ export const es = {
   'errors.VERIFIED_EMAIL_REQUIRED': 'Verifica el correo de tu cuenta antes de aceptar una invitación.',
   'errors.INVALID_QUERY': 'Los parámetros de la consulta no son válidos',
   'errors.QUERY_WINDOW_TOO_LARGE': 'El período solicitado es demasiado grande',
+  'errors.INVALID_USAGE_RECORD': 'Ese registro de uso no es válido',
+  'errors.USAGE_TARGET_NOT_FOUND': 'No se encontró la conversación de este uso',
   'errors.INTERNAL_ERROR': 'Ocurrió un error inesperado',
   // Media API (media-api/error-mapper.ts). Spanish is the source of truth;
   // the server sends the English sentence as the fallback.

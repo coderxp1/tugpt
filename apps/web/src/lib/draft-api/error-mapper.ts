@@ -67,6 +67,14 @@ const ERROR_MAP: Record<string, MappedError> = {
   P3J03: { status: 400, code: 'INVALID_QUERY', message: 'Invalid time window' },
   P3J04: { status: 400, code: 'QUERY_WINDOW_TOO_LARGE', message: 'The requested time window is too large' },
 
+  // Usage accounting & report (20261121700002). P3U01/P3U02 come only from the
+  // server-side recorder (sso_control), never from a customer request; mapped so a
+  // future server route cannot turn them into a 500. P3U03 is the report's
+  // bucket/scope validation, which the route performs first.
+  P3U01: { status: 422, code: 'INVALID_USAGE_RECORD', message: 'That usage record is not valid' },
+  P3U02: { status: 404, code: 'USAGE_TARGET_NOT_FOUND', message: 'The conversation for this usage was not found' },
+  P3U03: { status: 400, code: 'INVALID_QUERY', message: 'Invalid report parameters' },
+
   // Team & organization management (20261102000001, 20261121700001). P3S01
   // answers both "not a member" and "no such organization" so ids cannot be
   // probed; the routes return 401 before calling, so here it is only ever the
