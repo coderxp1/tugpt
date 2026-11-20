@@ -130,7 +130,7 @@ export const es = {
   'workspace.agent.customLater': 'Los agentes personalizados aún no están disponibles.',
   'workspace.agent.browse': 'Ver agentes',
   'workspace.agents.title': 'Agentes para tu trabajo',
-  'workspace.agents.intro': 'Un agente es un asistente con sus propias instrucciones, conocimiento y apps. Empieza con el Asistente TuGPT; después llegarán los agentes personalizados de tu equipo.',
+  'workspace.agents.intro': 'Un agente es un asistente con sus propias instrucciones, modelo y conocimiento. Use el Asistente TuGPT para tareas generales o un agente personalizado para un trabajo específico.',
   'workspace.agents.available': 'Disponibles para ti',
   'workspace.agents.tagBuiltIn': 'Incluido',
   'workspace.agents.tagOrg': 'Toda tu organización',

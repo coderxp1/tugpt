@@ -118,7 +118,7 @@ export const en: Dictionary = {
   'workspace.agent.customLater': 'Custom agents are not available yet.',
   'workspace.agent.browse': 'Browse agents',
   'workspace.agents.title': 'Agents for your work',
-  'workspace.agents.intro': 'An agent is an assistant with its own instructions, knowledge and apps. Start with the TuGPT Assistant; custom agents for your team come next.',
+  'workspace.agents.intro': 'An agent is an assistant with its own instructions, model and knowledge. Use the TuGPT Assistant for general tasks or a custom agent for a specific job.',
   'workspace.agents.available': 'Available to you',
   'workspace.agents.tagBuiltIn': 'Built in',
   'workspace.agents.tagOrg': 'Everyone in your organization',

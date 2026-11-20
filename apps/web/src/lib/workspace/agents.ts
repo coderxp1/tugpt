@@ -1,12 +1,4 @@
-/**
- * Agents in the Workspace: a typed adapter, so the UI is built against the contract and not against
- * an endpoint that does not exist yet.
- *
- * Today there is exactly one agent, and it is real: the TuGPT Assistant is the Workspace chat itself
- * (system prompt and tools are set by the chat backend). Custom agents need the Agents API
- * (docs/workspace/api-contracts.md, C-1). Until it ships, `agentsApiAvailable` is false and
- * the UI says so; it never lists agents that cannot be used.
- */
+import { workspaceAgentsEnabled } from './agent-release-gate';
 
 /** C-1 response item: GET /api/v1/agents. Kept here so UI and contract cannot drift. */
 export interface AgentSummary {
@@ -39,8 +31,11 @@ export const BUILT_IN_AGENT: AgentSummary = {
   updatedAt: null,
 };
 
-/** Release gate: keep false until real CRUD, permissions, restoration and execution acceptance pass. */
-export const agentsApiAvailable = false;
+/** Default off. Explicit staging build opt-in; never an authorization boundary. */
+export const agentsApiAvailable = workspaceAgentsEnabled(
+  process.env.NEXT_PUBLIC_TUGPT_DEPLOYMENT_TIER,
+  process.env.NEXT_PUBLIC_TUGPT_WORKSPACE_AGENTS,
+);
 
 export interface AgentCatalogue { readonly agents: readonly AgentSummary[]; readonly customAgentsAvailable: boolean }
 

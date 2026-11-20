@@ -38,7 +38,9 @@
     "docs/server-migrations.md",
     "docker-compose.yml",
     "apps/worker/Dockerfile",
-    "supabase/migrations/**"
+    "supabase/migrations/**",
+    "supabase/tests/database/**",
+    "docs/database-tests.md"
   ],
 
   // Every @tugpt/* package now compiles to dist/ and points `main` and
@@ -51,6 +53,7 @@
   // '@tugpt/security'" whenever the build cache happens to be cold for a
   // package the task depends on, which is an ordering bug that shows up as a
   // type error and sends people looking in the wrong place.
+  "globalEnv": ["NEXT_PUBLIC_TUGPT_DEPLOYMENT_TIER", "NEXT_PUBLIC_TUGPT_WORKSPACE_AGENTS"],
   "tasks": {
     "build": {
       "dependsOn": ["^build"],
