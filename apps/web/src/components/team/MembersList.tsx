@@ -34,7 +34,7 @@ export function MembersList({ members, viewerId, viewerRole = null, organization
               const self = m.userId === viewerId;
               return (
               <tr key={m.userId} data-member={self ? 'self' : 'other'} data-role={m.role}>
-                <td data-label={t('team.col.name')}><strong className={s.memberName}>{m.name ?? t('team.noName')}</strong>{self && <span className={`${s.badge} ${s.ok}`} style={{ marginLeft: 8 }}>{t('team.you')}</span>}</td>
+                <td data-label={t('team.col.name')}><strong className={s.memberName}>{m.name ?? t('team.noName')}</strong>{self && <>{' '}<span className={`${s.badge} ${s.ok}`} style={{ marginLeft: 4 }}>{t('team.you')}</span></>}</td>
                 <td data-label={t('team.col.email')}>{m.email ? <EmailText value={m.email} /> : '—'}</td>
                 <td data-label={t('team.col.role')}>{roleLabel(m.role, t)}</td>
                 <td data-label={t('team.col.joined')} className={s.nowrap}>{formatDate(m.joinedAt, t.locale) || '—'}</td>

@@ -28,6 +28,12 @@ describe('MembersList', () => {
     expect(within(screen.getByText('Clara Member').closest('tr')!).getByText('Member')).toBeTruthy();
     expect(screen.getByTestId('member-count').textContent).toBe('2 people');
   });
+  it('keeps the own-row "You" badge a separate word, so it is not read as part of the name', () => {
+    render(<MembersList members={members} viewerId="u1" viewerRole="owner" organizationName="Hartmann" />);
+    const self = document.querySelector('tr[data-member="self"] td')!;
+    expect(self.textContent).toMatch(/\S You$/);
+    expect(self.textContent).not.toMatch(/\SYou$/);
+  });
   it('shows members the list without the management note', () => {
     render(<MembersList members={members} viewerId="u2" viewerRole="agent" organizationName="Hartmann" />);
     expect(screen.queryAllByRole('button')).toHaveLength(0);

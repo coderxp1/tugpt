@@ -48,12 +48,12 @@ describe('InviteAccept', () => {
     expect(sessionStorage.getItem(PENDING_INVITE_KEY)).toBeNull();
   });
 
-  it('guides the user when a fresh e-mail confirmation is required and keeps the token', async () => {
+  it('guides the user when a fresh email confirmation is required and keeps the token', async () => {
     window.history.replaceState(null, '', '/invite#tok-2');
     fetchMock.mockResolvedValueOnce(json({ error: { code: 'VERIFIED_EMAIL_REQUIRED', message: 'Fresh verified email evidence is required.' } }, 403));
     render(<InviteAccept />);
     await userEvent.click(await screen.findByRole('button', { name: 'Join organization' }));
-    expect((await screen.findByRole('alert')).textContent).toContain('fresh e-mail confirmation');
+    expect((await screen.findByRole('alert')).textContent).toContain('fresh email confirmation');
     expect(screen.getByRole('link', { name: 'Sign out and sign in again' })).toBeTruthy();
     expect(sessionStorage.getItem(PENDING_INVITE_KEY)).toBe('tok-2');
   });
