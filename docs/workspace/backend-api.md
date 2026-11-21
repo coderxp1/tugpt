@@ -541,6 +541,29 @@ further change needs a **new** migration ID.
 | Unit (Q-13 regressions) | `pnpm --filter web test`; `pnpm --filter @tugpt/workspace-core test` | `upload-idempotency.test.ts` (key parsing, replay / mismatch / in-progress / abandoned, `Retry-After`); `turns.test.ts` (lease claims and 409 mapping); `workspace-core.test.ts` PPTX suite (slide order, speaker notes, tables, slide cap) |
 | pgTAP (Q-13) | `workspace_chat_turn_runs.test.sql`, `workspace_file_upload_request_ids.test.sql` | lease claim/release/expiry, server-only grants, per-owner upload-id uniqueness, isolation |
 | HTTP E2E (fake model, SIMULATED; disposable DB only) | `tests/workspace-e2e/chat-turns-http.e2e.mjs`, `files-reliability-http.e2e.mjs`, `chat-crash-recovery-http.e2e.mjs` (needs a harness that SIGKILLs and restarts the server between `--phase=start` and `--phase=verify`) | retries, concurrent retries, long threads; upload idempotency, real-producer documents incl. PPTX notes and scanned PDF, isolation; server crash and 150 s lease recovery. Not real-provider validation |
+| HTTP E2E (Q-14; fake model, SIMULATED) | `tests/workspace-e2e/contracts-q14-http.e2e.mjs` phases `main`, `roles`, `compat` | feature signal and turn codes on q13 / pre-q13 / pre-q12 databases; retry contract; move, dedupe, isolation; role matrix; citations after library changes |
+| Unit (Q-14) | `features.test.ts`, `library.test.ts`, `proxy-route-coverage.test.ts` | probe classification (missing relation/column only), 403 vs 404 refusals, route inventory |
+
+### pgTAP baseline (Q-14, recorded 2026-11-20 on a disposable 128-migration stack)
+
+The authoritative suite is `supabase/tests/database/*.test.sql` (80 files; CI `database-tests`). Q-14 result:
+**78 files clean, 2 known environment failures, identical per file to the Q-13 run**, no Q-14 regression.
+
+| File | Result | Classification |
+|---|---|---|
+| `appointment_requests.test.sql` | test 26 fails (`service_role` holds DELETE: have 2, want 0) | known baseline (environment grants), also on Q-13 |
+| `draft_attribution_and_audit.test.sql` | 21 ok, psql exit 3 | known baseline, also on Q-13 |
+| `supabase/tests/tool_approvals.test.sql` (**outside** `tests/database`) | 0 ok, 4 not ok, psql exit 3 | **stale template, not a Q-14 regression** (below) |
+
+`tool_approvals.test.sql` origin: added in `8e9dc9d` (2026-11-15, "feat(connect): B-1..B-7", Connect area, not Workspace).
+It is a template with literal placeholders (`'<org>'`, `'<conn>'`) and calls the B-7 signatures
+`record_tool_approval(uuid,uuid,text,text,int)` / `revoke_tool_approval(uuid,uuid,text,text)`, which
+`20261115000008_approval_integrity` dropped and `…000019/20/21` replaced (hence `42883 function does not exist`).
+The file is **not on `origin/main`** (there `supabase/tests/` holds only `database/` and `run-local.sh`); it exists only on
+the unmerged stack. The approval functions are covered by `tests/database/workspace_approval_requests.test.sql` and
+`connect_mcp_privilege_hygiene.test.sql`. Risk: CI keeps race tests in `supabase/race-tests/` precisely because the
+`supabase test db --local` scan covers `supabase/tests/`; if the stack is ever merged, this file would likely fail CI.
+Owner of the fix: the Connect area (rewrite into `tests/database` or remove), not Workspace. Not changed here.
 
 
 ### F-4: edit permission and resulting visibility
