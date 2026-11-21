@@ -28,7 +28,7 @@ export async function workspaceContext(request: Request): Promise<WorkspaceConte
 
 export function errorResponse(status: number, code: WorkspaceErrorCode, retryAfterSeconds?: number): NextResponse {
   const headers: Record<string, string> = { ...PRIVATE_HEADERS };
-  if (status === 429 && retryAfterSeconds !== undefined) headers['Retry-After'] = String(Math.max(1, Math.ceil(retryAfterSeconds)));
+  if ((status === 429 || status === 409) && retryAfterSeconds !== undefined) headers['Retry-After'] = String(Math.max(1, Math.ceil(retryAfterSeconds)));
   return NextResponse.json(retryAfterSeconds !== undefined ? { error: code, retryAfterSeconds } : { error: code }, { status, headers });
 }
 

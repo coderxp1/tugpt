@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import type { StoredMessage } from './store';
-import { decideSend, modelHistory, parseTurnRequest, PENDING_WINDOW_MS, publicTurn, resolveTurn } from './turns';
+import { claimRefusalCode, decideSend, modelHistory, parseTurnRequest, PENDING_WINDOW_MS, publicTurn, resolveTurn, runInFlight } from './turns';
 
 const T1 = '11111111-1111-4111-8111-111111111111';
 const T2 = '22222222-2222-4222-8222-222222222222';
@@ -93,5 +93,34 @@ describe('modelHistory', () => {
   });
   it('keeps the last `limit` entries', () => {
     expect(modelHistory([msg('user', 'a', null), msg('assistant', 'b', null), msg('user', 'c', null)], 2).map((m) => m.content)).toEqual(['b', 'c']);
+  });
+});
+
+describe('turn runs (Q-13)', () => {
+  const T = '11111111-1111-4111-8111-111111111111';
+  const now = Date.parse('2026-11-22T10:00:00Z');
+  const at = (s: number) => new Date(now + s * 1000).toISOString();
+  const m = (o: Partial<StoredMessage>): StoredMessage => ({ id: 'x', role: 'user', content: 'q', createdAt: at(-600), status: 'complete', mentions: [], capabilityKey: null, citations: [], knowledgeUnavailable: false, turnId: T, ...o });
+  const failed = [m({ id: 'u1' }), m({ id: 'a1', role: 'assistant', status: 'error', createdAt: at(-300) })];
+  it('a live run without a newer answer is in flight; an expired or superseded one is not', () => {
+    expect(runInFlight({ claimedAt: at(-5), expiresAt: at(100) }, failed[1], now)).toBe(true);
+    expect(runInFlight({ claimedAt: at(-5), expiresAt: at(100) }, null, now)).toBe(true);
+    expect(runInFlight({ claimedAt: at(-400), expiresAt: at(-250) }, failed[1], now)).toBe(false);
+    expect(runInFlight({ claimedAt: at(-310), expiresAt: at(1) }, failed[1], now)).toBe(false);
+    expect(runInFlight(null, failed[1], now)).toBe(false);
+  });
+  it('a failed turn reads pending while its retry runs, and error again once the run is over', () => {
+    expect(resolveTurn(failed, T, now, { claimedAt: at(-5), expiresAt: at(100) })?.status).toBe('pending');
+    expect(resolveTurn(failed, T, now, { claimedAt: at(-400), expiresAt: at(-250) })?.status).toBe('error');
+  });
+  it('maps refused claims to the code for the turn as it is now', () => {
+    const view = (o: Partial<{ status: 'complete' | 'error' | 'stopped' | 'pending' | 'interrupted'; latest: boolean }>) =>
+      ({ ...resolveTurn(failed, T, now)!, ...o });
+    expect(claimRefusalCode('busy', view({}))).toBe('TURN_IN_PROGRESS');
+    expect(claimRefusalCode('stale', view({ status: 'pending' }))).toBe('TURN_IN_PROGRESS');
+    expect(claimRefusalCode('stale', view({ status: 'complete' }))).toBe('TURN_EXISTS');
+    expect(claimRefusalCode('not_latest', view({}))).toBe('TURN_NOT_LATEST');
+    expect(claimRefusalCode('stale', view({ latest: false }))).toBe('TURN_NOT_LATEST');
+    expect(claimRefusalCode('stale', view({ status: 'error' }))).toBe('TURN_CHANGED');
   });
 });

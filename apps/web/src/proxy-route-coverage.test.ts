@@ -346,6 +346,12 @@ const ROUTES: RouteExpectation[] = [
     why: 'Proxy requires a session first (401 JSON). Then: Handler authenticates and resolves the tenant; invoker-rights RPC returns catalogue states for the caller only, without connection ids.',
   },
   {
+    path: '/api/v1/chat/features',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Handler authenticates; read-only, row-less (limit 0) schema probes under the caller RLS report which backend contracts are available (Q-14). No rows, no secrets; private no-store.',
+  },
+  {
     path: '/api/v1/create/images',
     kind: 'api',
     type: 'protected',

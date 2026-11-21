@@ -38,7 +38,7 @@ import { WorkspaceError } from './errors';
 import { toErrorResponse } from './http';
 import { consumeRateLimit } from './rate-limit';
 
-import { decideTurn, openTurn, type TurnRequest } from '@/lib/chat/turn-send';
+import { claimFresh, claimRetry, currentTurn, decideTurn, openTurn, type TurnRequest, type TurnRun } from '@/lib/chat/turn-send';
 import { modelHistory, type TurnView } from '@/lib/chat/turns';
 
 const HISTORY = 30;
@@ -190,10 +190,19 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
   // A repeated turn is answered before retrieval or any write (a new thread has no turns yet).
   const turnRequest: TurnRequest = o.turn ?? { turnId: null, retry: false };
   let retry: TurnView | null = null;
+  // A retry runs only while it holds the turn's run lease (one model run per turn, Q-13).
+  let run: TurnRun | null = null;
   if (thread) {
-    const d = decideTurn(history, turnRequest, content);
-    if (d instanceof NextResponse) return d;
-    if (d) { retry = d; history = [...d.before]; }
+    const scope = { organizationId: orgId, userId: ctx.userId, threadId: thread.id };
+    try {
+      const d = await decideTurn(ctx.db, scope, turnRequest, content);
+      if (d instanceof NextResponse) return d;
+      if (d) {
+        const claimed = await claimRetry(control, ctx.db, scope, d);
+        if (claimed instanceof NextResponse) return claimed;
+        run = claimed; retry = d; history = [...d.before];
+      }
+    } catch (e) { return fail(e, o.errorStyle); }
   }
 
   // Knowledge: degrade to "no excerpts" rather than failing the turn.
@@ -217,11 +226,12 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
     const opened = await openTurn(ctx.db, {
       organizationId: orgId, threadId: tid, content,
       mentions: attached.map((c) => ({ capability: c.capabilityKey, provider: c.providerKey })),
-    }, turnRequest, retry, () => listMessages(ctx.db, orgId, tid));
-    if (opened instanceof NextResponse) return opened;
+    }, turnRequest, retry, () => currentTurn(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId: tid }, turnRequest.turnId ?? ''));
+    if (opened instanceof NextResponse) { await run?.release(); return opened; }
     ({ userMessage, turnId, retried } = opened);
-  } catch (e) { return fail(e, o.errorStyle); }
+  } catch (e) { await run?.release(); return fail(e, o.errorStyle); }
   const threadId = thread.id;
+  const turnRun: TurnRun = run ?? await claimFresh(control, { organizationId: orgId, userId: ctx.userId, threadId }, turnId);
 
   const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached, { registry });
   const base = systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(o.timeZone), attached: toolset.labels });
@@ -286,6 +296,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
       } catch {
         if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE', turnId });
       }
+      await turnRun.release();
       try { controller.close(); } catch { /* client went away */ }
     },
   });

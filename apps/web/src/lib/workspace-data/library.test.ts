@@ -6,7 +6,7 @@
 import { describe, expect, it } from 'vitest';
 import type { DbResult, WorkspaceDb } from './db';
 import { WorkspaceError } from './errors';
-import { ADD_DOCUMENT_ATTEMPTS, addDocument } from './library';
+import { ADD_DOCUMENT_ATTEMPTS, addDocument, deleteCollection, removeDocument, updateCollection } from './library';
 
 const ORG = 'a0000000-0000-4000-8000-000000000000';
 const ME = 'a0000000-0000-4000-8000-0000000000a1';
@@ -71,5 +71,49 @@ describe('addDocument retry contract (Q-8)', () => {
     const e = await addDocument(db, ORG, ME, COL, { fileId: FILE }).catch((x: unknown) => x);
     expect([(e as WorkspaceError).status, (e as WorkspaceError).code]).toEqual([409, 'CONFLICT']);
     expect(calls).toEqual(['workspace_files.select']);
+  });
+});
+
+/**
+ * Q-14: writes RLS let touch no row. Fake where delete()/update() resolve to the scripted
+ * row list (awaitable or via maybeSingle) and select()...maybeSingle() answers visibility.
+ */
+function writeDb(affected: unknown[], visible: unknown) {
+  const calls: string[] = [];
+  const db = {
+    from(table: string) {
+      let op = 'select';
+      const answer = () => (op === 'select' ? { data: visible, error: null } : { data: op === 'update' ? (affected[0] ?? null) : affected, error: null });
+      const q: Record<string, unknown> = {
+        select: () => q, eq: () => q,
+        delete: () => { op = 'delete'; return q; },
+        update: () => { op = 'update'; return q; },
+        maybeSingle: async () => { calls.push(`${table}.${op}`); return answer(); },
+        then: (res: (v: unknown) => unknown) => { calls.push(`${table}.${op}`); return Promise.resolve(answer()).then(res); },
+      };
+      return q;
+    },
+  } as unknown as WorkspaceDb;
+  return { db, calls };
+}
+const statusOf = async (p: Promise<unknown>) => { const e = await p.then(() => null, (x: unknown) => x); return e instanceof WorkspaceError ? [e.status, e.code] : 'ok'; };
+const DOC = 'd0000000-0000-4000-8000-000000000001';
+
+describe('remove / rename / delete refusals: 403 vs 404 (Q-14)', () => {
+  it('removeDocument: removed -> ok; readable but not writable -> 403 FORBIDDEN; gone or invisible -> 404 NOT_FOUND', async () => {
+    expect(await statusOf(removeDocument(writeDb([{ id: DOC }], null).db, ORG, COL, DOC))).toBe('ok');
+    const forbidden = writeDb([], { id: DOC });
+    expect(await statusOf(removeDocument(forbidden.db, ORG, COL, DOC))).toEqual([403, 'FORBIDDEN']);
+    expect(forbidden.calls).toEqual(['knowledge_documents.delete', 'knowledge_documents.select']);
+    expect(await statusOf(removeDocument(writeDb([], null).db, ORG, COL, DOC))).toEqual([404, 'NOT_FOUND']);
+  });
+  it('updateCollection: readable but not writable -> 403; invisible -> 404', async () => {
+    expect(await statusOf(updateCollection(writeDb([], { id: COL }).db, ORG, ME, COL, { name: 'x' }))).toEqual([403, 'FORBIDDEN']);
+    expect(await statusOf(updateCollection(writeDb([], null).db, ORG, ME, COL, { name: 'x' }))).toEqual([404, 'NOT_FOUND']);
+  });
+  it('deleteCollection keeps the same rule', async () => {
+    expect(await statusOf(deleteCollection(writeDb([], { id: COL }).db, ORG, COL))).toEqual([403, 'FORBIDDEN']);
+    expect(await statusOf(deleteCollection(writeDb([], null).db, ORG, COL))).toEqual([404, 'NOT_FOUND']);
+    expect(await statusOf(deleteCollection(writeDb([{ id: COL }], null).db, ORG, COL))).toBe('ok');
   });
 });

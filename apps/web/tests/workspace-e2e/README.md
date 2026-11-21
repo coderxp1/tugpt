@@ -108,3 +108,16 @@ Additional setup on top of the conversations setup above:
 
 The runner works on databases with and without the Q-9c migrations. On an
 older database the app uses its pre-Q-9c fallbacks (docs/workspace/operations.md §1a).
+
+## Q-14 contracts runner (`contracts-q14-http.e2e.mjs`)
+
+Real `next start` build, real worker, PostgREST with the SSO bridge, **simulated** model (fake-llm). Phases:
+
+* `E2E_PHASE=main`: K1–K2 (feature signal, turn codes), R1–R5 (regenerate/retry), D1–D4 (move/dedupe/isolation),
+  C1–C5 (citations after unlink, visibility change, move, file delete).
+* `E2E_PHASE=roles E2E_ROLE=agent|manager|admin`: collection/agent authorization matrix (memberA's org role switched
+  on a **disposable** database).
+* `E2E_PHASE=compat E2E_EXPECT_SCHEMA=q13|pre-q13|pre-q12`: only K1–K2 against an older database.
+
+Agent 4 wrappers (host-only): `agent4-env/e2e-q14.sh` (main + roles) and `agent4-env/e2e-q14-compat.sh` (compat;
+skips the `long-thread.sql` seed, which needs `turn_id`).

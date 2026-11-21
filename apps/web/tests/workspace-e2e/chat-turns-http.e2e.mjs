@@ -13,6 +13,12 @@
  *   - the model sees the prompt once (no duplicate in its history) on retry;
  *   - concurrent duplicates write one user message; turn-less sends are unchanged;
  *   - other users and tenants cannot read or reuse the turn; the agent route stamps turns too.
+ * Q-13 (turn run leases, migration 20261122100001):
+ *   - two retries of one failed turn at once: exactly one runs, the other is 409 TURN_IN_PROGRESS
+ *     with no model call, and GET reads `pending` while the retry runs;
+ *   - a 450-message thread (long-thread.sql, seeded by e2e-q13.sh): reads return the latest 400,
+ *     the latest failed turn is retried, an old failed turn outside the window is found but refused
+ *     (TURN_NOT_LATEST).
  *
  * env: E2E_BASE_URL, E2E_ORIGIN, E2E_COOKIES_FILE, FAKE_LLM_LOG, E2E_EVIDENCE (optional JSON output path).
  * Exit 0 only if every check passed. Cookies and tokens are never logged.
@@ -57,7 +63,9 @@ async function check(name, fn) {
   catch (e) { failed++; console.log(`not ok - ${name}\n  ${String(e.message).split('\n').slice(0, 8).join('\n  ')}`); }
 }
 
-const T1 = randomUUID(), T2 = randomUUID(), T3 = randomUUID(), T4 = randomUUID(), T5 = randomUUID();
+const T1 = randomUUID(), T2 = randomUUID(), T3 = randomUUID(), T4 = randomUUID(), T5 = randomUUID(), T6 = randomUUID();
+const T_LONG = 'a4700000-0000-4000-8000-0000000000c1', TL_OLD = 'a4c10000-0000-4000-8000-000000000001', TL_LATEST = 'a4c10000-0000-4000-8000-000000000002';
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 let firstAnswerId = '';
 
 await check('1 fresh send with turnId: turn stamped on user + assistant, echoed in events', async () => {
@@ -203,6 +211,70 @@ await check('10 agent turns: run route stamps the turn; repeating it on the agen
   assert.equal(g.json.turn.status, 'complete');
   await http('ownerA', 'DELETE', `/api/v1/agents/${agentId}`);
   note('agent-turn', { events: ev.map((e) => e.type), repeat: repeat.json.code });
+});
+
+await check('11 Q-13 two retries of one failed turn at once: one runs, the other 409 TURN_IN_PROGRESS (no model call); GET pending meanwhile', async () => {
+  const content = `[fail-once] [slow] Reconcile the March invoices ${T6.slice(0, 8)}`;
+  const first = ndjson((await send({ content, turnId: T6 })).text);
+  assert.equal(first.at(-1).type, 'error');
+  assert.equal((await getTurn(T6)).json.turn.status, 'error');
+  const calls = llmCalls().length;
+  const pA = send({ content, turnId: T6, retry: true });
+  const pB = send({ content, turnId: T6, retry: true });
+  const mid = [];
+  for (let i = 0; i < 20; i++) { await sleep(200); const st = (await getTurn(T6)).json?.turn?.status; mid.push(st); if (st === 'pending') break; }
+  const colleague = (await getTurn(T6, 'ownerA')).status;
+  const otherTenant = (await send({ content, turnId: T6, retry: true }, 'ownerB')).status;
+  const [a, b] = await Promise.all([pA, pB]);
+  const statuses = [a.status, b.status].sort();
+  assert.deepEqual(statuses, [200, 409], `statuses ${statuses}: ${a.text.slice(0, 120)} | ${b.text.slice(0, 120)}`);
+  const winner = a.status === 200 ? a : b; const loser = a.status === 409 ? a : b;
+  assert.equal(loser.json.code, 'TURN_IN_PROGRESS');
+  assert.ok(mid.includes('pending'), `GET during the retry never read pending: ${mid.join(',')}`);
+  assert.equal(colleague, 404); assert.equal(otherTenant, 404);
+  assert.equal(ndjson(winner.text).at(-1).type, 'done');
+  const modelRuns = llmCalls().slice(calls).filter((c) => c.messages.at(-1)?.content === content).length;
+  assert.equal(modelRuns, 1, `model ran ${modelRuns} times for two concurrent retries`);
+  const msgs = await thread();
+  assert.equal(ofTurn(msgs, T6, 'user').length, 1);
+  assert.deepEqual(ofTurn(msgs, T6, 'assistant').map((m) => m.status), ['error', 'complete']);
+  const after = await send({ content, turnId: T6, retry: true });
+  assert.equal(after.status, 409); assert.equal(after.json.code, 'TURN_EXISTS');
+  note('concurrent-retries', { statuses, loserCode: loser.json.code, loserTurnStatus: loser.json.turn?.status ?? null, getDuringRetry: [...new Set(mid)],
+    colleague, otherTenant, modelRunsForBothRetries: modelRuns, answerStatuses: ofTurn(msgs, T6, 'assistant').map((m) => m.status), retryAfterDone: after.json.code });
+});
+
+await check('12 Q-13 long thread (450 messages): latest 400 returned; latest failed turn retried; old failed turn found but TURN_NOT_LATEST', async () => {
+  const msgs = await thread('memberA', T_LONG);
+  assert.equal(msgs.length, 400);
+  assert.equal(msgs[0].content, 'Long thread message 50');
+  assert.equal(msgs.at(-1).turnId, TL_LATEST); assert.equal(msgs.at(-1).status, 'error');
+  const old = await getTurn(TL_OLD, 'memberA', T_LONG);
+  assert.equal(old.status, 200, old.text.slice(0, 200));
+  assert.equal(old.json.turn.status, 'error'); assert.equal(old.json.turn.latest, false);
+  const latest = await getTurn(TL_LATEST, 'memberA', T_LONG);
+  assert.equal(latest.json.turn.status, 'error'); assert.equal(latest.json.turn.latest, true);
+  const calls = llmCalls().length;
+  const refused = await send({ content: 'Long thread opening question', turnId: TL_OLD, retry: true }, 'memberA', T_LONG);
+  assert.equal(refused.status, 409); assert.equal(refused.json.code, 'TURN_NOT_LATEST');
+  assert.equal(llmCalls().length, calls, 'a refused retry called the model');
+  const r = await send({ content: 'Long thread latest question', turnId: TL_LATEST, retry: true }, 'memberA', T_LONG);
+  assert.equal(r.status, 200, r.text.slice(0, 200));
+  const ev = ndjson(r.text);
+  assert.equal(ev.find((e) => e.type === 'user').message.id, latest.json.turn.userMessage.id);
+  assert.equal(ev.at(-1).type, 'done');
+  const sent = llmCalls().slice(calls);
+  assert.equal(sent.length, 1);
+  const hist = sent[0].messages.map((m) => m.content);
+  assert.equal(hist.filter((c) => c === 'Long thread latest question').length, 1);
+  assert.ok(hist.includes('Long thread message 447'), 'the most recent history is missing from the model call');
+  assert.ok(!hist.includes('Long thread opening question'), 'the model saw history from the oldest end of the thread');
+  const after = await thread('memberA', T_LONG);
+  assert.equal(after.length, 400); assert.equal(after.at(-1).status, 'complete'); assert.equal(after.at(-1).turnId, TL_LATEST);
+  assert.equal((await getTurn(TL_LATEST, 'memberA', T_LONG)).json.turn.status, 'complete');
+  assert.equal((await getTurn(TL_LATEST, 'ownerB', T_LONG)).status, 404);
+  note('long-thread', { returned: msgs.length, first: msgs[0].content, oldTurn: { status: old.json.turn.status, latest: old.json.turn.latest, retry: refused.json.code },
+    latestRetryEvents: ev.map((e) => e.type), modelHistoryMessages: hist.length, afterLast: brief(after.at(-1)) });
 });
 
 console.log(`# turns: ${passed} passed, ${failed} failed`);

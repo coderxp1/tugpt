@@ -68,16 +68,27 @@ export async function updateCollection(db: WorkspaceDb, organizationId: string, 
   if (patch.description !== undefined) values.description = patch.description;
   if (patch.visibility !== undefined) values.visibility = patch.visibility;
   const data = check(await db.from('knowledge_collections').update(values).eq('id', id).eq('organization_id', organizationId).select(COLLECTION_COLS).maybeSingle());
-  if (!data) throw new WorkspaceError(404, 'NOT_FOUND');
+  if (!data) throw await collectionRefusal(db, organizationId, id);
   return toCollection(data, userId);
 }
 
 export async function deleteCollection(db: WorkspaceDb, organizationId: string, id: string): Promise<void> {
   const deleted = rows(await db.from('knowledge_collections').delete().eq('id', id).eq('organization_id', organizationId).select('id'));
   if (deleted.length > 0) return;
-  // RLS hid the row from DELETE: 403 if the caller can still read it, otherwise 404 (no enumeration).
-  const visible = check(await db.from('knowledge_collections').select('id').eq('id', id).eq('organization_id', organizationId).maybeSingle());
-  throw visible ? new WorkspaceError(403, 'FORBIDDEN') : new WorkspaceError(404, 'NOT_FOUND');
+  throw await collectionRefusal(db, organizationId, id);
+}
+
+/**
+ * A write that RLS let touch no row: 403 FORBIDDEN if the caller can still READ the row (it
+ * exists, they may not change it), otherwise 404 NOT_FOUND (missing, already removed, or not
+ * theirs to see; no enumeration). Clients may treat 404 on a remove as "already removed";
+ * 403 is never that (Q-14).
+ */
+function refusal(visible: unknown): WorkspaceError {
+  return visible ? new WorkspaceError(403, 'FORBIDDEN') : new WorkspaceError(404, 'NOT_FOUND');
+}
+async function collectionRefusal(db: WorkspaceDb, organizationId: string, id: string): Promise<WorkspaceError> {
+  return refusal(check(await db.from('knowledge_collections').select('id').eq('id', id).eq('organization_id', organizationId).maybeSingle()));
 }
 
 /**
@@ -146,7 +157,9 @@ export async function reindexDocument(db: WorkspaceDb, organizationId: string, c
 
 export async function removeDocument(db: WorkspaceDb, organizationId: string, collectionId: string, documentId: string): Promise<void> {
   const deleted = rows(await db.from('knowledge_documents').delete().eq('id', documentId).eq('collection_id', collectionId).eq('organization_id', organizationId).select('id'));
-  if (deleted.length === 0) throw new WorkspaceError(404, 'NOT_FOUND');
+  if (deleted.length > 0) return;
+  // Readable (documents_read = can_read_collection) but not writable => 403; gone or invisible => 404.
+  throw refusal(check(await db.from('knowledge_documents').select('id').eq('id', documentId).eq('collection_id', collectionId).eq('organization_id', organizationId).maybeSingle()));
 }
 
 export function parseCollectionIds(v: string | null): string[] | null {

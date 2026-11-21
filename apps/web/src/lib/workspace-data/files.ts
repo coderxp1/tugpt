@@ -12,6 +12,7 @@ import { createHash } from 'node:crypto';
 import type { FileVisibility, WorkspaceFile } from './contracts';
 import { check, num, oneOf, optStr, rows, str, type WorkspaceDb } from './db';
 import { WorkspaceError } from './errors';
+import { isMissingColumn } from '@/lib/supabase/schema-compat';
 
 type Sniff = (b: Uint8Array) => boolean;
 const startsWith = (sig: number[], offset = 0): Sniff => (b) => b.length >= offset + sig.length && sig.every((x, i) => b[offset + i] === x);
@@ -120,11 +121,77 @@ export function parseVisibility(v: string | null | undefined): FileVisibility {
   throw new WorkspaceError(400, 'INVALID_REQUEST');
 }
 
-export async function insertUploading(db: WorkspaceDb, organizationId: string, userId: string, f: { filename: string; mediaType: string; sizeBytes: number; visibility: FileVisibility }): Promise<string> {
-  const data = check(await db.from('workspace_files').insert({
+/**
+ * Upload idempotency (Q-13, migration 20261122100002). A client sends the same
+ * Idempotency-Key (a UUID it generated for this one upload) on every retry.
+ * The key is scoped to (organization, uploader); a failed upload frees it.
+ */
+/** An `uploading` row younger than this belongs to a live request; older ones were abandoned and are replaced. */
+export const UPLOAD_IN_PROGRESS_WINDOW_MS = 120_000;
+/** Retry-After for UPLOAD_IN_PROGRESS: storing takes milliseconds to seconds, so ask for a short wait, not the abandonment window. */
+export const UPLOAD_RETRY_AFTER_SECONDS = 2;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+/** null when the header is absent; 400 INVALID_IDEMPOTENCY_KEY when it is not a UUID. */
+export function parseIdempotencyKey(v: string | null): string | null {
+  if (v === null) return null;
+  const k = v.trim();
+  if (!UUID_RE.test(k)) throw new WorkspaceError(400, 'INVALID_IDEMPOTENCY_KEY');
+  return k.toLowerCase();
+}
+
+export interface KeyedUpload { readonly row: Record<string, unknown> }
+/** The caller's live upload under this key, `null` if none, `'unsupported'` on a pre-Q-13 schema. */
+export async function findByUploadKey(db: WorkspaceDb, organizationId: string, userId: string, uploadKey: string): Promise<KeyedUpload | null | 'unsupported'> {
+  const r = await db.from('workspace_files').select(FILE_COLS).eq('organization_id', organizationId).eq('owner_user_id', userId)
+    .eq('upload_request_id', uploadKey).in('status', ['uploading', 'ready']).maybeSingle();
+  if (r.error && isMissingColumn(r.error)) return 'unsupported';
+  const data = check(r);
+  return data ? { row: data as Record<string, unknown> } : null;
+}
+
+export type UploadDecision =
+  | { kind: 'fresh' }
+  | { kind: 'replay'; row: Record<string, unknown> }
+  | { kind: 'mismatch' }
+  | { kind: 'in_progress'; retryAfterSeconds: number }
+  | { kind: 'stale'; fileId: string };
+
+/**
+ * What to do with an upload whose key already has a row. Only content counts
+ * (sha256 + size): the same bytes under a new filename are still a replay.
+ * An `uploading` row younger than the window belongs to a request that is
+ * still running; an older one was abandoned (crash, timeout) and is replaced.
+ */
+export function decideUpload(existing: KeyedUpload | null, content: { sha256: string; sizeBytes: number }, now: number): UploadDecision {
+  if (!existing) return { kind: 'fresh' };
+  const r = existing.row;
+  if (r.status === 'ready') {
+    return r.sha256 === content.sha256 && num(r.size_bytes) === content.sizeBytes ? { kind: 'replay', row: r } : { kind: 'mismatch' };
+  }
+  const age = now - Date.parse(str(r.created_at));
+  if (Number.isFinite(age) && age < UPLOAD_IN_PROGRESS_WINDOW_MS) {
+    return { kind: 'in_progress', retryAfterSeconds: UPLOAD_RETRY_AFTER_SECONDS };
+  }
+  return { kind: 'stale', fileId: str(r.id) };
+}
+
+/**
+ * Inserts the `uploading` row. With a key: 'conflict' when another request
+ * holds the key (unique violation), and the key is dropped on a pre-Q-13
+ * schema (PGRST204), which then behaves exactly like Q-12.
+ */
+export async function insertUploading(db: WorkspaceDb, organizationId: string, userId: string, f: { filename: string; mediaType: string; sizeBytes: number; visibility: FileVisibility; uploadKey?: string | null }): Promise<string | 'conflict'> {
+  const base = {
     organization_id: organizationId, owner_user_id: userId, filename: f.filename, media_type: f.mediaType,
     size_bytes: f.sizeBytes, visibility: f.visibility,
-  }).select('id').single()) as Record<string, unknown> | null;
+  };
+  if (f.uploadKey) {
+    const r = await db.from('workspace_files').insert({ ...base, upload_request_id: f.uploadKey }).select('id').single();
+    if (r.error?.code === '23505') return 'conflict';
+    if (!(r.error && isMissingColumn(r.error))) return str((check(r) as Record<string, unknown> | null)?.id);
+  }
+  const data = check(await db.from('workspace_files').insert(base).select('id').single()) as Record<string, unknown> | null;
   return str(data?.id);
 }
 

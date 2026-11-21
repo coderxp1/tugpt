@@ -174,6 +174,29 @@ There is nothing to back-fill: existing messages keep `turn_id = NULL`.
 **Rollback:** roll back the app first. The column, indexes and the new function can stay; the old app
 ignores them. Dropping them would need a new forward migration; do not edit `20261121100001`.
 
+## 1c. Q-13 reliability rollout (`20261122100001`, `20261122100002`, additive)
+
+**Order: migrations, then app.** Both migrations only add a table, a nullable column, an index and
+server-only functions; nothing existing changes.
+
+Measured on fresh disposable stacks (fake model, real PostgREST + RLS, real knowledge worker):
+
+| App | Database | Result |
+|---|---|---|
+| Q-12 app (`550e157`) | with both Q-13 migrations (127) | IT suite 54/54; Q-12 HTTP turn runner 10/10. The old app never reads `chat_turn_runs` or `upload_request_id`. |
+| Q-13 app | with both (127) | IT 54/54; HTTP turn runner 12/12; files runner 7/7 (`Retry-After: 2` on every `UPLOAD_IN_PROGRESS`) |
+| Q-13 app | without them (Q-12 schema, 125) | IT 54/54; turn runner 11/12; files runner 3/7 (run with `E2E_EXPECT_UPLOAD_IDEMPOTENCY=0`). The failures are exactly the Q-13 guarantees: two concurrent retries both run (`200, 200`, the Q-12 behaviour) and `Idempotency-Key` is ignored (every upload `201`). Turn-less and Q-12 turn flows, the latest-400 thread read, document processing incl. PPTX, and isolation all pass. Failing assertions got 200/201, never a 5xx. Fallbacks: `isMissingTable` for `chat_turn_runs`, `42703` / `PGRST204` for `upload_request_id`. |
+
+The column is `upload_request_id`, not `*_key`: `workspace_files.test.sql` asserts that no
+`workspace_files` column matches `key|path|url|bucket`, so storage locators can never be stored.
+
+**Mixed versions:** a Q-12 app instance does not claim leases. While Q-12 and Q-13 instances serve the same
+tenant during a rolling deploy, two concurrent retries routed to *different* versions can still both run
+(the Q-12 behaviour). Finish the rollout before relying on single-run retries.
+
+**Rollback:** roll back the app first; the table, column and functions can stay. A leftover lease expires
+after 150 s. Dropping anything needs a new forward migration.
+
 ## 2. Database grants (verified with `has_function_privilege`)
 
 | Function | authenticated | anon | service_role |

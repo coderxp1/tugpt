@@ -24,6 +24,9 @@
  * message: 409 {code: TURN_EXISTS | TURN_IN_PROGRESS | TURN_NOT_LATEST |
  * TURN_CONFLICT, turn}. retry: true re-runs a stopped/error/interrupted latest
  * turn on its existing user message. GET .../turns/{turnId} reports a turn.
+ * Q-13: a retry takes the turn's run lease in the database before the model is
+ * called (a concurrent second retry gets 409 TURN_IN_PROGRESS); the lease is
+ * released once the answer is stored.
  */
 import { NextResponse } from 'next/server';
 import { createSsoControlClient } from '@/lib/supabase/server';
@@ -38,8 +41,8 @@ import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegis
 import {
   appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
-import { decideTurn, openTurn } from '@/lib/chat/turn-send';
-import { modelHistory, parseTurnRequest } from '@/lib/chat/turns';
+import { claimFresh, claimRetry, currentTurn, decideTurn, openTurn, type TurnRun } from '@/lib/chat/turn-send';
+import { modelHistory, parseTurnRequest, type TurnView } from '@/lib/chat/turns';
 import { runAgentTurn, threadAgentId } from '@/lib/workspace-data/agent-turn';
 import { knowledgeSystemPrompt, retrieveForThread, toCitations } from '@/lib/workspace-data/agents';
 import type { SearchHit } from '@/lib/workspace-data/contracts';
@@ -105,10 +108,22 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     }
     history = await listMessages(ctx.db, orgId, threadId);
   } catch (e) { return storeErrorResponse(e); }
-  // A repeated turn is answered before retrieval or any write; a retry runs on the messages before it.
-  const retry = decideTurn(history, turnRequest, content);
-  if (retry instanceof NextResponse) return retry;
-  if (retry) history = [...retry.before];
+  const scope = { organizationId: orgId, userId: ctx.userId, threadId };
+  // A repeated turn is answered before retrieval or any write; a retry runs on the messages before it,
+  // and only while it holds the turn's run lease (one model run per turn).
+  let run: TurnRun | null = null;
+  let retry: TurnView | null = null;
+  try {
+    const d = await decideTurn(ctx.db, scope, turnRequest, content);
+    if (d instanceof NextResponse) return d;
+    retry = d;
+    if (retry) {
+      const claimed = await claimRetry(control, ctx.db, scope, retry);
+      if (claimed instanceof NextResponse) return claimed;
+      run = claimed;
+      history = [...retry.before];
+    }
+  } catch (e) { return storeErrorResponse(e); }
   const isFirst = history.length === 0;
 
   // Linked knowledge: degrade to "no excerpts" (flagged to the user) rather than failing the turn.
@@ -124,10 +139,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     opened = await openTurn(ctx.db, {
       organizationId: orgId, threadId, content,
       mentions: attached.map((c) => ({ capability: c.capabilityKey, provider: c.providerKey })),
-    }, turnRequest, retry, () => listMessages(ctx.db, orgId, threadId));
-  } catch (e) { return storeErrorResponse(e); }
-  if (opened instanceof NextResponse) return opened;
+    }, turnRequest, retry, () => currentTurn(ctx.db, scope, turnRequest.turnId ?? ''));
+  } catch (e) { await run?.release(); return storeErrorResponse(e); }
+  if (opened instanceof NextResponse) { await run?.release(); return opened; }
   const { userMessage, turnId, retried } = opened;
+  const turnRun: TurnRun = run ?? await claimFresh(control, scope, turnId);
 
   const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached, { registry });
   const wire: WireMessage[] = [
@@ -193,6 +209,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
       } catch {
         if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE', turnId });
       }
+      await turnRun.release();
       try { controller.close(); } catch { /* client went away */ }
     },
   });

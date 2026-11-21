@@ -6,10 +6,17 @@
  * never returned. Bytes are written only after the metadata row exists under
  * the caller's RLS, and the row is removed again if storage fails.
  * Rate limited per user (file.upload): 429 + Retry-After.
+ *
+ * Retries (Q-13): send `Idempotency-Key: <uuid>`, the same on every retry of
+ * one upload (it is scoped to the caller). Same key and same bytes -> 200
+ * { file, replayed: true } with the original file and nothing stored again;
+ * same key, different bytes -> 409 IDEMPOTENCY_KEY_REUSED; same key while the
+ * first request is still storing -> 409 UPLOAD_IN_PROGRESS + Retry-After.
+ * A failed upload frees its key. Replays count against the rate limit.
  */
 import { NextResponse } from 'next/server';
 import { errorResponse, isSameOriginRequest, ok, parseCursor, parseLimit, toErrorResponse, workspaceContext } from '@/lib/workspace-data/http';
-import { insertUploading, listFiles, markReady, parseVisibility, readCappedBody, removeRow, sanitizeFilename, sha256Hex, validateUpload } from '@/lib/workspace-data/files';
+import { decideUpload, findByUploadKey, UPLOAD_RETRY_AFTER_SECONDS, insertUploading, listFiles, markReady, parseIdempotencyKey, parseVisibility, readCappedBody, removeRow, sanitizeFilename, sha256Hex, toFile, validateUpload } from '@/lib/workspace-data/files';
 import { blobKey, configuredBlobStore, maxUploadBytes } from '@/lib/workspace-data/storage';
 import { WorkspaceError } from '@/lib/workspace-data/errors';
 import { consumeRateLimit } from '@/lib/workspace-data/rate-limit';
@@ -32,8 +39,11 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   if (!isSameOriginRequest(request)) return errorResponse(403, 'INVALID_ORIGIN');
   const sp = new URL(request.url).searchParams;
-  let filename: string; let visibility: ReturnType<typeof parseVisibility>;
-  try { filename = sanitizeFilename(sp.get('filename')); visibility = parseVisibility(sp.get('visibility')); } catch (e) { return toErrorResponse(e); }
+  let filename: string; let visibility: ReturnType<typeof parseVisibility>; let uploadKey: string | null;
+  try {
+    filename = sanitizeFilename(sp.get('filename')); visibility = parseVisibility(sp.get('visibility'));
+    uploadKey = parseIdempotencyKey(request.headers.get('idempotency-key'));
+  } catch (e) { return toErrorResponse(e); }
   const max = maxUploadBytes();
   const declared = request.headers.get('content-length');
   if (declared && /^\d+$/.test(declared) && Number(declared) > max) return errorResponse(413, 'PAYLOAD_TOO_LARGE');
@@ -48,16 +58,39 @@ export async function POST(request: Request) {
     bytes = await readCappedBody(request, max);
     mediaType = validateUpload(filename, request.headers.get('content-type'), bytes);
   } catch (e) { return toErrorResponse(e); }
+  const sha256 = sha256Hex(bytes);
   let fileId: string;
-  try { fileId = await insertUploading(ctx.db, ctx.organizationId, ctx.userId, { filename, mediaType, sizeBytes: bytes.byteLength, visibility }); }
-  catch (e) { return toErrorResponse(e); }
+  try {
+    // Two passes at most: a stale (abandoned) upload is cleared once, and a
+    // lost insert race is answered from the winner's row.
+    let inserted: string | 'conflict' = 'conflict';
+    for (let pass = 0; pass < 2 && inserted === 'conflict'; pass++) {
+      if (uploadKey) {
+        const existing = await findByUploadKey(ctx.db, ctx.organizationId, ctx.userId, uploadKey);
+        if (existing === 'unsupported') uploadKey = null;
+        else {
+          const d = decideUpload(existing, { sha256, sizeBytes: bytes.byteLength }, Date.now());
+          if (d.kind === 'replay') return ok({ file: toFile(d.row, ctx.userId), replayed: true });
+          if (d.kind === 'mismatch') return errorResponse(409, 'IDEMPOTENCY_KEY_REUSED');
+          if (d.kind === 'in_progress') return errorResponse(409, 'UPLOAD_IN_PROGRESS', d.retryAfterSeconds);
+          if (d.kind === 'stale') {
+            await store.delete(blobKey(ctx.organizationId, d.fileId)).catch(() => {});
+            await removeRow(ctx.db, ctx.organizationId, d.fileId);
+          }
+        }
+      }
+      inserted = await insertUploading(ctx.db, ctx.organizationId, ctx.userId, { filename, mediaType, sizeBytes: bytes.byteLength, visibility, uploadKey });
+    }
+    if (inserted === 'conflict') return errorResponse(409, 'UPLOAD_IN_PROGRESS', UPLOAD_RETRY_AFTER_SECONDS);
+    fileId = inserted;
+  } catch (e) { return toErrorResponse(e); }
   const key = blobKey(ctx.organizationId, fileId);
   try { await store.put(key, bytes, mediaType); } catch {
     await removeRow(ctx.db, ctx.organizationId, fileId).catch(() => false);
     return errorResponse(503, 'STORAGE_UNAVAILABLE');
   }
   try {
-    const file = await markReady(ctx.db, ctx.organizationId, fileId, sha256Hex(bytes), ctx.userId);
+    const file = await markReady(ctx.db, ctx.organizationId, fileId, sha256, ctx.userId);
     return ok({ file }, 201);
   } catch (e) {
     await store.delete(key).catch(() => {});

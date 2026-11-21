@@ -8,9 +8,10 @@ export type WorkspaceErrorCode =
   | 'ALREADY_DECIDED' | 'REQUEST_EXPIRED' | 'TOO_MANY_PENDING' | 'TOO_MANY_CHUNKS' | 'TOO_MANY_COLLECTIONS'
   | 'INVALID_STATUS_TRANSITION' | 'FILE_CONTENT_IMMUTABLE' | 'INVALID_REQUESTER' | 'ARGUMENTS_TOO_LARGE'
   | 'RATE_LIMITED' | 'INVALID_EMBEDDING' | 'INVALID_ACTION' | 'MESSAGE_INVALID' | 'UNKNOWN_MODEL'
-  | 'AGENT_MODEL_UNAVAILABLE' | 'AGENT_TOOL_CONFLICT' | 'THREAD_AGENT_MISMATCH';
+  | 'AGENT_MODEL_UNAVAILABLE' | 'AGENT_TOOL_CONFLICT' | 'THREAD_AGENT_MISMATCH'
+  | 'INVALID_IDEMPOTENCY_KEY' | 'IDEMPOTENCY_KEY_REUSED' | 'UPLOAD_IN_PROGRESS';
 
 export class WorkspaceError extends Error {
-  /** retryAfterSeconds is only set for 429 RATE_LIMITED and becomes the Retry-After header. */
+  /** retryAfterSeconds is only set for 429 RATE_LIMITED and 409 UPLOAD_IN_PROGRESS and becomes the Retry-After header. */
   constructor(readonly status: number, readonly code: WorkspaceErrorCode, readonly retryAfterSeconds?: number) { super(code); this.name = 'WorkspaceError'; }
 }
