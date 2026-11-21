@@ -5,7 +5,7 @@ import { useEffect } from 'react';
 import type { Thread } from '@/components/chat/types';
 
 const nav = vi.hoisted(() => ({ path: '/workspace' }));
-vi.mock('next/navigation', () => ({ usePathname: () => nav.path, useSearchParams: () => new URLSearchParams() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }), usePathname: () => nav.path, useSearchParams: () => new URLSearchParams() }));
 import { WorkspaceFrame } from './WorkspaceFrame';
 import { ThreadsProvider, useThreads } from './ThreadsProvider';
 

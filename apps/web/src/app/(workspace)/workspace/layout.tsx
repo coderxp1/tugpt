@@ -3,6 +3,8 @@
  * Same origin, session cookie, organization, permissions and /api/v1 backend as the Dashboard;
  * a separate route group and frame. The proxy protects /workspace like every unlisted path.
  */
+import { cookies } from 'next/headers';
+import { I18nProvider } from '@/i18n/provider';
 import { redirect } from 'next/navigation';
 import { getSessionContext } from '@/lib/tenant/server';
 import { initialThreads } from '@/lib/chat/initial-threads';
@@ -18,9 +20,10 @@ export default async function WorkspaceLayout({ children }: Readonly<{ children:
   if (!session) redirect('/auth/login');
   if (!session.tenant) return <AccessRequired />;
   const threads = await initialThreads();
+  const locale = (await cookies()).get('tugpt_workspace_locale')?.value === 'es' ? 'es' : 'en';
   return (
-    <ThreadsProvider initialThreads={threads}>
+    <I18nProvider locale={locale}><ThreadsProvider initialThreads={threads}>
       <WorkspaceFrame fullName={session.fullName ?? null} email={session.email || null} canDecide={canApproveMcpCalls(session)}>{children}</WorkspaceFrame>
-    </ThreadsProvider>
+    </ThreadsProvider></I18nProvider>
   );
 }

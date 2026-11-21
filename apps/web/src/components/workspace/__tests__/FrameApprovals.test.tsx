@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, within } from '@testing-library/react';
 
-vi.mock('next/navigation', () => ({ usePathname: () => '/workspace', useSearchParams: () => new URLSearchParams() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }), usePathname: () => '/workspace', useSearchParams: () => new URLSearchParams() }));
 import { ThreadsProvider } from '../ThreadsProvider';
 import { WorkspaceFrame } from '../WorkspaceFrame';
 import { fakeApi } from './fake-api';

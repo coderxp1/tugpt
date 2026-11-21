@@ -9,6 +9,7 @@ import { ThreadList } from '@/components/chat/ThreadList';
 import { WORKSPACE_HOME, isSectionPath, threadIdFromPath } from '@/lib/workspace/routes';
 import { WORKSPACE_APPROVALS_SECTION, WORKSPACE_SECTIONS, WORKSPACE_UPCOMING } from '@/lib/workspace/nav';
 import { Icon } from './icons';
+import { WorkspaceLanguage } from './WorkspaceLanguage';
 import { ProfileMenu } from './ProfileMenu';
 import { useThreads } from './ThreadsProvider';
 import { useApprovalFeed } from './useApprovalFeed';
@@ -22,7 +23,7 @@ export interface WorkspaceFrameProps {
   readonly children: React.ReactNode;
 }
 
-const FOCUSABLE = 'a[href]:not([aria-disabled="true"]),button:not([disabled]),input:not([disabled]),summary';
+const FOCUSABLE = 'a[href]:not([aria-disabled="true"]),button:not([disabled]),input:not([disabled]),summary,select';
 
 /**
  * The Workspace frame: where people work with AI. Separate from the Dashboard (management), sharing
@@ -90,7 +91,7 @@ export function WorkspaceFrame({ fullName = null, email, canDecide = false, chil
   }, [open]);
 
   return (
-    <div className={`${s.frame} ${collapsed ? s.collapsed : ''}`}>
+    <div lang={t.locale} className={`${s.frame} ${collapsed ? s.collapsed : ''}`}>
       <a href="#workspace-main" className={s.skip}>{t('shell.skipToContent')}</a>
       <aside id="workspace-sidebar" ref={sidebar} className={`${s.sidebar} ${open ? s.open : ''}`} aria-label={t('workspace.sidebarLabel')}>
         <div className={s.head}>
@@ -146,6 +147,7 @@ export function WorkspaceFrame({ fullName = null, email, canDecide = false, chil
         </details>
 
         <div className={s.foot}>
+          <WorkspaceLanguage />
           <Link href="/dashboard" prefetch={false} className={s.toDashboard}>
             <Icon name="dashboard" /><span>{t('workspace.openDashboard')}</span><span className={s.footHint}>{t('workspace.dashboardHint')}</span>
           </Link>

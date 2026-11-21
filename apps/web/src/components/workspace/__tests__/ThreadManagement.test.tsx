@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, renderHook, screen, waitFor, within } from '@testing-library/react';
 import type { Conversation, Folder } from '@/lib/workspace-data/contracts';
 
-vi.mock('next/navigation', () => ({ usePathname: () => '/workspace', useSearchParams: () => new URLSearchParams() }));
+vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: vi.fn() }), usePathname: () => '/workspace', useSearchParams: () => new URLSearchParams() }));
 import { ThreadList } from '@/components/chat/ThreadList';
 import { ThreadsProvider, useThreads } from '../ThreadsProvider';
 import { fakeApi, iso } from './fake-api';

@@ -2,6 +2,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import type { Collection, LibraryDocument } from '@/lib/workspace-data/contracts';
+import { I18nProvider } from '@/i18n/provider';
 import { Collections } from '../Collections';
 import { fakeApi, iso } from './fake-api';
 
@@ -152,5 +153,16 @@ it.each(['viewer', undefined, 'unknown'])('keeps %s read-only', async role => {
 
 it.each(['manager','agent','viewer'])('keeps organization collection read-only for %s even when owned',async role=>{
  fakeApi({'GET /api/v1/library/collections':()=>({body:{collections:[col]}}),'GET /api/v1/library/collections/:id':()=>({body:{collection:col,documents:[doc({})]}})});
- const {container}=render(<Collections role={role} uploadScope="test-owner"/>);fireEvent.click(await screen.findByRole('button',{name:/^Open\s*: Shipping policies$/}));await screen.findByRole('table');expect(container.querySelector('input[type="file"]')).toBeNull();expect(screen.getByText(/Read-only. Your role or ownership/)).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Options for Rates 2026.docx'}));expect(screen.queryByRole('menuitem',{name:'Move document'})).toBeNull();
+ const {container}=render(<Collections role={role} uploadScope="test-owner"/>);fireEvent.click(await screen.findByRole('button',{name:/^Open\s*: Shipping policies$/}));await screen.findByRole('table');expect(container.querySelector('input[type="file"]')).toBeNull();expect(screen.getByText(/only organization owners and admins/)).toBeTruthy();fireEvent.click(screen.getByRole('button',{name:'Options for Rates 2026.docx'}));expect(screen.queryByRole('menuitem',{name:'Move document'})).toBeNull();
+});
+
+it.each(['en','es'] as const)('explains ownership and organization restrictions in %s',async locale=>{
+ fakeApi({'GET /api/v1/library/collections':()=>({body:{collections:[col]}}),'GET /api/v1/library/collections/:id':()=>({body:{collection:col,documents:[]}})});
+ render(<I18nProvider locale={locale}><Collections role="manager"/></I18nProvider>);
+ fireEvent.click(await screen.findByRole('button',{name:locale==='en'?/^Open\s*: Shipping policies$/:/^Abrir/}));
+ expect(await screen.findByText(locale==='en'?/only organization owners and admins/:/únicamente los propietarios y administradores/)).toBeTruthy();
+});
+it('uses refreshed detail ownership rather than stale list ownership',async()=>{
+ fakeApi({'GET /api/v1/library/collections':()=>({body:{collections:[{...col,visibility:'private'}]}}),'GET /api/v1/library/collections/:id':()=>({body:{collection:{...col,visibility:'private',ownedByMe:false},documents:[]}})});
+ render(<Collections role="agent"/>);fireEvent.click(await screen.findByRole('button',{name:/^Open\s*: Shipping policies$/}));await screen.findByText(/you do not own this collection/);expect(screen.queryByRole('button',{name:'Options for collection Shipping policies'})).toBeNull();
 });

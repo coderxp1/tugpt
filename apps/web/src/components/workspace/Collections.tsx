@@ -75,6 +75,7 @@ export function Collections({ uploadScope, role }: { uploadScope?: string; role?
                     </div>
                     <div className={s.tags}>
                       <Badge tone={col.visibility === 'organization' ? 'info' : 'neutral'}><Icon name={col.visibility === 'organization' ? 'globe' : 'lock'} size={12} />{t(col.visibility === 'organization' ? 'workspace.lib.visOrg' : 'workspace.lib.visPrivate')}</Badge>
+                      <Badge>{t(col.ownedByMe ? 'workspace.lib.youOwn' : 'workspace.lib.otherOwner')}</Badge>
                       <span className={c.updated}><When iso={col.updatedAt} prefix="workspace.lib.updated" /></span>
                     </div>
                     <div className={s.actions}>
@@ -86,7 +87,7 @@ export function Collections({ uploadScope, role }: { uploadScope?: string; role?
         </>
       )}
       {current && (
-        <CollectionPanel canShare={['owner', 'admin'].includes(role ?? '')} writable={writable} uploadScope={uploadScope} collection={current} onBack={() => setOpen(null)} onEdit={() => setEditing({ mode: 'edit', collection: current })}
+        <CollectionPanel role={role} canShare={['owner', 'admin'].includes(role ?? '')} writable={writable} uploadScope={uploadScope} collection={current} onBack={() => setOpen(null)} onEdit={() => setEditing({ mode: 'edit', collection: current })}
           onDeleted={() => { update((v) => ({ collections: v.collections.filter((x) => x.id !== current.id) })); setOpen(null); setNotice(t('workspace.lib.deleted', { name: current.name })); }} />
       )}
       {editing && (
@@ -152,11 +153,13 @@ function LibrarySearch({ collections }: { collections: readonly Collection[] }) 
 
 type Upload = { id: string; name: string; size: number; state: 'uploading' | 'failed'; percent?: number | null; message?: string };
 
-function CollectionPanel({ collection: col, uploadScope, writable, canShare, onBack, onEdit, onDeleted }: { canShare: boolean; writable: boolean; uploadScope?: string; collection: Collection; onBack(): void; onEdit(): void; onDeleted(): void }) {
+function CollectionPanel({ collection: initial, role, uploadScope, writable, canShare, onBack, onEdit, onDeleted }: { role?: string; canShare: boolean; writable: boolean; uploadScope?: string; collection: Collection; onBack(): void; onEdit(): void; onDeleted(): void }) {
   const t = useT();
-  const canMutate = writable && col.ownedByMe && (col.visibility === 'private' || canShare);
   const [moving, setMoving] = useState<LibraryDocument | null>(null);
-  const { load, reload, update } = useLoad<CollectionDetail>(`col:${col.id}`, () => workspaceApi().getCollection(col.id), (v) => hasArray(v, 'documents'));
+  const { load, reload, update } = useLoad<CollectionDetail>(`col:${initial.id}`, () => workspaceApi().getCollection(initial.id), (v) => hasArray(v, 'documents'));
+  const col = load.state === 'ready' ? load.value.collection : initial;
+  const canMutate = load.state === 'ready' && writable && col.ownedByMe && (col.visibility === 'private' || canShare);
+  const reason: MessageKey = !role ? 'workspace.lib.accessUnknown' : col.visibility === 'organization' && !canShare ? 'workspace.lib.orgReadOnly' : !writable ? 'workspace.lib.roleReadOnly' : !col.ownedByMe ? 'workspace.lib.ownerReadOnly' : 'workspace.lib.canEdit';
   const [uploads, setUploads] = useState<Upload[]>([]);
   const [confirm, setConfirm] = useState<{ kind: 'collection' } | { kind: 'document'; doc: LibraryDocument } | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -226,7 +229,7 @@ function CollectionPanel({ collection: col, uploadScope, writable, canShare, onB
 
   return (
     <div className={c.panel}>
-      {!canMutate && <p>{t.locale === 'es' ? 'Solo lectura. Su rol o la propiedad de esta colección no permite cambios.' : 'Read-only. Your role or ownership of this collection does not allow changes.'}</p>}
+      {load.state === 'ready' && <p role="status">{t(col.ownedByMe ? 'workspace.lib.youOwn' : 'workspace.lib.otherOwner')}. {t(reason)}</p>}
       {moving && <MoveDocument source={col} document={moving} onClose={() => setMoving(null)} onMoved={() => { setMoving(null); reload(); }} />}
       <div className={c.panelHead}>
         <button type="button" className={u.buttonGhost} onClick={reload}>{t('workspace.refresh')}</button>
