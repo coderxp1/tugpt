@@ -145,6 +145,7 @@
 .approvalForm legend{font-size:13px;color:#4a4b45;margin-bottom:4px}
 .approvalForm label{display:inline-flex;align-items:center;gap:6px;min-height:24px}
 .confirm{align-items:flex-start!important}
+.approvalForm input[type=checkbox],.approvalForm input[type=radio]{flex:none;width:24px;height:24px;margin:0;accent-color:#171715}
 .approvalActions{display:flex;gap:8px;flex-wrap:wrap;align-items:center}
 .approve,.reject{min-height:36px;padding:0 14px;border-radius:8px;font-size:14px;cursor:pointer}
 .approve{background:#171715;color:#fff;border:1px solid #171715}

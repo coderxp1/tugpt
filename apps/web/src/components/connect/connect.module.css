@@ -79,7 +79,7 @@ button.secondary{border:1px solid #d7d7cf}
 .levels{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px;margin:0;font-size:12px}
 .levels dt{font-weight:700}.levels dd{margin:0;color:#686963}
 .check{display:flex;gap:10px;align-items:center;font-size:14px;min-height:44px}
-.check input{width:20px;height:20px;accent-color:#171715}
+.check input{flex:none;width:24px;height:24px;margin:0;accent-color:#171715}
 .sr{position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);white-space:nowrap}
 @media (max-width:720px){.form fieldset{grid-template-columns:1fr}.form small{order:0}.dialogActions{flex-direction:column-reverse}.dialogActions button{width:100%;justify-content:center}}
 @media (prefers-reduced-motion:reduce){.primary,.secondary,.danger,.linkButton{transition:none}}
