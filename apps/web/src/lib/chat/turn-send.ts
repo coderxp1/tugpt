@@ -9,7 +9,14 @@
  *                its status reads 'pending' while it runs. Best effort: the unique user
  *                message already makes a fresh send idempotent.
  *   run.release: after the answer is stored (an unreleased lease expires on its own).
+ *
+ * withServerTurnId (USAGE-1, Q-16): a send without a turnId gets a server-minted one before
+ * decideTurn, so it runs exactly like a client's fresh turn (user message stamped, lease,
+ * attempt 0) and every model call it makes is metered against that turn. The id is a random
+ * UUID echoed in the 'user'/'done'/'error' events; a client can adopt it for GET .../turns/{id}
+ * and retry: true.
  */
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { PRIVATE_HEADERS } from './request';
 import {
@@ -21,6 +28,15 @@ import {
 
 export interface TurnRequest { readonly turnId: string | null; readonly retry: boolean }
 export interface TurnScope { readonly organizationId: string; readonly userId: string; readonly threadId: string }
+
+/**
+ * A turn-less send becomes a fresh turn with a server-minted id; a client's turnId (fresh,
+ * repeat or retry) passes through unchanged. parseTurnRequest already refuses retry without a turnId.
+ */
+export function withServerTurnId(req: TurnRequest, mint: () => string = randomUUID): TurnRequest {
+  if (req.turnId) return req;
+  return { turnId: mint().toLowerCase(), retry: false };
+}
 
 type Conflict = Extract<SendDecision, { kind: 'conflict' }>;
 

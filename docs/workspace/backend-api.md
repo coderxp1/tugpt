@@ -71,7 +71,10 @@ Roles: `owner`, `admin`, `agent` (member) and `viewer`. "Admin" below means owne
 
 A **turn** is one user message plus the assistant (and tool) messages written for it. The client creates
 the turn id (`crypto.randomUUID()`) **before** sending and keeps it until the turn settles. Every field is
-optional: a client that sends no `turnId` behaves exactly as before.
+optional. Since Q-16, a send **without** `turnId` gets a server-minted one (lowercase UUID v4, `retry:false`):
+it is echoed in the `user`, `done` and `error` events, stamps the user message, claims the turn lease and
+keys usage rows. A client may adopt it for `GET …/turns/{turnId}` and `retry:true`. On a database without
+turn ids (`TURNS_UNSUPPORTED`) the turn id stays `null`, as before.
 
 | Method & path | Body | Result |
 |---|---|---|
@@ -131,6 +134,21 @@ each message too.
 - Assistant and tool rows get it only through the server-only `append_chat_turn_message_server`, which
   also requires the turn to have been opened in that very thread.
 - Other users and tenants get `404`.
+
+### Turn-less sends are turns (Q-16; no migration)
+
+Before Q-16 a send without `turnId` wrote an unstamped user message and **recorded no usage row** (the
+meter needs a turn). The shipped client (`useChatSession`) sends no `turnId`, so real chat traffic was
+unmetered (USAGE-1 root cause 1). Now `withServerTurnId` (`lib/chat/turn-send.ts`) mints the id in the
+messages route and in `runAgentTurn` (covers `agents/{agentId}/run`).
+
+- A client-supplied `turnId` is passed through unchanged (validation as before).
+- **Duplicate submissions without a client `turnId` are separate turns**: each gets its own id, one model
+  call and one usage row. The server cannot dedupe them; only a client-created `turnId` can (Q-12).
+- `retry:true` without `turnId` is still `400` (nothing to retry).
+- Verify usage from the real client: read the `turnId` from the `done`/`error` event, then count
+  `provider_usage_events` rows with that `chat_turn_id`; keys are `chat:<turnId>:<callIndex>`
+  (`agents:` for agent turns). One row per model call, retries at `callIndex` 8, 16, ….
 
 ### Regenerate vs retry (Q-14 contract, request 2)
 
@@ -275,6 +293,7 @@ cannot repeat a change: they need an approval, and an approval is claimed once
   attempt (tool rounds, then the answer), and `attempt` is 0 for a fresh turn or the number of stored
   answers for a retry (maximum 63). So a retry never reuses a key, and a duplicate request that loses
   the lease (`409`) makes no call and writes no row.
+- Turn-less sends (no client `turnId`) are metered on the server-minted turn id (Q-16).
 - Feature: `chat` (messages, approved-call) or `agents` (agent turns). Approved-call has no chat turn,
   so it uses a per-request random turn id with attempt 0.
 - Outcome: `succeeded`, `failed` (timeout, upstream error) or `cancelled` (client stop). A consumer
@@ -657,6 +676,8 @@ further change needs a **new** migration ID.
 | HTTP E2E (fake model, SIMULATED; disposable DB only) | `tests/workspace-e2e/chat-turns-http.e2e.mjs`, `files-reliability-http.e2e.mjs`, `chat-crash-recovery-http.e2e.mjs` (needs a harness that SIGKILLs and restarts the server between `--phase=start` and `--phase=verify`) | retries, concurrent retries, long threads; upload idempotency, real-producer documents incl. PPTX notes and scanned PDF, isolation; server crash and 150 s lease recovery. Not real-provider validation |
 | HTTP E2E (Q-14; fake model, SIMULATED) | `tests/workspace-e2e/contracts-q14-http.e2e.mjs` phases `main`, `roles`, `compat` | feature signal and turn codes on q13 / pre-q13 / pre-q12 databases; retry contract; move, dedupe, isolation; role matrix; citations after library changes |
 | Unit (Q-14) | `features.test.ts`, `library.test.ts`, `proxy-route-coverage.test.ts` | probe classification (missing relation/column only), 403 vs 404 refusals, route inventory |
+| Unit (Q-16) | `turn-send.test.ts` (`withServerTurnId`) | mint / unique / lowercase; passthrough; minted turn stamps the user message and claims the lease |
+| HTTP E2E (Q-16; fake model, SIMULATED) | `tests/workspace-e2e/usage-turnless-q16-http.e2e.mjs` (L1–L6, C1, C2, D1); `chat-turns-http.e2e.mjs` check 8 updated | turn-less send / error + retry / stop / timeout / duplicates / agent run each write exactly one usage row per call; client `turnId` unchanged; isolation |
 
 ### pgTAP baseline (Q-14, recorded 2026-11-20 on a disposable 128-migration stack)
 
@@ -679,6 +700,15 @@ the unmerged stack. The approval functions are covered by `tests/database/worksp
 `supabase test db --local` scan covers `supabase/tests/`; if the stack is ever merged, this file would likely fail CI.
 Owner of the fix: the Connect area (rewrite into `tests/database` or remove), not Workspace. Not changed here.
 
+
+### Q-16 results (branch `feat/workspace-usage-turnless` on `6bcefb9`; disposable 133-migration stack)
+
+HTTP E2E with the fake model (SIMULATED): q16 9/9 (twice), q15 19/19, q12–q13 12/12. Control on the
+unchanged `6bcefb9` build: q16 3/9 (L1–L6 fail, `turnId null`); DB: 7 turn-less user messages, 0 stamped,
+**0 usage rows**. Fix: 8 user messages, 8 stamped, **9 rows** (8 turns + 1 retry; succeeded 6, failed 2,
+cancelled 1). No migration changed. IT `workspace-api.integration.test.ts` 54/54. pgTAP
+`supabase/tests/database`: 85 files, 2,524 ok, 1 not ok, identical TAP lines to the Q-15 baseline (same 2
+known environment failures; top-level legacy `tool_approvals` same 4). No new failures.
 
 ### pgTAP baseline (Q-15, on RC4 `4b7eac5` + this branch, disposable 133-migration stack)
 

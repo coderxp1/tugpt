@@ -24,6 +24,8 @@
  * message: 409 {code: TURN_EXISTS | TURN_IN_PROGRESS | TURN_NOT_LATEST |
  * TURN_CONFLICT, turn}. retry: true re-runs a stopped/error/interrupted latest
  * turn on its existing user message. GET .../turns/{turnId} reports a turn.
+ * Q-16: a send without a turnId gets a server-minted one (withServerTurnId), echoed in the
+ * same events, so every turn is stamped and every model call is metered (USAGE-1).
  * Q-13: a retry takes the turn's run lease in the database before the model is
  * called (a concurrent second retry gets 409 TURN_IN_PROGRESS); the lease is
  * released once the answer is stored.
@@ -42,7 +44,7 @@ import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegis
 import {
   appendServerMessage, asChatDb, countTurnAnswers, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
-import { claimFresh, claimRetry, currentTurn, decideTurn, openTurn, type TurnRun } from '@/lib/chat/turn-send';
+import { claimFresh, claimRetry, currentTurn, decideTurn, openTurn, withServerTurnId, type TurnRun } from '@/lib/chat/turn-send';
 import { modelHistory, parseTurnRequest, type TurnView } from '@/lib/chat/turns';
 import { runAgentTurn, threadAgentId } from '@/lib/workspace-data/agent-turn';
 import { knowledgeSystemPrompt, retrieveForThread, toCitations } from '@/lib/workspace-data/agents';
@@ -69,8 +71,10 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   const endpoint = model ? endpointFor(model) : null;
   if (!model || !endpoint) return jsonError(400, 'Unknown model');
   const requested = parseMentions(body.mentions);
-  const turnRequest = parseTurnRequest(body);
-  if (!turnRequest) return jsonError(400, 'Invalid request');
+  const parsedTurn = parseTurnRequest(body);
+  if (!parsedTurn) return jsonError(400, 'Invalid request');
+  // USAGE-1 (Q-16): a send without a turnId runs as a fresh turn with a server-minted id, so it is metered.
+  const turnRequest = withServerTurnId(parsedTurn);
 
   const ctx = await chatContext(request);
   if (ctx instanceof NextResponse) return ctx;

@@ -39,7 +39,7 @@ import { WorkspaceError } from './errors';
 import { toErrorResponse } from './http';
 import { consumeRateLimit } from './rate-limit';
 
-import { claimFresh, claimRetry, currentTurn, decideTurn, openTurn, type TurnRequest, type TurnRun } from '@/lib/chat/turn-send';
+import { claimFresh, claimRetry, currentTurn, decideTurn, openTurn, withServerTurnId, type TurnRequest, type TurnRun } from '@/lib/chat/turn-send';
 import { modelHistory, type TurnView } from '@/lib/chat/turns';
 
 const HISTORY = 30;
@@ -189,7 +189,8 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
     if (thread) history = await listMessages(ctx.db, orgId, thread.id);
   } catch (e) { return fail(e, o.errorStyle); }
   // A repeated turn is answered before retrieval or any write (a new thread has no turns yet).
-  const turnRequest: TurnRequest = o.turn ?? { turnId: null, retry: false };
+  // USAGE-1 (Q-16): a turn-less run (either route) becomes a fresh server-minted turn, so it is metered.
+  const turnRequest: TurnRequest = withServerTurnId(o.turn ?? { turnId: null, retry: false });
   let retry: TurnView | null = null;
   // A retry runs only while it holds the turn's run lease (one model run per turn, Q-13).
   let run: TurnRun | null = null;

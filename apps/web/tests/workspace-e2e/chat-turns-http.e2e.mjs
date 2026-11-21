@@ -11,7 +11,7 @@
  *   - GET .../turns/{id} reconciles complete | error | stopped | 404;
  *   - retry: true re-runs an error turn and a dropped (stopped) turn on the SAME user message;
  *   - the model sees the prompt once (no duplicate in its history) on retry;
- *   - concurrent duplicates write one user message; turn-less sends are unchanged;
+ *   - concurrent duplicates write one user message; turn-less sends get a server-minted turn (Q-16);
  *   - other users and tenants cannot read or reuse the turn; the agent route stamps turns too.
  * Q-13 (turn run leases, migration 20261122100001):
  *   - two retries of one failed turn at once: exactly one runs, the other is 409 TURN_IN_PROGRESS
@@ -180,11 +180,15 @@ await check('7 two identical sends at once: exactly one user message, the other 
   note('concurrent', { statuses, loserCode: loser.json.code });
 });
 
-await check('8 turn-less sends are unchanged; malformed turn ids are rejected', async () => {
+await check('8 turn-less sends get a server-minted turn (Q-16); malformed turn ids are rejected', async () => {
   const r = await send({ content: 'Legacy client hello' });
   assert.equal(r.status, 200);
   const ev = ndjson(r.text);
-  assert.equal(ev.find((e) => e.type === 'user').turnId, null); assert.equal(ev.at(-1).type, 'done');
+  const minted = ev.find((e) => e.type === 'user').turnId;
+  assert.match(String(minted), /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+  assert.equal(ev.at(-1).type, 'done'); assert.equal(ev.at(-1).turnId, minted);
+  assert.equal(ofTurn(await thread(), minted, 'user').length, 1);
+  assert.equal((await getTurn(minted)).json?.turn?.status, 'complete');
   assert.equal((await send({ content: 'x', turnId: 'not-a-uuid' })).status, 400);
   assert.equal((await send({ content: 'x', retry: true })).status, 400);
 });

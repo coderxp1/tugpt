@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { NextResponse } from 'next/server';
 import { appendMessage, appendServerMessage, ChatStoreError, listMessages, loadTurn, type ChatDb, type DbQuery, type DbResult, type StoredMessage } from './store';
-import { claimFresh, claimRetry, decideTurn, openTurn } from './turn-send';
+import { claimFresh, claimRetry, decideTurn, openTurn, withServerTurnId } from './turn-send';
 import { resolveTurn } from './turns';
 
 const ORG = 'a4a00000-0000-4000-8000-00000000000a';
@@ -212,5 +212,35 @@ describe('openTurn', () => {
     const opened = await openTurn(f.db, input, { turnId: T1, retry: false }, null, async () => null);
     expect(opened).toMatchObject({ turnId: null, retried: false });
     expect(f.calls).toHaveLength(2);
+  });
+});
+
+describe('withServerTurnId (USAGE-1, Q-16)', () => {
+  const UUID_V4 = /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/;
+  it('mints a fresh lower-case UUID v4 for a turn-less send, distinct per send', () => {
+    const a = withServerTurnId({ turnId: null, retry: false });
+    const b = withServerTurnId({ turnId: null, retry: false });
+    expect(a.retry).toBe(false);
+    expect(a.turnId).toMatch(UUID_V4);
+    expect(b.turnId).toMatch(UUID_V4);
+    expect(a.turnId).not.toBe(b.turnId);
+    expect(withServerTurnId({ turnId: null, retry: false }, () => 'ABCDEF00-0000-4000-8000-00000000000A').turnId).toBe('abcdef00-0000-4000-8000-00000000000a');
+  });
+  it("passes a client's turnId through unchanged (fresh send, repeat and retry)", () => {
+    const mint = () => { throw new Error('must not mint'); };
+    expect(withServerTurnId({ turnId: T1, retry: false }, mint)).toEqual({ turnId: T1, retry: false });
+    expect(withServerTurnId({ turnId: T1, retry: true }, mint)).toEqual({ turnId: T1, retry: true });
+  });
+  it('a minted turn runs as a fresh turn: no retry, user message stamped with the minted id, lease claimed for it', async () => {
+    const req = withServerTurnId({ turnId: null, retry: false }, () => T1);
+    const lookup = fakeDb(() => ({ data: null, error: null }));
+    expect(await decideTurn(lookup.db, { organizationId: ORG, userId: USER, threadId: THREAD }, req, 'q')).toBeNull();
+    const f = fakeDb((c) => ({ data: row({ turn_id: c.values?.turn_id }), error: null }));
+    const opened = await openTurn(f.db, input, req, null, async () => null);
+    expect(opened).toMatchObject({ turnId: T1, retried: false, userMessage: { turnId: T1 } });
+    expect(f.calls[0].values).toMatchObject({ role: 'user', turn_id: T1 });
+    const control = fakeDb(() => ({ data: { outcome: 'claimed', run_id: 'r1' }, error: null }));
+    await claimFresh(control.db, { organizationId: ORG, userId: USER, threadId: THREAD }, (opened as { turnId: string }).turnId);
+    expect(control.calls[0].args).toMatchObject({ p_turn_id: T1 });
   });
 });
