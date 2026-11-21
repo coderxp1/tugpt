@@ -113,7 +113,8 @@ export class BrokerService {
     }
     return this.opts.store.withConnectionLock(organizationId, connectionId, async (tx) => {
       const row = await tx.load(organizationId, connectionId);
-      if (!row) throw new BrokerError('NOT_FOUND');
+      // A revoked connection is terminal (Postgres hides it entirely); reconnecting uses a new id.
+      if (!row || (row.status === 'disconnected' && row.encrypted === null)) throw new BrokerError('NOT_FOUND');
       const version = row.credentialVersion + 1;
       const encrypted = encryptCredential(JSON.stringify(tokenSet), identityOf(row, version), this.opts.writeKeyId, this.opts.keyRing);
       const ok = await tx

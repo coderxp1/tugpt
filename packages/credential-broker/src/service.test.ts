@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { encryptCredential, type KeyRing } from './crypto-v2.js';
 import { InMemoryCredentialStore, type StoredCredential } from './store.js';
 import { BrokerService, RefreshRejectedError, type TokenRefresher } from './service.js';
-import { CONN_A1, CONN_B1, ORG_A, ORG_B, testRing } from './test-fixtures.js';
+import { CONN_A1, CONN_A2, CONN_B1, ORG_A, ORG_B, testRing } from './test-fixtures.js';
 
 const NOW = Date.parse('2026-11-12T12:00:00Z');
 
@@ -122,14 +122,21 @@ describe('BrokerService.revoke / storeOAuthResult', () => {
     await expect(s.getAccessToken(ORG_A, CONN_A1)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
   });
 
-  it('storeOAuthResult reconnects and the new token is usable', async () => {
+  it('revocation is terminal: storing into a revoked connection is NOT_FOUND (reconnect uses a new connection id)', async () => {
+    // Was: "storeOAuthResult reconnects and the new token is usable" on the SAME id.
+    // Changed with PostgresCredentialStore: docs/connect/broker-durable-storage.md §2 and the
+    // DB (revoked_at, connected_accounts_revoked_is_disconnected) make revocation terminal,
+    // so a credential version can never restart for a connection id that is bound into the AAD.
     const ring = testRing();
     const store = seeded(ring, { expiresAt: '2026-11-12T13:00:00Z' });
     const s = svc(store, ring, vi.fn());
     await s.revoke(ORG_A, CONN_A1);
-    const { credentialVersion } = await s.storeOAuthResult(ORG_A, CONN_A1, { access_token: 'fresh', refresh_token: 'rt-9', expires_at: '2026-11-12T14:00:00Z' });
-    expect(credentialVersion).toBe(3);
-    expect((await s.getAccessToken(ORG_A, CONN_A1)).accessToken).toBe('fresh');
+    await expect(s.storeOAuthResult(ORG_A, CONN_A1, { access_token: 'fresh', refresh_token: 'rt-9', expires_at: '2026-11-12T14:00:00Z' })).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(s.getAccessToken(ORG_A, CONN_A1)).rejects.toMatchObject({ code: 'NOT_CONNECTED' });
+    store.insert({ organizationId: ORG_A, connectionId: CONN_A2, provider: 'google', kind: 'oauth_token_set', credentialVersion: 0, status: 'requires_authorization', encrypted: null, expiresAt: null });
+    const { credentialVersion } = await s.storeOAuthResult(ORG_A, CONN_A2, { access_token: 'fresh', refresh_token: 'rt-9', expires_at: '2026-11-12T14:00:00Z' });
+    expect(credentialVersion).toBe(1);
+    expect((await s.getAccessToken(ORG_A, CONN_A2)).accessToken).toBe('fresh');
   });
 
   it('storeOAuthResult rejects malformed token sets', async () => {

@@ -68,6 +68,8 @@ export class InMemoryCredentialStore implements CredentialStore {
       }
       const row = await this.load(o, c);
       if (!row || row.credentialVersion !== expected) return false;
+      // Revocation is terminal (as in Postgres, where it sets revoked_at).
+      if (row.status === 'disconnected' && row.encrypted === null && next.encrypted !== null) return false;
       this.rows.set(c, { ...row, ...next });
       return true;
     },

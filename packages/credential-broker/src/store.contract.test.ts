@@ -164,7 +164,15 @@ const PG_URL = process.env.TUGPT_BROKER_PG_TEST_URL;
 const PG_ADMIN_URL = process.env.TUGPT_BROKER_PG_TEST_ADMIN_URL;
 const pgEnabled = Boolean(PG_URL && PG_ADMIN_URL);
 const pools: pg.Pool[] = [];
-const createdOrgs: string[] = [];
+// Fixed fixture orgs, inserted idempotently. organizations is soft-delete-only
+// (trigger_soft_delete_organizations), so tests never try to delete them; each test
+// uses fresh connection ids, which keeps runs independent.
+const FIXTURE_ORGS = ['a2b00000-0000-4000-8000-00000000000a', 'a2b00000-0000-4000-8000-00000000000b', 'a2b00000-0000-4000-8000-00000000000c'];
+let nextFixtureOrg = 0;
+async function ensureFixtureOrg(admin: pg.Pool, id: string): Promise<string> {
+  await admin.query(`INSERT INTO public.organizations (id, name, slug) VALUES ($1, $2, $2) ON CONFLICT (id) DO NOTHING`, [id, `a2-broker-fixture-${id.slice(-1)}`]);
+  return id;
+}
 
 describeCredentialStore('postgres', pgEnabled, async () => {
   const pool = new pg.Pool({ connectionString: PG_URL, max: 10 });
@@ -172,13 +180,7 @@ describeCredentialStore('postgres', pgEnabled, async () => {
   pools.push(pool, admin);
   return {
     store: new PostgresCredentialStore({ pool }),
-    newOrg: async () => {
-      const id = randomUUID();
-      const slug = `a2-broker-test-${randomBytes(6).toString('hex')}`;
-      await admin.query('INSERT INTO public.organizations (id, name, slug) VALUES ($1, $2, $2)', [id, slug]);
-      createdOrgs.push(id);
-      return id;
-    },
+    newOrg: async () => ensureFixtureOrg(admin, FIXTURE_ORGS[nextFixtureOrg++ % 2]!),
     createPending: async (organizationId, connectionId, provider, kind) => {
       await admin.query(
         `INSERT INTO public.connected_accounts (id, organization_id, provider_key, owner_type, credential_kind)
@@ -199,9 +201,7 @@ describe.skipIf(!pgEnabled)('PostgresCredentialStore specifics', () => {
     pool = new pg.Pool({ connectionString: PG_URL, max: 4 });
     admin = new pg.Pool({ connectionString: PG_ADMIN_URL, max: 2 });
     pools.push(pool, admin);
-    org = randomUUID();
-    await admin.query('INSERT INTO public.organizations (id, name, slug) VALUES ($1, $2, $2)', [org, `a2-broker-test-${randomBytes(6).toString('hex')}`]);
-    createdOrgs.push(org);
+    org = await ensureFixtureOrg(admin, FIXTURE_ORGS[2]!);
   });
 
   async function pendingConn(): Promise<string> {
@@ -251,11 +251,5 @@ describe.skipIf(!pgEnabled)('PostgresCredentialStore specifics', () => {
 });
 
 afterAll(async () => {
-  if (createdOrgs.length > 0 && PG_ADMIN_URL) {
-    const admin = new pg.Pool({ connectionString: PG_ADMIN_URL, max: 1 });
-    // Test fixtures created by this file only (cascade removes their connections and credentials).
-    await admin.query('DELETE FROM public.organizations WHERE id = ANY($1::uuid[]) AND slug LIKE \'a2-broker-test-%\'', [createdOrgs]);
-    await admin.end();
-  }
   await Promise.all(pools.map((p) => p.end().catch(() => undefined)));
 });

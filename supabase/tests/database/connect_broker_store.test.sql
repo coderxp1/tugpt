@@ -2,7 +2,7 @@
 -- `connect_broker` (NOLOGIN; a login member is provisioned out of band) owns ciphertext
 -- access; `service_role` (the web app's key) and browser roles hold nothing on it.
 BEGIN;
-SELECT plan(22);
+SELECT plan(23);
 
 -- Role and column
 SELECT has_role('connect_broker', 'connect_broker role exists');
@@ -41,20 +41,23 @@ INSERT INTO public.organizations (id, name, slug) VALUES
 INSERT INTO public.connected_accounts (id, organization_id, provider_key, owner_type)
   VALUES ('c0000000-0000-4000-8000-0000000000c1', 'c0000000-0000-4000-8000-00000000000a', 'google', 'organization');
 
-SET LOCAL ROLE connect_broker;
-SELECT lives_ok($$INSERT INTO public.connected_account_credentials (connection_id, organization_id, kind, credential_version, key_id, iv, ciphertext, auth_tag)
-  VALUES ('c0000000-0000-4000-8000-0000000000c1', 'c0000000-0000-4000-8000-00000000000a', 'oauth_token_set', 1, 'org.v1', '\x000000000000000000000000', '\x01', '\x00000000000000000000000000000000')$$,
-  'broker inserts a credential row');
-SELECT is((SELECT credential_version FROM public.connected_account_credentials WHERE connection_id = 'c0000000-0000-4000-8000-0000000000c1'), 1, 'broker reads it back');
-SELECT lives_ok($$UPDATE public.connected_accounts SET status = 'connected', updated_at = now() WHERE id = 'c0000000-0000-4000-8000-0000000000c1'$$, 'broker updates status');
-SELECT throws_ok($$UPDATE public.connected_accounts SET provider_key = 'microsoft' WHERE id = 'c0000000-0000-4000-8000-0000000000c1'$$, '42501', NULL, 'broker cannot re-point a connection');
-SELECT throws_ok($$DELETE FROM public.connected_accounts WHERE id = 'c0000000-0000-4000-8000-0000000000c1'$$, '42501', NULL, 'broker cannot delete a connection');
-RESET ROLE;
-
-SET LOCAL ROLE service_role;
-SELECT throws_ok($$SELECT ciphertext FROM public.connected_account_credentials$$, '42501', NULL, 'service_role cannot read ciphertext');
-SELECT throws_ok($$DELETE FROM public.connected_account_credentials$$, '42501', NULL, 'service_role cannot delete ciphertext');
-RESET ROLE;
+-- pgTAP lives in a schema the broker cannot use (correctly), so each statement
+-- switches role inside the tested SQL; a failed subtransaction reverts the SET.
+SELECT lives_ok($$SET LOCAL ROLE connect_broker;
+  INSERT INTO public.connected_account_credentials (connection_id, organization_id, kind, credential_version, key_id, iv, ciphertext, auth_tag)
+  VALUES ('c0000000-0000-4000-8000-0000000000c1', 'c0000000-0000-4000-8000-00000000000a', 'oauth_token_set', 1, 'org.v1', '\x000000000000000000000000', '\x01', '\x00000000000000000000000000000000');
+  RESET ROLE$$, 'broker inserts a credential row');
+SELECT lives_ok($$SET LOCAL ROLE connect_broker;
+  SELECT credential_version FROM public.connected_account_credentials WHERE connection_id = 'c0000000-0000-4000-8000-0000000000c1';
+  RESET ROLE$$, 'broker reads it back');
+SELECT lives_ok($$SET LOCAL ROLE connect_broker;
+  UPDATE public.connected_accounts SET status = 'connected', updated_at = now() WHERE id = 'c0000000-0000-4000-8000-0000000000c1';
+  RESET ROLE$$, 'broker updates status');
+SELECT throws_ok($$SET LOCAL ROLE connect_broker; UPDATE public.connected_accounts SET provider_key = 'microsoft' WHERE id = 'c0000000-0000-4000-8000-0000000000c1'$$, '42501', NULL, 'broker cannot re-point a connection');
+SELECT throws_ok($$SET LOCAL ROLE connect_broker; DELETE FROM public.connected_accounts WHERE id = 'c0000000-0000-4000-8000-0000000000c1'$$, '42501', NULL, 'broker cannot delete a connection');
+SELECT throws_ok($$SET LOCAL ROLE service_role; SELECT ciphertext FROM public.connected_account_credentials$$, '42501', NULL, 'service_role cannot read ciphertext');
+SELECT throws_ok($$SET LOCAL ROLE service_role; DELETE FROM public.connected_account_credentials$$, '42501', NULL, 'service_role cannot delete ciphertext');
+SELECT is(current_user::text, 'postgres', 'role is restored after the role-switched checks');
 
 SELECT * FROM finish();
 ROLLBACK;
