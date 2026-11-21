@@ -159,11 +159,10 @@ button.secondary{border:1px solid #d7d7cf}
 .table th.permMine { box-shadow: inset 0 -3px 0 #15803d; }
 .memberSearch{display:flex;flex-direction:column;gap:6px;margin:14px 0 2px;max-width:440px}
 .memberSearch label{font-size:13px;font-weight:700;color:#171715}
-.searchBox{border:1px solid #d7d7cf;background:#fff;border-radius:9px;display:flex;align-items:center;gap:8px;padding:0 13px;min-height:44px}
-.searchBox:focus-within{outline:3px solid #8c4bce;outline-offset:3px}
-.searchBox svg{flex:none;color:#686963}
-.searchBox input{border:0;outline:0;min-width:0;width:100%;background:transparent;font:inherit;font-size:16px;padding:10px 0;color:#171715}
-/* the box draws the one focus ring (:focus-within); stop the layout-wide input ring from drawing a second one inside it */
-.memberSearch .searchBox input:focus-visible{outline:none}
+.searchBox{position:relative}
+.searchBox svg{position:absolute;left:13px;top:50%;transform:translateY(-50%);color:#686963;pointer-events:none}
+/* the input is the whole box, so the one focus ring belongs to the focused control itself (also satisfies the layout-wide input:focus-visible rule) */
+.searchBox input{display:block;box-sizing:border-box;width:100%;min-height:44px;border:1px solid #d7d7cf;border-radius:9px;background:#fff;font:inherit;font-size:16px;padding:10px 13px 10px 39px;color:#171715}
+.memberSearch .searchBox input:focus-visible{outline:3px solid #8c4bce;outline-offset:3px;border-color:#171715}
 .searchStatus{font-size:13px;color:#3e3f3a;margin:6px 0 0;min-height:1.45em}
 @media (max-width:720px){.memberSearch{max-width:none}}
