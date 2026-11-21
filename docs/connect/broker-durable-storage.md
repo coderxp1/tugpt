@@ -128,3 +128,15 @@ Advisory transaction locks are released by Postgres when the session ends, so a 
    - `service_role` can no longer `SELECT` from `connected_account_credentials`
    - `authenticated` has no access at all (already tested)
 7. **Separation guard:** adding the Postgres client (`pg`) is the broker's first runtime dependency. It is a reviewed change to `ALLOWED_DEPENDENCIES` in `packages/credential-broker/src/separation.test.ts`, and that test fails until the change is made deliberately.
+
+
+## Static MCP bearer credentials (B2, migration 20261120000013)
+
+**Status:** implemented on branch `agent2/mcp-authenticated-customer`; verified against the isolated harness database only. Not deployed.
+
+- A customer MCP endpoint that needs a static bearer token or API key references a `connected_accounts` row with `provider_key = 'mcp_custom'` and `credential_kind = 'mcp_static_bearer'` through `external_tool_endpoints.auth_connection_id` (composite FK with `organization_id`, so endpoint and credential always belong to one organization).
+- The CHECK `connected_accounts_mcp_custom_kind` binds provider and kind both ways and requires organization ownership.
+- The broker encrypts `{ "v": 1, "secret": ... }` with AES-256-GCM. The AAD covers organization, connection, provider, kind and credential version, so ciphertext copied to another connection does not decrypt.
+- Secrets must be visible ASCII, 8 to 4096 characters (no space, CR or LF, so they can't inject a header). Storing again rotates (version + 1). Revocation is terminal.
+- Capabilities: `web` may call `store_static_secret` (`POST /v1/static-secret`) and never read a secret back. Only `worker` may call `get_static_secret` (`POST /v1/static-secret/read`). Static and OAuth kinds never mix: `getAccessToken` on a static connection and `getStaticSecret` on an OAuth connection both return `BAD_REQUEST`.
+- Tests: `packages/credential-broker/src/static-secret.test.ts` (in-memory, HTTP and Postgres) and `supabase/tests/database/connect_mcp_static_credential.test.sql`.
