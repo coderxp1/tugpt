@@ -28,7 +28,7 @@ export function MembersList({ members, viewerId, viewerRole = null, organization
   const manager = canManageOrg(viewerRole);
   const org = organizationName ?? t('team.thisOrg');
   const uid = useId();
-  const ids = { input: `${uid}-q`, hint: `${uid}-hint`, table: `${uid}-table` };
+  const ids = { input: `${uid}-q`, hint: `${uid}-hint`, results: `${uid}-results` };
   const inputRef = useRef<HTMLInputElement>(null);
   const [query, setQuery] = useState('');
   const [announced, setAnnounced] = useState('');
@@ -69,7 +69,7 @@ export function MembersList({ members, viewerId, viewerRole = null, organization
                 <input
                   ref={inputRef} id={ids.input} type="search" value={query} maxLength={MEMBER_QUERY_MAX}
                   placeholder={t('team.search.placeholder')} autoComplete="off" spellCheck={false}
-                  aria-describedby={ids.hint} aria-controls={ids.table}
+                  aria-describedby={ids.hint} aria-controls={ids.results}
                   onChange={(e) => { setQuery(e.target.value); if (!e.target.value.trim()) setAnnounced(''); }}
                   onKeyDown={(e) => { if (e.key === 'Escape' && query) { e.preventDefault(); clear(); } }}
                 />
@@ -77,6 +77,7 @@ export function MembersList({ members, viewerId, viewerRole = null, organization
               <p id={ids.hint} className={s.muted}>{t('team.search.hint')}</p>
             </div>
             <p className={s.searchStatus} role="status" aria-live="polite" aria-atomic="true" data-testid="member-search-status">{announced}</p>
+            <div id={ids.results} data-testid="member-search-results">
             {shown.length === 0
               ? (
                 <div className={s.notice} data-testid="member-search-empty">
@@ -84,7 +85,7 @@ export function MembersList({ members, viewerId, viewerRole = null, organization
                   <p>{t('team.search.noneHelp')}{manager ? ` ${t('team.search.noneInvited')}` : ''}</p>
                   <p><button type="button" className={s.secondary} onClick={clear}>{t('team.search.clear')}</button></p>
                 </div>)
-              : <div className={s.tableWrap}><table className={`${s.table} ${s.stack}`} id={ids.table}>
+              : <div className={s.tableWrap}><table className={`${s.table} ${s.stack}`}>
                   <caption className={s.sr}>{t('team.members.caption', { org })}</caption>
                   <thead><tr><th scope="col">{t('team.col.name')}</th><th scope="col">{t('team.col.email')}</th><th scope="col">{t('team.col.role')}</th><th scope="col">{t('team.col.joined')}</th></tr></thead>
                   <tbody>{shown.map((m) => {
@@ -98,6 +99,7 @@ export function MembersList({ members, viewerId, viewerRole = null, organization
                     </tr>);
                   })}</tbody>
                 </table></div>}
+            </div>
           </>}
       {manager && members !== null && (
         <div className={s.notice} id="member-actions-note" data-testid="member-changes-note">

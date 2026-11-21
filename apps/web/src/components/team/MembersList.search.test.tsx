@@ -24,7 +24,8 @@ describe('MembersList search', () => {
     const input = box();
     expect(input.type).toBe('search');
     expect(document.getElementById(input.getAttribute('aria-describedby')!)!.textContent).toMatch(/name, email and role/);
-    expect(document.getElementById(input.getAttribute('aria-controls')!)!.tagName).toBe('TABLE');
+    const region = document.getElementById(input.getAttribute('aria-controls')!)!;
+    expect(region.querySelector('table')).not.toBeNull();
     expect(screen.getByRole('search', { name: 'Search the member list' })).toBeTruthy();
     expect(status().getAttribute('role')).toBe('status');
     expect(status().textContent).toBe('');
@@ -63,6 +64,8 @@ describe('MembersList search', () => {
     settle();
     expect(document.querySelector('table')).toBeNull();
     const empty = screen.getByTestId('member-search-empty');
+    // aria-controls must still point at an element that exists when the table is gone (axe aria-valid-attr-value)
+    expect(document.getElementById(box().getAttribute('aria-controls')!)!.contains(empty)).toBe(true);
     expect(empty.textContent).toMatch('No one matches “zzqx”.');
     expect(empty.textContent).toMatch(/Check the spelling/);
     expect(empty.textContent).toMatch(/listed under Invitations/);
