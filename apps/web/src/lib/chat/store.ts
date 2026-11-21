@@ -1,4 +1,5 @@
 import { isMissingColumn, isMissingFunction, isMissingTable } from '@/lib/supabase/schema-compat';
+import { publicCapabilityId } from './models';
 
 /**
  * Chat persistence through the caller's own RLS-bound client.
@@ -38,7 +39,8 @@ export class ChatStoreError extends Error {
 }
 
 /** agentId: the custom agent the thread was started with; null for plain chat or once that agent was deleted. */
-export interface ThreadSummary { readonly id: string; readonly title: string; readonly modelKey: string; readonly updatedAt: string; readonly agentId: string | null }
+/** `modelKey` and `capabilityId` both carry the opaque capability id (CONF-1); the stored routing key never leaves the server. */
+export interface ThreadSummary { readonly id: string; readonly title: string; readonly modelKey: string; readonly capabilityId: string; readonly updatedAt: string; readonly agentId: string | null }
 /**
  * citations / knowledgeUnavailable: what an agent turn streamed with this assistant answer (20261120100010).
  * Always [] / false for user and tool messages and for plain chat.
@@ -74,7 +76,8 @@ function check(r: DbResult): unknown {
 
 function toThread(row: unknown): ThreadSummary {
   const r = row as Record<string, unknown>;
-  return { id: str(r.id), title: str(r.title), modelKey: str(r.model_key), updatedAt: str(r.updated_at), agentId: optStr(r.agent_id) };
+  const capabilityId = publicCapabilityId(str(r.model_key)) ?? '';
+  return { id: str(r.id), title: str(r.title), modelKey: capabilityId, capabilityId, updatedAt: str(r.updated_at), agentId: optStr(r.agent_id) };
 }
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -181,6 +184,19 @@ export async function listMessages(db: ChatDb, organizationId: string, threadId:
   const data = check(res);
   const raw = ((Array.isArray(data) ? data : []) as Record<string, unknown>[]).reverse();
   return withCitations(db, organizationId, threadId, raw);
+}
+
+/**
+ * Assistant answers already stored for a turn (USAGE-1: the attempt number of the next run).
+ * null when it cannot be read; callers then record no usage rather than reuse an index.
+ */
+export async function countTurnAnswers(db: ChatDb, organizationId: string, threadId: string, turnId: string): Promise<number | null> {
+  try {
+    const r = await db.from('chat_messages').select('id')
+      .eq('thread_id', threadId).eq('organization_id', organizationId).eq('turn_id', turnId).eq('role', 'assistant').limit(64);
+    if (r.error || !Array.isArray(r.data)) return null;
+    return r.data.length;
+  } catch { return null; }
 }
 
 /** Parses rows and attaches their citations, re-authorised for the reader (see listMessages). */

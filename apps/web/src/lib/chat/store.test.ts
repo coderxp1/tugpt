@@ -68,9 +68,14 @@ const row = (over: Record<string, unknown>) => ({
 
 describe('chat store: thread agent identity (Q-9)', () => {
   it('returns agentId from the saved thread and null for plain chat', async () => {
-    const t = { id: THREAD, title: 'T', model_key: 'it-model', updated_at: '2026-11-20T10:00:00Z' };
+    // CONF-1: the stored routing key is mapped to the opaque capability id; it never leaves the server.
+    const t = { id: THREAD, title: 'T', model_key: 'tugpt-scout', updated_at: '2026-11-20T10:00:00Z' };
     const a = fakeDb({ chat_threads: { ...t, agent_id: AGENT } });
-    expect(await getThread(a.db, ORG, THREAD)).toEqual({ id: THREAD, title: 'T', modelKey: 'it-model', updatedAt: '2026-11-20T10:00:00Z', agentId: AGENT });
+    expect(await getThread(a.db, ORG, THREAD)).toEqual({ id: THREAD, title: 'T', modelKey: 'assistant', capabilityId: 'assistant', updatedAt: '2026-11-20T10:00:00Z', agentId: AGENT });
+    // A key no longer configured gets a stable opaque id, not the raw key.
+    const old = await getThread(fakeDb({ chat_threads: { ...t, model_key: 'it-model', agent_id: null } }).db, ORG, THREAD);
+    expect(old.capabilityId).toMatch(/^retired-[0-9a-f]{8}$/);
+    expect(JSON.stringify(old)).not.toContain('it-model');
     expect(a.calls[0].cols).toContain('agent_id');
     expect(a.calls[0].eq).toMatchObject({ id: THREAD, organization_id: ORG, archived_at: null });
     expect((await getThread(fakeDb({ chat_threads: { ...t, agent_id: null } }).db, ORG, THREAD)).agentId).toBeNull();

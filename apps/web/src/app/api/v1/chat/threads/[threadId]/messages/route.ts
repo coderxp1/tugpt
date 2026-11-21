@@ -32,14 +32,15 @@ import { NextResponse } from 'next/server';
 import { createSsoControlClient } from '@/lib/supabase/server';
 import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } from '@/lib/chat/request';
-import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
+import { CAPABILITY_FIELDS, configuredModels, endpointFor, findModel, requestedCapability } from '@/lib/chat/models';
+import { createUsageMeter } from '@/lib/chat/usage-meter';
 import { completeWithTools, ModelCallError, streamCompletion, type ParsedToolCall, type WireMessage } from '@/lib/chat/openai-compatible';
 import { pendingApproval } from '@/lib/chat/approval.server';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
-  appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
+  appendServerMessage, asChatDb, countTurnAnswers, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
 } from '@/lib/chat/store';
 import { claimFresh, claimRetry, currentTurn, decideTurn, openTurn, type TurnRun } from '@/lib/chat/turn-send';
 import { modelHistory, parseTurnRequest, type TurnView } from '@/lib/chat/turns';
@@ -60,11 +61,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   const { threadId } = await params;
   if (!isUuid(threadId)) return jsonError(404, 'Not found');
   let body: Record<string, unknown>;
-  try { body = await readJsonRecord(request, ['content', 'modelKey', 'mentions', 'timeZone', 'turnId', 'retry']); } catch { return jsonError(400, 'Invalid request'); }
+  try { body = await readJsonRecord(request, ['content', ...CAPABILITY_FIELDS, 'mentions', 'timeZone', 'turnId', 'retry']); } catch { return jsonError(400, 'Invalid request'); }
   const content = typeof body.content === 'string' ? body.content.trim() : '';
   if (!content || content.length > MAX_CONTENT) return jsonError(400, 'Message must be 1-8000 characters');
   const models = configuredModels();
-  const model = findModel(models, body.modelKey);
+  const model = findModel(models, requestedCapability(body));
   const endpoint = model ? endpointFor(model) : null;
   if (!model || !endpoint) return jsonError(400, 'Unknown model');
   const requested = parseMentions(body.mentions);
@@ -144,6 +145,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   if (opened instanceof NextResponse) { await run?.release(); return opened; }
   const { userMessage, turnId, retried } = opened;
   const turnRun: TurnRun = run ?? await claimFresh(control, scope, turnId);
+  // USAGE-1: a fresh turn is attempt 0; a retry counts the answers its earlier attempts stored.
+  const meter = createUsageMeter({
+    control, organizationId: orgId, userId: ctx.userId, threadId, turnId, feature: 'chat',
+    attempt: !turnId ? null : retry ? await countTurnAnswers(ctx.db, orgId, threadId, turnId) : 0,
+    provider: model.provider, model: model.upstreamModel, signal: request.signal,
+  });
 
   const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached, { registry });
   const wire: WireMessage[] = [
@@ -165,8 +172,8 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
       const calls = new Map<string, ParsedToolCall>();
       try {
         const gen = runTurn({ messages: wire, tools: toolset.specs }, {
-          stream: (m) => streamCompletion(endpoint, model.upstreamModel, m, { signal }),
-          completeWithTools: (m, t) => completeWithTools(endpoint, model.upstreamModel, m, t, { signal }),
+          stream: (m) => meter.stream((onUsage) => streamCompletion(endpoint, model.upstreamModel, m, { signal, onUsage })),
+          completeWithTools: (m, t) => meter.call((onUsage) => completeWithTools(endpoint, model.upstreamModel, m, t, { signal, onUsage })),
           executeTool: (call) => { calls.set(call.id, call); return toolset.execute(call); },
         });
         for (;;) {
@@ -210,6 +217,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
         if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE', turnId });
       }
       await turnRun.release();
+      await meter.flush();
       try { controller.close(); } catch { /* client went away */ }
     },
   });

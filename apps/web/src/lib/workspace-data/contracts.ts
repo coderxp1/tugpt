@@ -44,7 +44,10 @@ export const WORKSPACE_API = {
 export interface Conversation {
   readonly id: string;
   readonly title: string;
+  /** Deprecated alias of capabilityId (same opaque value, CONF-1). */
   readonly modelKey: string;
+  /** Opaque, provider-neutral capability id. */
+  readonly capabilityId?: string; // always set by the API; optional only for client fixtures built before CONF-1
   readonly folderId: string | null;
   readonly archivedAt: string | null;
   readonly createdAt: string;

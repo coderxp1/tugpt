@@ -21,15 +21,16 @@
 import { NextResponse } from 'next/server';
 import { createSsoControlClient } from '@/lib/supabase/server';
 import { jsonError, validTimeZone, type ChatRequestContext } from '@/lib/chat/request';
-import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
+import { configuredModels, endpointFor, findModel, publicCapabilityId } from '@/lib/chat/models';
 import { completeWithTools, ModelCallError, streamCompletion, type ParsedToolCall, type WireMessage } from '@/lib/chat/openai-compatible';
 import { pendingApproval } from '@/lib/chat/approval.server';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
-  appendServerMessage, asChatDb, ChatStoreError, listCapabilities, listMessages, titleFrom, touchThread, type CapabilityRow, type Mention, type StoredMessage,
+  appendServerMessage, asChatDb, ChatStoreError, countTurnAnswers, listCapabilities, listMessages, titleFrom, touchThread, type CapabilityRow, type Mention, type StoredMessage,
 } from '@/lib/chat/store';
+import { createUsageMeter } from '@/lib/chat/usage-meter';
 import { agentSystemPrompt, loadAgentForRun, retrieveForAgent, toCitations, type AgentTool } from './agents';
 import type { SearchHit } from './contracts';
 import { asWorkspaceDb, check, type WorkspaceDb } from './db';
@@ -151,7 +152,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
         .eq('owner_user_id', ctx.userId).is('archived_at', null).maybeSingle()) as Record<string, unknown> | null;
       if (!row) throw new WorkspaceError(404, 'NOT_FOUND');
       if (row.agent_id !== agent.id) throw new WorkspaceError(409, 'THREAD_AGENT_MISMATCH');
-      thread = { id: String(row.id), title: String(row.title), modelKey: String(row.model_key), updatedAt: String(row.updated_at) };
+      thread = { id: String(row.id), title: String(row.title), modelKey: publicCapabilityId(String(row.model_key)) ?? '', updatedAt: String(row.updated_at) };
     }
 
     if (agent.tools.length > 0 || o.mentions.length > 0) {
@@ -220,7 +221,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
       const row = check(await wdb.from('chat_threads').insert({
         organization_id: orgId, owner_user_id: ctx.userId, model_key: model.key, title: titleFrom(content), agent_id: agent.id,
       }).select(THREAD_COLS).single()) as Record<string, unknown>;
-      thread = { id: String(row.id), title: String(row.title), modelKey: String(row.model_key), updatedAt: String(row.updated_at) };
+      thread = { id: String(row.id), title: String(row.title), modelKey: publicCapabilityId(String(row.model_key)) ?? '', updatedAt: String(row.updated_at) };
     }
     const tid = thread.id;
     const opened = await openTurn(ctx.db, {
@@ -232,6 +233,12 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
   } catch (e) { await run?.release(); return fail(e, o.errorStyle); }
   const threadId = thread.id;
   const turnRun: TurnRun = run ?? await claimFresh(control, { organizationId: orgId, userId: ctx.userId, threadId }, turnId);
+  // USAGE-1 (see lib/chat/usage-meter.ts): agent answers are metered as feature 'agents'.
+  const meter = createUsageMeter({
+    control, organizationId: orgId, userId: ctx.userId, threadId, turnId, feature: 'agents',
+    attempt: !turnId ? null : retry ? await countTurnAnswers(ctx.db, orgId, threadId, turnId) : 0,
+    provider: model.provider, model: model.upstreamModel, signal: request.signal,
+  });
 
   const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached, { registry });
   const base = systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(o.timeZone), attached: toolset.labels });
@@ -256,8 +263,8 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
       const calls = new Map<string, ParsedToolCall>();
       try {
         const gen = runTurn({ messages: wire, tools: toolset.specs }, {
-          stream: (m) => streamCompletion(endpoint, model.upstreamModel, m, { signal }),
-          completeWithTools: (m, t) => completeWithTools(endpoint, model.upstreamModel, m, t, { signal }),
+          stream: (m) => meter.stream((onUsage) => streamCompletion(endpoint, model.upstreamModel, m, { signal, onUsage })),
+          completeWithTools: (m, t) => meter.call((onUsage) => completeWithTools(endpoint, model.upstreamModel, m, t, { signal, onUsage })),
           executeTool: (call) => { calls.set(call.id, call); return toolset.execute(call); },
         });
         for (;;) {
@@ -297,6 +304,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
         if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE', turnId });
       }
       await turnRun.release();
+      await meter.flush();
       try { controller.close(); } catch { /* client went away */ }
     },
   });

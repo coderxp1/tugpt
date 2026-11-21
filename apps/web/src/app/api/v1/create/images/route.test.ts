@@ -110,7 +110,9 @@ describe('GET /api/v1/create/images', () => {
     store.listGenerations.mockResolvedValue([row({ status: 'completed', progress: 100 })]);
     const body = await (await list(new Request('https://localhost:3443/api/v1/create/images'))).json();
     expect(store.listGenerations.mock.calls[0].slice(1)).toEqual([ORG, USER]);
-    expect(body.service).toEqual({ configured: true, available: true, model: 'Tongyi-MAI/Z-Image-Turbo' });
+    // CONF-1/N2: no upstream model id in the customer response.
+    expect(body.service).toEqual({ configured: true, available: true });
+    expect(JSON.stringify(body)).not.toContain('Z-Image');
     expect(body.images[0].fileUrl).toBe(`/api/v1/create/images/${ID}/file`);
     service.health.mockRejectedValue(new Error('down'));
     expect((await (await list(new Request('https://localhost:3443/api/v1/create/images'))).json()).service.available).toBe(false);

@@ -7,6 +7,7 @@
 import type { Conversation, ConversationList, ConversationPatch, ConversationQuery, Folder } from './contracts';
 import { check, oneOf, optStr, rows, str, type WorkspaceDb } from './db';
 import { WorkspaceError } from './errors';
+import { publicCapabilityId } from '@/lib/chat/models';
 import { cleanName, isUuid, parseCursor } from './http';
 
 const THREAD_COLS = 'id,title,model_key,folder_id,archived_at,created_at,updated_at';
@@ -17,8 +18,9 @@ export const MAX_FOLDERS = 200;
 
 export function toConversation(row: unknown): Conversation {
   const r = row as Record<string, unknown>;
+  const capabilityId = publicCapabilityId(str(r.model_key)) ?? '';
   return {
-    id: str(r.id), title: str(r.title), modelKey: str(r.model_key), folderId: optStr(r.folder_id),
+    id: str(r.id), title: str(r.title), modelKey: capabilityId, capabilityId, folderId: optStr(r.folder_id),
     archivedAt: optStr(r.archived_at), createdAt: str(r.created_at), updatedAt: str(r.updated_at),
     matchSource: r.match_source == null ? null : oneOf(r.match_source, ['title', 'message'] as const),
     snippet: optStr(r.snippet),

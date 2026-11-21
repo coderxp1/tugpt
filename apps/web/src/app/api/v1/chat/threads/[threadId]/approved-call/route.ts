@@ -21,11 +21,12 @@
  * authorization_denied, stored in the caller's own organization).
  * The model is offered no tools in this turn.
  */
+import { randomUUID } from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { createSsoControlClient } from '@/lib/supabase/server';
 import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } from '@/lib/chat/request';
-import { configuredModels, endpointFor, findModel } from '@/lib/chat/models';
+import { CAPABILITY_FIELDS, configuredModels, endpointFor, findModel, requestedCapability } from '@/lib/chat/models';
 import { ModelCallError, streamCompletion, type WireMessage } from '@/lib/chat/openai-compatible';
 import { runApprovedCall, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, toolAvailable } from '@/lib/chat/connect';
@@ -33,6 +34,7 @@ import { loadChatToolRegistry, MCP_PROVIDER } from '@/lib/chat/mcp';
 import { argumentsSha256, MAX_ARGUMENT_BYTES } from '@/lib/chat/approval.server';
 import { appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, touchThread } from '@/lib/chat/store';
 import { recordRouteDenial } from '@/lib/chat/approval-audit.server';
+import { createUsageMeter } from '@/lib/chat/usage-meter';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -49,7 +51,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   const { threadId } = await params;
   if (!isUuid(threadId)) return jsonError(404, 'Not found');
   let body: Record<string, unknown>;
-  try { body = await readJsonRecord(request, ['callId', 'modelKey', 'connectionId', 'capability', 'arguments', 'argumentsSha256', 'timeZone']); }
+  try { body = await readJsonRecord(request, ['callId', ...CAPABILITY_FIELDS, 'connectionId', 'capability', 'arguments', 'argumentsSha256', 'timeZone']); }
   catch { return jsonError(400, 'Invalid request'); }
   const { callId, connectionId, capability, argumentsSha256: shownHash } = body;
   const args = body.arguments;
@@ -58,7 +60,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     || typeof shownHash !== 'string' || !SHA256.test(shownHash) || !isPlainObject(args)) return jsonError(400, 'Invalid request');
   if (Buffer.byteLength(JSON.stringify(args), 'utf8') > MAX_ARGUMENT_BYTES) return jsonError(400, 'Invalid request');
   const hashMatches = argumentsSha256(args) === shownHash;
-  const model = findModel(configuredModels(), body.modelKey);
+  const model = findModel(configuredModels(), requestedCapability(body));
   const endpoint = model ? endpointFor(model) : null;
   if (hashMatches && (!model || !endpoint)) return jsonError(400, 'Unknown model');
   if (hashMatches && !model?.toolCalling) return jsonError(409, 'This model cannot use integrations');
@@ -105,6 +107,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
       .map((m) => ({ role: m.role as 'user' | 'assistant', content: m.content })),
   ];
 
+  // USAGE-1: an approved continuation belongs to no chat turn and holds no turn lease; each
+  // request is one real model call, keyed by a per-request id so it is counted exactly once.
+  const meter = createUsageMeter({
+    control, organizationId: orgId, userId: ctx.userId, threadId, turnId: randomUUID(), attempt: 0, feature: 'chat',
+    provider: model.provider, model: model.upstreamModel, signal: request.signal,
+  });
   const encoder = new TextEncoder();
   const signal = request.signal;
   const stream = new ReadableStream<Uint8Array>({
@@ -115,7 +123,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
       let errorCode: string | null = null;
       try {
         const gen = runApprovedCall({ messages: wire, call: { id: callId, name: toolName, arguments: args } }, {
-          stream: (m) => streamCompletion(endpoint, model.upstreamModel, m, { signal }),
+          stream: (m) => meter.stream((onUsage) => streamCompletion(endpoint, model.upstreamModel, m, { signal, onUsage })),
           executeTool: (call) => toolset.execute(call),
         });
         for (;;) {
@@ -147,6 +155,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
       } catch {
         if (!signal.aborted) send({ type: 'error', code: 'STORE_UNAVAILABLE' });
       }
+      await meter.flush();
       try { controller.close(); } catch { /* client went away */ }
     },
   });

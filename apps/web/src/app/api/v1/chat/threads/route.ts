@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server';
 import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 import { chatContext, jsonError, PRIVATE_HEADERS, storeErrorResponse } from '@/lib/chat/request';
-import { configuredModels, findModel, publicModels } from '@/lib/chat/models';
+import { CAPABILITY_FIELDS, configuredModels, findModel, publicCapabilityId, publicModels, requestedCapability } from '@/lib/chat/models';
 import { createThread, listThreads } from '@/lib/chat/store';
 import { parseThreadCursor, searchConversations } from '@/lib/workspace-data/conversations';
 import { loadAgentForThread } from '@/lib/workspace-data/agents';
@@ -34,12 +34,12 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   if (!isSameOriginMutation(request)) return jsonError(403, 'Invalid origin');
   let body: Record<string, unknown>;
-  try { body = await readJsonRecord(request, ['modelKey', 'agentId']); } catch { return jsonError(400, 'Invalid request'); }
+  try { body = await readJsonRecord(request, [...CAPABILITY_FIELDS, 'agentId']); } catch { return jsonError(400, 'Invalid request'); }
   if (body.agentId !== undefined && body.agentId !== null) {
     if (!isUuid(body.agentId)) return jsonError(400, 'Invalid request');
-    return createAgentThread(request, body.agentId, body.modelKey);
+    return createAgentThread(request, body.agentId, requestedCapability(body));
   }
-  const model = findModel(configuredModels(), body.modelKey);
+  const model = findModel(configuredModels(), requestedCapability(body));
   if (!model) return jsonError(400, 'Unknown model');
   const ctx = await chatContext(request);
   if (ctx instanceof NextResponse) return ctx;
@@ -83,7 +83,7 @@ async function createAgentThread(request: Request, agentId: string, modelKey: un
       organization_id: orgId, owner_user_id: ctx.userId, model_key: model.key, title: 'New chat', agent_id: agent.id,
     }).select('id,title,model_key,updated_at,agent_id').single()) as Record<string, unknown>;
     return NextResponse.json({
-      thread: { id: String(row.id), title: String(row.title), modelKey: String(row.model_key), updatedAt: String(row.updated_at), agentId: String(row.agent_id) },
+      thread: { id: String(row.id), title: String(row.title), modelKey: publicCapabilityId(String(row.model_key)), capabilityId: publicCapabilityId(String(row.model_key)), updatedAt: String(row.updated_at), agentId: String(row.agent_id) },
     }, { status: 201, headers: PRIVATE_HEADERS });
   } catch (e) {
     if (e instanceof WorkspaceError && e.status === 404) return jsonError(404, 'Agent not found');

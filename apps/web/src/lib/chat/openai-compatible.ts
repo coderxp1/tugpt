@@ -30,17 +30,113 @@ export interface ParsedToolCall {
 
 export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
 
+/**
+ * TIMEOUT-1. Every model call is bounded on the server, whatever the upstream does:
+ *   firstTokenMs: request sent -> first answer text (streaming) or the whole response (tool round);
+ *   idleMs:       streaming, after the first text: longest silence between chunks;
+ *   totalMs:      hard cap on one call.
+ * When one fires the upstream request is aborted and the call throws
+ * ModelCallError('MODEL_TIMEOUT'), a neutral code with no provider detail.
+ */
+export interface CallTimeouts { readonly firstTokenMs: number; readonly idleMs: number; readonly totalMs: number }
+
+export const DEFAULT_TIMEOUTS: CallTimeouts = { firstTokenMs: 25_000, idleMs: 20_000, totalMs: 240_000 };
+
+type Env = Readonly<Record<string, string | undefined>>;
+
+function envMs(raw: string | undefined, fallback: number): number {
+  const n = Number(raw);
+  return Number.isFinite(n) && n >= 1_000 && n <= 600_000 ? Math.floor(n) : fallback;
+}
+
+/** Operator overrides (milliseconds, 1 000..600 000): TUGPT_CHAT_FIRST_TOKEN_TIMEOUT_MS, _IDLE_, _TOTAL_. */
+export function chatTimeouts(env: Env = process.env): CallTimeouts {
+  return {
+    firstTokenMs: envMs(env.TUGPT_CHAT_FIRST_TOKEN_TIMEOUT_MS, DEFAULT_TIMEOUTS.firstTokenMs),
+    idleMs: envMs(env.TUGPT_CHAT_IDLE_TIMEOUT_MS, DEFAULT_TIMEOUTS.idleMs),
+    totalMs: envMs(env.TUGPT_CHAT_TOTAL_TIMEOUT_MS, DEFAULT_TIMEOUTS.totalMs),
+  };
+}
+
 export interface CallOptions {
   readonly signal?: AbortSignal;
   readonly fetchImpl?: FetchLike;
   readonly maxTokens?: number;
+  /** Defaults to chatTimeouts(). */
+  readonly timeouts?: Partial<CallTimeouts>;
+  /** Receives the provider's raw `usage` object when one arrives (USAGE-1). Untrusted; parse before use. */
+  readonly onUsage?: (usage: unknown) => void;
 }
 
 export class ModelCallError extends Error {
-  constructor(readonly code: 'MODEL_UNAVAILABLE' | 'MODEL_BAD_RESPONSE', readonly status?: number) {
+  constructor(readonly code: 'MODEL_UNAVAILABLE' | 'MODEL_BAD_RESPONSE' | 'MODEL_TIMEOUT', readonly status?: number) {
     super(code);
     this.name = 'ModelCallError';
   }
+}
+
+const isAbort = (e: unknown) => (e as { name?: string } | null)?.name === 'AbortError';
+
+/**
+ * One call's deadline. Links the caller's signal (client gone -> AbortError, a
+ * "stopped" turn) with the timers (-> MODEL_TIMEOUT). Every await on the upstream
+ * goes through race(), so a fetch implementation that ignores the signal cannot
+ * hold the turn either.
+ */
+class Deadline {
+  readonly controller = new AbortController();
+  private kind: 'first' | 'idle' | 'total' | null = null;
+  private phase: ReturnType<typeof setTimeout> | undefined;
+  private readonly total: ReturnType<typeof setTimeout>;
+  private readonly onOuter = () => this.controller.abort();
+  private readonly aborted: Promise<never>;
+
+  constructor(private readonly outer: AbortSignal | undefined, readonly t: CallTimeouts) {
+    if (outer?.aborted) this.controller.abort();
+    else outer?.addEventListener('abort', this.onOuter, { once: true });
+    this.total = setTimeout(() => this.fire('total'), t.totalMs);
+    this.aborted = new Promise<never>((_, reject) => {
+      const fail = () => reject(this.error());
+      if (this.controller.signal.aborted) fail();
+      else this.controller.signal.addEventListener('abort', fail, { once: true });
+    });
+    this.aborted.catch(() => undefined);
+  }
+
+  get signal(): AbortSignal { return this.controller.signal; }
+  get timedOut(): boolean { return this.kind !== null; }
+
+  arm(kind: 'first' | 'idle'): void {
+    clearTimeout(this.phase);
+    this.phase = setTimeout(() => this.fire(kind), kind === 'first' ? this.t.firstTokenMs : this.t.idleMs);
+  }
+
+  private fire(kind: 'first' | 'idle' | 'total'): void {
+    if (this.controller.signal.aborted) return;
+    this.kind = kind;
+    this.controller.abort();
+  }
+
+  /** What the caller sees: a timeout, or the caller's own abort. */
+  error(): Error {
+    if (this.kind !== null && !this.outer?.aborted) return new ModelCallError('MODEL_TIMEOUT');
+    const e = new Error('Aborted'); e.name = 'AbortError'; return e;
+  }
+
+  race<T>(p: Promise<T>): Promise<T> { return Promise.race([p, this.aborted]); }
+
+  /** Converts errors raised after an abort into the deadline's own error. */
+  wrap(e: unknown): unknown { return this.controller.signal.aborted ? this.error() : e; }
+
+  dispose(): void {
+    clearTimeout(this.phase);
+    clearTimeout(this.total);
+    this.outer?.removeEventListener('abort', this.onOuter);
+  }
+}
+
+function deadline(opts: CallOptions): Deadline {
+  return new Deadline(opts.signal, { ...chatTimeouts(), ...opts.timeouts });
 }
 
 const MAX_ARGUMENT_BYTES = 16_384;
@@ -52,35 +148,57 @@ function headers(ep: ModelEndpoint): Record<string, string> {
   return h;
 }
 
-async function post(ep: ModelEndpoint, body: unknown, opts: CallOptions): Promise<Response> {
+async function post(ep: ModelEndpoint, body: unknown, opts: CallOptions, d: Deadline): Promise<Response> {
   const f = opts.fetchImpl ?? ((u, i) => fetch(u, i));
   let res: Response;
   try {
-    res = await f(`${ep.baseUrl}/chat/completions`, {
-      method: 'POST', headers: headers(ep), body: JSON.stringify(body), signal: opts.signal, cache: 'no-store', redirect: 'error',
-    });
+    res = await d.race(f(`${ep.baseUrl}/chat/completions`, {
+      method: 'POST', headers: headers(ep), body: JSON.stringify(body), signal: d.signal, cache: 'no-store', redirect: 'error',
+    }));
   } catch (e) {
-    if ((e as { name?: string })?.name === 'AbortError') throw e;
+    const w = d.wrap(e);
+    if (w instanceof ModelCallError || isAbort(w)) throw w;
     throw new ModelCallError('MODEL_UNAVAILABLE');
   }
-  if (!res.ok) throw new ModelCallError('MODEL_UNAVAILABLE', res.status);
+  if (!res.ok) {
+    res.body?.cancel().catch(() => undefined);
+    throw new ModelCallError('MODEL_UNAVAILABLE', res.status);
+  }
   return res;
 }
 
-/** Yields text deltas. */
+/** TUGPT_CHAT_STREAM_USAGE=false turns off `stream_options.include_usage` for an upstream that rejects it. */
+function streamUsageRequested(env: Env = process.env): boolean {
+  return env.TUGPT_CHAT_STREAM_USAGE?.trim().toLowerCase() !== 'false';
+}
+
+/**
+ * Yields text deltas. Bounded by the call's deadline (TIMEOUT-1): no first text
+ * within firstTokenMs, or silence longer than idleMs after it, aborts the upstream
+ * and throws MODEL_TIMEOUT. Text already yielded stays with the caller.
+ */
 export async function* streamCompletion(
   ep: ModelEndpoint, model: string, messages: readonly WireMessage[], opts: CallOptions = {},
 ): AsyncGenerator<string> {
-  const res = await post(ep, { model, messages, stream: true, max_tokens: opts.maxTokens ?? 2048 }, opts);
-  if (!res.body) throw new ModelCallError('MODEL_BAD_RESPONSE');
-  const reader = res.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = '';
+  const d = deadline(opts);
+  d.arm('first');
+  let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   try {
+    const res = await post(ep, {
+      model, messages, stream: true, max_tokens: opts.maxTokens ?? 2048,
+      ...(streamUsageRequested() ? { stream_options: { include_usage: true } } : {}),
+    }, opts, d);
+    if (!res.body) throw new ModelCallError('MODEL_BAD_RESPONSE');
+    reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = '';
+    let started = false;
     for (;;) {
-      const { done, value } = await reader.read();
-      if (done) break;
-      buffer += decoder.decode(value, { stream: true });
+      let chunk: ReadableStreamReadResult<Uint8Array>;
+      try { chunk = await d.race(reader.read()); } catch (e) { throw d.wrap(e); }
+      if (chunk.done) break;
+      if (started) d.arm('idle');
+      buffer += decoder.decode(chunk.value, { stream: true });
       let nl: number;
       while ((nl = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, nl).trim();
@@ -90,13 +208,21 @@ export async function* streamCompletion(
         if (data === '[DONE]') return;
         let parsed: unknown;
         try { parsed = JSON.parse(data); } catch { continue; }
+        const usage = (parsed as { usage?: unknown }).usage;
+        if (usage && typeof usage === 'object') opts.onUsage?.(usage);
         const delta = (parsed as { choices?: { delta?: { content?: unknown } }[] }).choices?.[0]?.delta?.content;
-        if (typeof delta === 'string' && delta.length > 0) yield delta;
+        if (typeof delta === 'string' && delta.length > 0) {
+          if (!started) { started = true; d.arm('idle'); }
+          yield delta;
+          if (d.signal.aborted) throw d.error();
+        }
       }
     }
   } finally {
-    // Also runs when the consumer stops early (turn boundary): stop the model generating.
-    reader.cancel().catch(() => undefined);
+    d.dispose();
+    // Also runs when the consumer stops early (turn boundary) or on timeout: stop the model generating.
+    reader?.cancel().catch(() => undefined);
+    if (!d.signal.aborted) d.controller.abort();
   }
 }
 
@@ -119,17 +245,31 @@ export function parseToolCallList(raw: unknown, offered: ReadonlySet<string>): P
   return out;
 }
 
+/** One non-streaming tool round, bounded by firstTokenMs for the whole response (TIMEOUT-1). */
 export async function completeWithTools(
   ep: ModelEndpoint, model: string, messages: readonly WireMessage[], tools: readonly ToolSpec[], opts: CallOptions = {},
 ): Promise<{ text: string | null; toolCalls: ParsedToolCall[] }> {
-  const res = await post(ep, {
-    model, messages, stream: false, max_tokens: opts.maxTokens ?? 1024, tool_choice: 'auto',
-    tools: tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
-  }, opts);
-  let json: unknown;
-  try { json = await res.json(); } catch { throw new ModelCallError('MODEL_BAD_RESPONSE'); }
-  const message = (json as { choices?: { message?: { content?: unknown; tool_calls?: unknown } }[] }).choices?.[0]?.message;
-  if (!message) throw new ModelCallError('MODEL_BAD_RESPONSE');
-  const text = typeof message.content === 'string' && message.content.trim() ? message.content : null;
-  return { text, toolCalls: parseToolCallList(message.tool_calls, new Set(tools.map((t) => t.name))) };
+  const d = deadline(opts);
+  d.arm('first');
+  try {
+    const res = await post(ep, {
+      model, messages, stream: false, max_tokens: opts.maxTokens ?? 1024, tool_choice: 'auto',
+      tools: tools.map((t) => ({ type: 'function', function: { name: t.name, description: t.description, parameters: t.parameters } })),
+    }, opts, d);
+    let json: unknown;
+    try { json = await d.race(res.json()); } catch (e) {
+      const w = d.wrap(e);
+      if (w instanceof ModelCallError || isAbort(w)) throw w;
+      throw new ModelCallError('MODEL_BAD_RESPONSE');
+    }
+    const usage = (json as { usage?: unknown } | null)?.usage;
+    if (usage && typeof usage === 'object') opts.onUsage?.(usage);
+    const message = (json as { choices?: { message?: { content?: unknown; tool_calls?: unknown } }[] }).choices?.[0]?.message;
+    if (!message) throw new ModelCallError('MODEL_BAD_RESPONSE');
+    const text = typeof message.content === 'string' && message.content.trim() ? message.content : null;
+    return { text, toolCalls: parseToolCallList(message.tool_calls, new Set(tools.map((t) => t.name))) };
+  } finally {
+    d.dispose();
+    if (!d.signal.aborted) d.controller.abort();
+  }
 }

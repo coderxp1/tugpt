@@ -17,7 +17,7 @@ import { check, num, oneOf, optStr, rows, str, type WorkspaceDb } from './db';
 import { WorkspaceError } from './errors';
 import { isMissingFunction } from '@/lib/supabase/schema-compat';
 import { cleanName, isUuid, optionalText } from './http';
-import { configuredModels, findModel } from '@/lib/chat/models';
+import { configuredModels, findModel, publicCapabilityId } from '@/lib/chat/models';
 import { searchLibrary, toCollection, type QueryEmbedder } from './library';
 
 export interface AgentTool { readonly capability: string; readonly provider: string }
@@ -36,7 +36,10 @@ export interface CustomAgent {
    * people who can only use the agent.
    */
   readonly instructions: string;
+  /** Deprecated alias of capabilityId (same opaque value, CONF-1). Input accepts either id. */
   readonly modelKey: string | null;
+  /** Opaque, provider-neutral capability id; null = the default capability. */
+  readonly capabilityId?: string | null; // always set by the API; optional only for client fixtures built before CONF-1
   readonly starters: readonly string[];
   /** Linked Library collections the caller can read now (others are omitted). */
   readonly collectionIds: readonly string[];
@@ -56,7 +59,7 @@ export interface AgentInput {
 
 /** C-1 limits (same numbers as AGENT_LIMITS in Agent 3's client). */
 export const AGENT_LIMITS = { name: 80, description: 280, instructions: 8000, starters: 4, starter: 200, collections: 10 } as const;
-export const AGENT_INPUT_FIELDS = ['name', 'description', 'instructions', 'modelKey', 'starters', 'collectionIds', 'visibility', 'tools'] as const;
+export const AGENT_INPUT_FIELDS = ['name', 'description', 'instructions', 'modelKey', 'capabilityId', 'starters', 'collectionIds', 'visibility', 'tools'] as const;
 /**
  * Read-only response fields. The builder edits a copy of the agent it got and
  * sends the whole object back, so PATCH accepts these and ignores them (id
@@ -98,7 +101,7 @@ export function toAgent(row: unknown, userId: string, role: string, collectionId
   const canEdit = canEditAgent(owner, visibility, userId, role);
   return {
     id: str(r.id), name: str(r.name), description: optStr(r.description), instructions: canEdit ? str(r.instructions) : '',
-    modelKey: optStr(r.model_key), starters: Array.isArray(r.conversation_starters) ? r.conversation_starters.map(str) : [],
+    modelKey: publicCapabilityId(optStr(r.model_key)), capabilityId: publicCapabilityId(optStr(r.model_key)), starters: Array.isArray(r.conversation_starters) ? r.conversation_starters.map(str) : [],
     collectionIds: [...collectionIds], visibility, ownedByMe: owner === userId, createdAt: str(r.created_at), updatedAt: str(r.updated_at),
     canEdit, canDelete: canDeleteAgent(owner, visibility, userId, role), version: num(r.version), tools: toTools(r.tools),
   };
@@ -154,9 +157,12 @@ export function parseAgentInput(body: Record<string, unknown>, mode: 'create' | 
   if ('name' in body || mode === 'create') out.name = cleanName(body.name, AGENT_LIMITS.name);
   if ('description' in body) out.description = optionalText(body.description, AGENT_LIMITS.description);
   if ('instructions' in body || mode === 'create') out.instructions = parseInstructions(body.instructions);
-  if ('modelKey' in body) {
-    if (body.modelKey !== null && (typeof body.modelKey !== 'string' || !KEY.test(body.modelKey))) throw bad('INVALID_MODEL');
-    out.modelKey = body.modelKey as string | null;
+  if ('capabilityId' in body || 'modelKey' in body) {
+    // CONF-1: capabilityId wins; modelKey is the deprecated alias. Different values in one request are ambiguous.
+    if ('capabilityId' in body && 'modelKey' in body && body.capabilityId !== body.modelKey) throw bad('INVALID_MODEL');
+    const v = 'capabilityId' in body ? body.capabilityId : body.modelKey;
+    if (v !== null && (typeof v !== 'string' || !KEY.test(v))) throw bad('INVALID_MODEL');
+    out.modelKey = v as string | null;
   }
   if ('visibility' in body) {
     if (body.visibility !== 'private' && body.visibility !== 'organization') throw bad();
@@ -169,10 +175,18 @@ export function parseAgentInput(body: Record<string, unknown>, mode: 'create' | 
   return out;
 }
 
-/** modelKey must be in the chat catalogue; an unchanged stored key is accepted even if it left the catalogue. */
-function assertModel(modelKey: string | null | undefined, current: string | null): void {
-  if (modelKey === undefined || modelKey === null || modelKey === current) return;
-  if (!findModel(configuredModels(), modelKey)) throw bad('INVALID_MODEL');
+/**
+ * The value to store for a requested capability (CONF-1). Input may be a capability id
+ * (current clients) or a legacy key (transition); the stored value is always the
+ * server-internal routing key. An unchanged selection (stored key or its public id)
+ * is kept as stored even if it left the catalogue. Unknown -> 400 INVALID_MODEL.
+ */
+function resolveModel(modelKey: string | null | undefined, current: string | null): string | null | undefined {
+  if (modelKey === undefined || modelKey === null) return modelKey;
+  if (current !== null && (modelKey === current || modelKey === publicCapabilityId(current))) return current;
+  const m = findModel(configuredModels(), modelKey);
+  if (!m) throw bad('INVALID_MODEL');
+  return m.key;
 }
 
 function toValues(input: AgentInput): Record<string, unknown> {
@@ -264,8 +278,8 @@ export async function getAgent(db: WorkspaceDb, tenant: TenantContext, userId: s
 
 /** Members create private agents; organization agents need owner/admin (RLS: 403 FORBIDDEN). */
 export async function createAgent(db: WorkspaceDb, tenant: TenantContext, userId: string, input: AgentInput): Promise<CustomAgent> {
-  assertModel(input.modelKey, null);
-  return getAgent(db, tenant, userId, await save(db, tenant.organizationId, null, input));
+  const stored = { ...input, modelKey: resolveModel(input.modelKey, null) };
+  return getAgent(db, tenant, userId, await save(db, tenant.organizationId, null, stored));
 }
 
 /** Owner only (C-1): anyone else gets 404, whether or not they can read the agent. */
@@ -277,8 +291,8 @@ export async function updateAgent(db: WorkspaceDb, tenant: TenantContext, userId
   if (!canEditAgent(str(current.owner_user_id), input.visibility ?? str(current.visibility), userId, tenant.role)) {
     throw new WorkspaceError(403, 'FORBIDDEN');
   }
-  assertModel(input.modelKey, optStr(current.model_key));
-  await save(db, tenant.organizationId, id, input);
+  const stored = { ...input, modelKey: resolveModel(input.modelKey, optStr(current.model_key)) };
+  await save(db, tenant.organizationId, id, stored);
   return getAgent(db, tenant, userId, id);
 }
 

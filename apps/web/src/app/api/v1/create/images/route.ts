@@ -23,7 +23,8 @@ export async function GET(request: Request) {
       service ? service.health().catch(() => null) : Promise.resolve(null),
     ]);
     return NextResponse.json({
-      service: { configured: !!service, available: !!health?.ready, model: health?.model ?? null },
+      // CONF-1/N2: availability only; the image model name stays on the server.
+      service: { configured: !!service, available: !!health?.ready },
       sizes: IMAGE_SIZES,
       images: images.map(publicImage),
     }, { headers: PRIVATE_HEADERS });

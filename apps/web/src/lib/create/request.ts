@@ -47,7 +47,8 @@ export function changed(row: ImageGeneration, p: StatusPatch): boolean {
 /** The browser shape: no organization or owner ids. */
 export function publicImage(g: ImageGeneration) {
   return {
-    id: g.id, prompt: g.prompt, width: g.width, height: g.height, seed: g.seed, model: g.modelKey,
+    // No model name (CONF-1): stored server-side only.
+    id: g.id, prompt: g.prompt, width: g.width, height: g.height, seed: g.seed,
     status: g.status, progress: g.progress, errorCode: g.errorCode, seconds: g.seconds,
     createdAt: g.createdAt, finishedAt: g.finishedAt,
     fileUrl: g.status === 'completed' ? `/api/v1/create/images/${g.id}/file` : null,
