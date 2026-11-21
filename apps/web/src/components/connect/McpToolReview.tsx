@@ -64,7 +64,7 @@ export function McpToolReview({ tools, approved, serverStatus = 'pending', onApp
             </tr>
           </thead>
           <tbody>
-            {tools.map((x) => (
+            {tools.map((x, i) => (
               <tr key={x.name}>
                 <th scope="row" data-label={t('mcp.review.colTool')}><code>{x.name}</code></th>
                 <td data-label={t('mcp.review.colDesc')}>{x.description || <em>{t('mcp.review.noDesc')}</em>}</td>
@@ -72,8 +72,8 @@ export function McpToolReview({ tools, approved, serverStatus = 'pending', onApp
                 <td data-label={t('mcp.review.colState')}><span className={`${s.badge} ${approved && serverStatus === 'active' ? s.ok : approved ? s.off : s.idle}`}>{toolState}</span></td>
                 {editable && (
                   <td data-label={t('mcp.review.colDecision')}>
-                    <label className={s.sr} htmlFor={`${id}-${x.name}`}>{t('mcp.review.levelFor', { tool: x.name })}</label>
-                    <select id={`${id}-${x.name}`} value={levels[x.name] ?? ''} onChange={(e) => setLevels((l) => ({ ...l, [x.name]: e.target.value as PermissionLevel }))}>
+                    <label className={s.sr} htmlFor={`${id}-tool-${i}`}>{t('mcp.review.levelFor', { tool: x.name })}</label>
+                    <select id={`${id}-tool-${i}`} value={levels[x.name] ?? ''} onChange={(e) => setLevels((l) => ({ ...l, [x.name]: e.target.value as PermissionLevel }))}>
                       <option value="" disabled>{t('mcp.review.choose')}</option>
                       {PERMISSION_LEVELS.map((p) => <option key={p} value={p}>{permissionText(p, t).label}</option>)}
                     </select>
@@ -90,9 +90,9 @@ export function McpToolReview({ tools, approved, serverStatus = 'pending', onApp
       {editable ? (
         <>
           <label className={s.check}><input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} /> {t('mcp.review.confirm')}</label>
-          {!complete && <p className={s.muted} data-testid="mcp-review-left">{t('mcp.review.missing', { left })}</p>}
+          {!complete && <p className={s.muted} id={`${id}-left`} data-testid="mcp-review-left">{t('mcp.review.missing', { left })}</p>}
           {problem && <p className={s.error} role="alert">{problem}</p>}
-          <button type="button" className={s.primary} onClick={() => void approve()} disabled={!complete || !reviewed}>
+          <button type="button" className={s.primary} onClick={() => void approve()} disabled={!complete || !reviewed} aria-describedby={!complete ? `${id}-left` : undefined}>
             {busy ? t('mcp.review.approving') : t('mcp.review.approve')}
           </button>
         </>
