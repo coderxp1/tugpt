@@ -16,6 +16,8 @@ const ROUTES: Readonly<Record<string, Operation>> = {
   '/v1/status': 'connection_status',
   '/v1/access-token': 'get_access_token',
   '/v1/revoke': 'revoke',
+  '/v1/static-secret': 'store_static_secret',
+  '/v1/static-secret/read': 'get_static_secret',
 };
 const MAX_BODY_BYTES = 16 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -105,7 +107,7 @@ export function createBrokerServer(opts: BrokerServerOptions): Server {
       return send(res, 403, { error: 'FORBIDDEN' });
     }
 
-    let parsed: { organizationId?: unknown; connectionId?: unknown; tokenSet?: unknown };
+    let parsed: { organizationId?: unknown; connectionId?: unknown; tokenSet?: unknown; secret?: unknown };
     try {
       parsed = JSON.parse(body) as typeof parsed;
     } catch {
@@ -131,6 +133,12 @@ export function createBrokerServer(opts: BrokerServerOptions): Server {
           break;
         case 'store_oauth_result':
           result = await opts.service.storeOAuthResult(organizationId, connectionId, parsed.tokenSet as TokenSet);
+          break;
+        case 'store_static_secret':
+          result = await opts.service.storeStaticSecret(organizationId, connectionId, parsed.secret as string);
+          break;
+        case 'get_static_secret':
+          result = await opts.service.getStaticSecret(organizationId, connectionId);
           break;
         case 'revoke':
           await opts.service.revoke(organizationId, connectionId);

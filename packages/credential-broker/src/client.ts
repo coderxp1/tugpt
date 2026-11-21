@@ -8,7 +8,7 @@
  * logged and never part of a result.
  */
 import { signRequest, type Caller } from './signing.js';
-import type { AccessTokenGrant, TokenSet } from './service.js';
+import type { AccessTokenGrant, StaticSecretGrant, TokenSet } from './service.js';
 import type { ConnectionStatus } from './store.js';
 
 export type BrokerClientFailure =
@@ -96,6 +96,24 @@ export class BrokerClient {
 
   storeOAuthResult(scope: ConnectionScope, tokenSet: TokenSet): Promise<BrokerResult<unknown>> {
     return this.post('/v1/oauth-result', { ...scope, tokenSet }, (v) => v ?? {});
+  }
+
+  /** web: store/rotate a customer MCP static secret. The result never contains the secret. */
+  storeStaticSecret(scope: ConnectionScope, secret: string): Promise<BrokerResult<{ credentialVersion: number }>> {
+    return this.post('/v1/static-secret', { ...scope, secret }, (v) => {
+      const n = (v as { credentialVersion?: unknown }).credentialVersion;
+      return typeof n === 'number' && Number.isInteger(n) && n > 0 ? { credentialVersion: n } : null;
+    });
+  }
+
+  /** worker: obtain the static secret for one call. Hold it in memory only; never log it. */
+  getStaticSecret(scope: ConnectionScope): Promise<BrokerResult<StaticSecretGrant>> {
+    return this.post('/v1/static-secret/read', scope, (v) => {
+      const g = v as { secret?: unknown; credentialVersion?: unknown };
+      return typeof g.secret === 'string' && g.secret !== '' && typeof g.credentialVersion === 'number'
+        ? { secret: g.secret, credentialVersion: g.credentialVersion }
+        : null;
+    });
   }
 
   revoke(scope: ConnectionScope): Promise<BrokerResult<{ revoked: true }>> {
