@@ -19,7 +19,9 @@ const SRC_DIR = join(PKG_DIR, 'src');
 const SELF = 'separation.test.ts';
 
 const ALLOWED_DEPENDENCIES: string[] = [];
-const ALLOWED_DEV_DEPENDENCIES = ['@types/node', 'typescript', 'vitest'];
+// pg + @types/pg: test-only (store.contract.test.ts). PostgresCredentialStore takes an injected
+// pool, so the broker's runtime source still has no third-party import.
+const ALLOWED_DEV_DEPENDENCIES = ['@types/node', '@types/pg', 'pg', 'typescript', 'vitest'];
 const FORBIDDEN_BUILTINS = ['child_process', 'worker_threads', 'cluster', 'vm', 'inspector', 'repl', 'dgram'];
 const FORBIDDEN_TEXT = [
   'tugpt-mcp', 'tugpt-admin-broker', 'tugpt-gateway', 'tugpt_mcp_integration',
