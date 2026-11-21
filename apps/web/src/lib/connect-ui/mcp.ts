@@ -76,6 +76,15 @@ export function validateEndpointInput(url: string, displayName: string, t: Trans
   return null;
 }
 
+/** Which form field `validateEndpointInput` rejects, so the form can mark and focus it. Same checks, same order. */
+export function invalidEndpointField(url: string, displayName: string): 'name' | 'url' | null {
+  if (!displayName.trim() || displayName.trim().length > 80) return 'name';
+  let u: URL;
+  try { u = new URL(url.trim()); } catch { return 'url'; }
+  if (u.protocol !== 'https:' || u.username || u.password) return 'url';
+  return null;
+}
+
 /** What went wrong and, where the customer can act, how to fix it. */
 export interface McpIssue { text: string; fix?: string; detail?: string }
 

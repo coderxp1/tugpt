@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BACKEND_GAPS, present, type RouteAvailability } from '@/lib/connect-ui/contract';
-import { endpointStatusText, mcpApi, mcpIssue, newIdempotencyKey, permissionText, PERMISSION_LEVELS, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, type McpEndpoint, type McpIssue, type McpTool, type PermissionLevel } from '@/lib/connect-ui/mcp';
+import { endpointStatusText, mcpApi, mcpIssue, newIdempotencyKey, permissionText, PERMISSION_LEVELS, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, invalidEndpointField, type McpEndpoint, type McpIssue, type McpTool, type PermissionLevel } from '@/lib/connect-ui/mcp';
 import { createTranslator, formatDate, type Translator } from '@/i18n';
 import { useT } from '@/i18n/provider';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -41,9 +41,9 @@ async function pool<T>(items: readonly T[], limit: number, fn: (item: T) => Prom
   await Promise.all(Array.from({ length: Math.min(limit, items.length) }, worker));
 }
 
-function IssueBox({ issue, t }: { issue: McpIssue; t: Translator }) {
+function IssueBox({ issue, t, id }: { issue: McpIssue; t: Translator; id?: string }) {
   return (
-    <div className={s.issue} role="alert">
+    <div className={s.issue} role="alert" id={id}>
       <p className={s.issueText}>{issue.text}</p>
       {issue.fix && <p className={s.issueFix}><strong>{t('mcp.err.fix')}</strong> {issue.fix}</p>}
       {issue.detail && <p className={s.issueFix}><small>{t('mcp.err.detail')} <span lang="en">{issue.detail}</span></small></p>}
@@ -63,6 +63,8 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
   const [loadIssue, setLoadIssue] = useState<McpIssue | null>(null);
   const [url, setUrl] = useState(''); const [name, setName] = useState('');
   const [formIssue, setFormIssue] = useState<McpIssue | null>(null);
+  const [badField, setBadField] = useState<'name' | 'url' | null>(null);
+  const nameRef = useRef<HTMLInputElement>(null); const urlRef = useRef<HTMLInputElement>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState('');
   const [deleting, setDeleting] = useState<Row | null>(null);
@@ -115,8 +117,13 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
     ev.preventDefault();
     if (!can.register) return;
     const invalid = validateEndpointInput(url, name, t);
-    if (invalid) { setFormIssue({ text: invalid }); return; }
-    setBusy('register'); setFormIssue(null); setNotice('');
+    if (invalid) {
+      const field = invalidEndpointField(url, name);
+      setFormIssue({ text: invalid }); setBadField(field);
+      (field === 'name' ? nameRef : urlRef).current?.focus();
+      return;
+    }
+    setBusy('register'); setFormIssue(null); setBadField(null); setNotice('');
     const r = await mcpApi.register(url, name, fetcher);
     setBusy(null);
     if (!r.ok) { setFormIssue(mcpIssue(r, t)); return; }
@@ -221,12 +228,12 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
           <form className={s.form} onSubmit={(e) => void register(e)} noValidate>
             <fieldset disabled={!can.register || busy === 'register'}>
               <legend className={s.sr}>{t('mcp.form.legend')}</legend>
-              <label>{t('mcp.form.name')}<input value={name} onChange={(e) => setName(e.target.value)} autoComplete="off" maxLength={80} placeholder={t('mcp.form.namePh')} /></label>
-              <label>{t('mcp.form.url')}<input value={url} onChange={(e) => setUrl(e.target.value)} type="url" inputMode="url" autoComplete="off" placeholder="https://mcp.example.com/sse" aria-describedby="mcp-url-help" /></label>
+              <label>{t('mcp.form.name')}<input ref={nameRef} value={name} onChange={(e) => { setName(e.target.value); if (badField === 'name') setBadField(null); }} autoComplete="off" maxLength={80} placeholder={t('mcp.form.namePh')} aria-invalid={badField === 'name' || undefined} aria-describedby={badField === 'name' ? 'mcp-form-issue' : undefined} /></label>
+              <label>{t('mcp.form.url')}<input ref={urlRef} value={url} onChange={(e) => { setUrl(e.target.value); if (badField === 'url') setBadField(null); }} type="url" inputMode="url" autoComplete="off" placeholder="https://mcp.example.com/sse" aria-invalid={badField === 'url' || undefined} aria-describedby={badField === 'url' ? 'mcp-form-issue mcp-url-help' : 'mcp-url-help'} /></label>
               <small id="mcp-url-help">{t('mcp.form.urlHelp')}</small>
               <button type="submit" className={s.primary} disabled={!can.register || busy === 'register'}>{busy === 'register' ? t('mcp.form.adding') : t('mcp.form.add')}</button>
             </fieldset>
-            {formIssue && <IssueBox issue={formIssue} t={t} />}
+            {formIssue && <IssueBox issue={formIssue} t={t} id="mcp-form-issue" />}
           </form>
 
           <p className={notice ? s.okNote : s.sr} role="status" data-testid="mcp-notice">{notice}</p>

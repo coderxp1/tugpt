@@ -189,6 +189,27 @@ describe('Connect page copy matches what Chat can do (MCP in chat, per-call appr
 });
 
 describe('McpPanel', () => {
+  it('marks the rejected field, links it to the message and moves focus there; nothing is sent', async () => {
+    const f = api((url, init) => {
+      if (url === '/api/v1/connect/mcp/endpoints' && (init.method ?? 'GET') === 'GET') return json({ endpoints: [] });
+      throw new Error(`unexpected ${init.method} ${url}`);
+    });
+    render(<McpPanel canManage routes={all('available')} enabled fetcher={f as unknown as typeof fetch} />);
+    const addr = screen.getByLabelText('Server address') as HTMLInputElement;
+    fireEvent.change(screen.getByLabelText('Name'), { target: { value: 'Support' } });
+    fireEvent.change(addr, { target: { value: 'http://mcp.example.com/sse' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add server' }));
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toMatch(/Only https:\/\/ addresses are accepted/);
+    expect(addr.getAttribute('aria-invalid')).toBe('true');
+    expect(addr.getAttribute('aria-describedby')!.split(' ')).toContain(alert.id);
+    expect(document.activeElement).toBe(addr);
+    expect((screen.getByLabelText('Name') as HTMLInputElement).getAttribute('aria-invalid')).toBeNull();
+    expect(f.mock.calls.some(([, init]) => (init as RequestInit | undefined)?.method === 'POST')).toBe(false);
+    fireEvent.change(addr, { target: { value: 'https://mcp.example.com/sse' } });
+    expect(addr.getAttribute('aria-invalid')).toBeNull();
+  });
+
   it('members see a message and the list is never requested', () => {
     const f = api(() => json({ endpoints: [] }));
     render(<McpPanel canManage={false} routes={all('available')} enabled={false} fetcher={f as unknown as typeof fetch} />);
