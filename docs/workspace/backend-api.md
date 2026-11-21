@@ -218,6 +218,11 @@ host, port or endpoint.
   routing key. An agent whose stored model is retired can still be saved by echoing its `retired-*` id
   back unchanged; the stored key is kept. It cannot be newly chosen.
 - Images API responses no longer include a model field.
+- Images `errorCode` is a closed, neutral set (IMAGES-NEUTRAL): `GENERATION_FAILED`,
+  `GENERATION_INTERRUPTED`, `JOB_NOT_FOUND`, `RESULT_EXPIRED` or `null`. The image service's raw codes
+  stay in `image_generations.error_code` (backend-only). Mapping: `GPU_INFERENCE_FAILED` to
+  `GENERATION_FAILED`; `GPU_SHUTDOWN` to `GENERATION_INTERRUPTED`; anything unknown to
+  `GENERATION_FAILED`. Applied in `publicImage`, so it covers list, create, status and cancel.
 
 **TIMEOUT-1 — every model call ends.** Each call has a first-token deadline (25 s: request sent to
 first answer text, or the whole tool-round response), an idle deadline (20 s between chunks after the
@@ -236,10 +241,32 @@ matters because `next start` does not enforce `maxDuration`.
 - A client disconnect is a stop, not a timeout: the answer is stored `stopped`.
 - Measured over HTTP against the scripted upstream (`rc-blockers-q15-http.e2e.mjs`): idle stall
   20.1 s, no text after headers 25.1 s, no response headers 25.1 s, HTTP 500 in 0.1 s.
-- Known limit: a reasoning model that thinks silently for more than 25 s before its first text is
-  cut. Raise `TUGPT_CHAT_FIRST_TOKEN_TIMEOUT_MS` for such a route; the turn budget still applies.
-- Known limit: in a turn with tools, text from a tool round or final stream that fails mid-way is not
-  kept; the fixed error text is stored.
+- Disposition (reasoning): only visible answer text (`delta.content`, non-empty) counts as the first
+  token. `reasoning` / `reasoning_content` deltas, role chunks, `: ping` keep-alives, empty strings and
+  malformed lines do not, so a model that thinks silently for more than 25 s is cut with
+  `MODEL_TIMEOUT`. This is deliberate: the customer sees nothing during hidden reasoning. The deployed
+  private model (Llama 4 Scout) emits no reasoning deltas. For a reasoning route, raise
+  `TUGPT_CHAT_FIRST_TOKEN_TIMEOUT_MS`; the 100 s turn budget still applies.
+- Cold model load: if the private model is not resident (Ollama unloads after 5 min idle by default),
+  the first request waits for the load without sending headers. If the load exceeds 25 s, that request
+  ends `MODEL_TIMEOUT`. **Not measured yet**: see the real-model verification procedure (Agent 5).
+
+#### TIMEOUT-1 edge cases (Q15 follow-up)
+
+| Case | Behaviour | Test |
+|---|---|---|
+| Silent before first text: no headers / headers + role chunk / keep-alives / reasoning-only / empty or malformed deltas | `MODEL_TIMEOUT` after the first-token deadline; upstream aborted; nothing shown; stored `error` | `timeouts.test.ts`; E2E T2, T3 |
+| Stream ends cleanly with no text (plain chat) | `MODEL_BAD_RESPONSE`; stored as a retryable `error` (was: an empty `complete` answer that could never be retried) | `turn-partial.test.ts`; E2E T6 |
+| Partial text, then a stall | `MODEL_TIMEOUT` after the idle deadline; partial text kept as the stored `error` answer | E2E T1 |
+| Model fails **after a tool ran** (2nd tool round, final answer stream, approved-call answer) | Cleaned partial text + "The tool ran, but TuGPT's answer was interrupted before it was complete. Ask again for a summary of the result." + the approval sentence if a card is waiting; original error code (`MODEL_TIMEOUT` / `MODEL_UNAVAILABLE`) kept; stored `error`; the tool ran exactly once | `turn-partial.test.ts` (6 cases) |
+| Model fails before any tool ran | Unchanged: no text, original error code | `turn-partial.test.ts` |
+| Server crash during usage recording | See USAGE-1 "Crash during recording" below | `usage-meter.test.ts`; E2E T7 |
+| Retry after a timeout | Lease released when the error is stored; the timed-out upstream request is closed **before** the retry's request reaches the model; exactly 2 upstream requests; usage idx 0 `failed` + idx 8 `succeeded` | E2E T1–T3 |
+| Duplicate provider calls | Concurrent retries of one turn (T4) and a double submit of a new turn (T8): one runs, the other gets `409`, exactly one model call and one usage row. A complete turn cannot be re-run (`409 TURN_EXISTS`, U2) | E2E T4, T8, U2 |
+
+Retry re-runs the turn from the start, so read-only tools run again on a retry. Data-changing tools
+cannot repeat a change: they need an approval, and an approval is claimed once
+(`claim_tool_approval_audited`).
 
 **USAGE-1 — one usage row per model call** (Agent 6's `recordChatUsage`, table from
 `20261121700002_usage_accounting`).
@@ -253,10 +280,26 @@ matters because `next start` does not enforce `maxDuration`.
 - Outcome: `succeeded`, `failed` (timeout, upstream error) or `cancelled` (client stop). A consumer
   that stops reading early, e.g. at a leaked role header, counts as `succeeded`.
 - Tokens come from the provider's final `usage` chunk (`stream_options.include_usage` is sent;
-  `TUGPT_CHAT_STREAM_USAGE=false` disables it for an upstream that rejects it). Without one, the row
-  has `usage_basis = unavailable`, component quantities 0 and NULL cost (Agent 6's design).
+  `TUGPT_CHAT_STREAM_USAGE=false` disables it for an upstream that rejects it).
+- **Unknown usage (disposition).** Without a provider `usage` object, Workspace passes `usage: null`
+  (never 0) and the event is recorded with `usage_basis = 'unavailable'` and NULL cost. **The event's
+  `usage_basis` is the authoritative marker.** Agent 6's `record_chat_usage` currently also writes
+  `input_tokens` / `output_tokens` components with quantity 0 for such events (`COALESCE(..., 0)`),
+  while their contract says "tokens stored: NULL". Readers must therefore treat token quantities of an
+  `unavailable` event as unknown, never as 0. The customer report `org_usage_report` already does this:
+  it adds nothing to the token sums and counts the event in `unmetered_requests`. The service-role
+  `org_usage_summary` is basis-unaware. The clean-up (no components for `unavailable` events, or
+  documenting the zeros) is Agent 6's decision; see the USAGE-1 handoff. A provider-reported 0 is
+  different: `usage_basis = 'reported'` with 0 tokens, not unmetered (E2E U6).
+- **Crash during recording.** A run that recorded calls but died before storing its answer leaves
+  `attempt` unchanged, so the next run's first key collides (`duplicate`). A meter records each of its
+  own calls exactly once, so a `duplicate` it receives always belongs to another, dead run: it moves to
+  the next attempt slot (`+8`) and keeps that shift for its later calls, giving up with a log past 63.
+  Result: no under-count for the new run and no double count. The residual case, a crash between a
+  model call and its record, loses that one record. That is an under-count, never a double count
+  (`record_chat_usage` is a single transaction).
 - Rows are written after the lease is released. They are best-effort: a recording failure never fails
-  the turn, and a crash between the model call and the write can under-count.
+  the turn.
 - Provider and upstream model are stored on the row (backend-only). The customer report
   `org_usage_report` exposes neither, and neither does any customer response.
 

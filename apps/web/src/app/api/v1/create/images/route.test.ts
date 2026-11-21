@@ -171,3 +171,38 @@ describe('per-image routes', () => {
     expect(ctx).not.toHaveBeenCalled();
   });
 });
+
+describe('IMAGES-NEUTRAL: customer error codes carry no infrastructure wording', () => {
+  it('a failed GPU job is stored raw (backend-only) but returned as GENERATION_FAILED', async () => {
+    store.getGeneration.mockResolvedValue(row());
+    service.status.mockResolvedValue({ id: ID, status: 'failed', progress: 30, seconds: null, error: 'GPU_INFERENCE_FAILED' });
+    store.recordStatus.mockResolvedValue(row({ status: 'failed', errorCode: 'GPU_INFERENCE_FAILED' }));
+    const res = await status(new Request('https://localhost:3443/x'), params());
+    const text = await res.text();
+    expect(store.recordStatus.mock.calls[0][4]).toMatchObject({ status: 'failed', errorCode: 'GPU_INFERENCE_FAILED' });
+    expect(JSON.parse(text).image.errorCode).toBe('GENERATION_FAILED');
+    expect(text).not.toMatch(/GPU|CUDA|VRAM|inference/i);
+  });
+
+  it('history lists map every stored code, including unknown upstream strings', async () => {
+    store.listGenerations.mockResolvedValue([
+      row({ status: 'failed', errorCode: 'GPU_SHUTDOWN' }),
+      row({ status: 'failed', errorCode: 'CUDA out of memory at 10.0.0.5' }),
+      row({ status: 'expired', errorCode: 'RESULT_EXPIRED' }),
+      row({ status: 'expired', errorCode: 'JOB_NOT_FOUND' }),
+      row({ status: 'completed', errorCode: null }),
+    ]);
+    const res = await list(new Request('https://localhost:3443/api/v1/create/images'));
+    const text = await res.text();
+    expect(JSON.parse(text).images.map((i: { errorCode: unknown }) => i.errorCode))
+      .toEqual(['GENERATION_INTERRUPTED', 'GENERATION_FAILED', 'RESULT_EXPIRED', 'JOB_NOT_FOUND', null]);
+    expect(text).not.toMatch(/GPU|CUDA|10\.0\.0\.5/);
+  });
+
+  it('cancel responses are mapped too', async () => {
+    store.getGeneration.mockResolvedValue(row({ status: 'failed', errorCode: 'GPU_INFERENCE_FAILED' }));
+    const body = await (await cancel(post('https://localhost:3443/x', {}), params())).json();
+    expect(body.image.errorCode).toBe('GENERATION_FAILED');
+  });
+});
+

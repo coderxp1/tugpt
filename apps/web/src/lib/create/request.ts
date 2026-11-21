@@ -44,12 +44,34 @@ export function changed(row: ImageGeneration, p: StatusPatch): boolean {
   return row.status !== p.status || row.progress !== p.progress || row.errorCode !== p.errorCode;
 }
 
-/** The browser shape: no organization or owner ids. */
+/**
+ * Customer-facing failure codes for an image (IMAGES-NEUTRAL). The image service's own
+ * error string stays in the database (backend-only, for support and ops); customers only
+ * ever see one of these neutral codes. Unknown or future service codes collapse to
+ * GENERATION_FAILED, so no infrastructure wording or raw upstream text can leak.
+ */
+export const PUBLIC_IMAGE_ERROR_CODES = ['GENERATION_FAILED', 'GENERATION_INTERRUPTED', 'JOB_NOT_FOUND', 'RESULT_EXPIRED'] as const;
+export type PublicImageErrorCode = (typeof PUBLIC_IMAGE_ERROR_CODES)[number];
+
+const IMAGE_ERROR_MAP: Readonly<Record<string, PublicImageErrorCode>> = {
+  GPU_INFERENCE_FAILED: 'GENERATION_FAILED',
+  GPU_SHUTDOWN: 'GENERATION_INTERRUPTED',
+  JOB_NOT_FOUND: 'JOB_NOT_FOUND',
+  RESULT_EXPIRED: 'RESULT_EXPIRED',
+};
+
+export function publicImageErrorCode(raw: string | null | undefined): PublicImageErrorCode | null {
+  if (raw === null || raw === undefined || raw === '') return null;
+  // Own keys only: '__proto__', 'constructor' etc. must not resolve to Object.prototype members.
+  return Object.prototype.hasOwnProperty.call(IMAGE_ERROR_MAP, raw) ? IMAGE_ERROR_MAP[raw] : 'GENERATION_FAILED';
+}
+
+/** The browser shape: no organization or owner ids, no raw service error codes. */
 export function publicImage(g: ImageGeneration) {
   return {
     // No model name (CONF-1): stored server-side only.
     id: g.id, prompt: g.prompt, width: g.width, height: g.height, seed: g.seed,
-    status: g.status, progress: g.progress, errorCode: g.errorCode, seconds: g.seconds,
+    status: g.status, progress: g.progress, errorCode: publicImageErrorCode(g.errorCode), seconds: g.seconds,
     createdAt: g.createdAt, finishedAt: g.finishedAt,
     fileUrl: g.status === 'completed' ? `/api/v1/create/images/${g.id}/file` : null,
   };

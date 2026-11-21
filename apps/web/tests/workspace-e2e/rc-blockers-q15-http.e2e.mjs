@@ -41,7 +41,10 @@ async function http(who, method, p, { json, signal } = {}) {
   return { status: res.status, json: data, text, ms: Date.now() - t0 };
 }
 const ndjson = (text) => text.trim().split('\n').filter(Boolean).map((l) => { try { return JSON.parse(l); } catch { return { unparsed: l }; } });
-const llmLines = () => (LLM_LOG && existsSync(LLM_LOG) ? readFileSync(LLM_LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+const logLines = () => (LLM_LOG && existsSync(LLM_LOG) ? readFileSync(LLM_LOG, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : []);
+const llmLines = () => logLines().filter((l) => Array.isArray(l.messages));
+const closedIds = () => new Map(logLines().filter((l) => l.event === 'closed').map((l) => [l.id, l]));
+const requestsFor = (marker) => llmLines().filter((l) => String(l.messages.at(-1)?.content ?? '').includes(marker));
 const callsFor = (marker) => llmLines().filter((l) => String(l.messages.at(-1)?.content ?? '').includes(marker)).length;
 const newThread = async (who, body = { capabilityId: CAP }) => {
   const r = await http(who, 'POST', '/api/v1/chat/threads', { json: body });
@@ -61,8 +64,9 @@ function sql(q) {
 const usageRows = (turnId) => JSON.parse(sql(`SELECT coalesce(json_agg(json_build_object(
   'key', e.idempotency_key, 'org', e.organization_id, 'user', e.user_id, 'thread', e.chat_thread_id, 'feature', e.feature,
   'outcome', e.outcome, 'basis', e.usage_basis, 'cost', e.cost_micros, 'provider', e.provider, 'model', e.model,
-  'input', (SELECT sum(c.quantity) FROM public.provider_usage_components c WHERE c.event_id = e.id AND c.dimension = 'input_tokens'),
-  'output', (SELECT sum(c.quantity) FROM public.provider_usage_components c WHERE c.event_id = e.id AND c.dimension = 'output_tokens')
+  'input', CASE WHEN e.usage_basis = 'unavailable' THEN NULL ELSE (SELECT sum(c.quantity) FROM public.provider_usage_components c WHERE c.event_id = e.id AND c.dimension = 'input_tokens') END,
+  'output', CASE WHEN e.usage_basis = 'unavailable' THEN NULL ELSE (SELECT sum(c.quantity) FROM public.provider_usage_components c WHERE c.event_id = e.id AND c.dimension = 'output_tokens') END,
+  'rawComponents', (SELECT coalesce(json_agg(json_build_object('d', c.dimension, 'q', c.quantity) ORDER BY c.dimension), '[]') FROM public.provider_usage_components c WHERE c.event_id = e.id)
 ) ORDER BY e.idempotency_key), '[]') FROM public.provider_usage_events e WHERE e.chat_turn_id = '${turnId}'`));
 async function waitRows(turnId, n, ms = 5000) {
   const t0 = Date.now(); let rows = [];
@@ -165,29 +169,38 @@ async function faultThenRetry(marker, label) {
   assert.equal(leaseOf(turnId), '0', 'lease still held after the timeout');
   const stored = (await messages('memberA', tid)).filter((m) => m.turnId === turnId && m.role === 'assistant');
   assert.equal(stored.length, 1); assert.equal(stored[0].status, 'error');
+  // No duplicate provider work: the first (timed-out) upstream request was closed by the app before the retry was sent.
+  const firstReq = requestsFor(content)[0];
+  assert.ok(firstReq, 'first upstream request not logged');
+  let closed = null;
+  for (let i = 0; i < 20 && !closed; i++) { closed = closedIds().get(firstReq.id) ?? null; if (!closed) await sleep(100); }
+  assert.ok(closed, 'the timed-out upstream request was never closed by the app');
   const r = await send('memberA', tid, { content, turnId, retry: true });
   const rev = ndjson(r.text);
+  const reqs = requestsFor(content);
+  assert.equal(reqs.length, 2, `expected exactly 2 upstream requests (first + retry), saw ${reqs.length}`);
+  assert.ok(Date.parse(closed.at) <= Date.parse(reqs[1].at), 'retry reached upstream before the first request was closed');
   assert.equal(r.status, 200, r.text.slice(0, 200));
   assert.equal(rev.find((e) => e.type === 'user')?.retried, true);
   assert.ok(last(rev, 'done'), `retry did not finish: ${r.text.slice(-300)}`);
   const rows = await waitRows(turnId, 2);
-  return { tid, turnId, ms: a.ms, err, stored: stored[0], rows, retryAnswer: last(rev, 'done').message?.content };
+  return { tid, turnId, ms: a.ms, err, stored: stored[0], rows, retryAnswer: last(rev, 'done').message?.content, upstreamClosedAfterMs: closed.ms };
 }
 await check('T1 stall (partial text, then silence): neutral MODEL_TIMEOUT < 30 s, partial kept as an error answer, lease released, retry succeeds; usage: failed/unavailable at idx 0, succeeded/reported at idx 8', async () => {
   const x = await faultThenRetry('[stall-once]', 'Stall');
   assert.match(x.stored.content, /^Partial answer/);
   assert.deepEqual(x.rows.map((r) => [r.key.split(':').at(-1), r.outcome, r.basis, r.input, r.output, r.cost]),
-    [['0', 'failed', 'unavailable', 0, 0, null], ['8', 'succeeded', 'reported', 41, 7, null]]);
-  note('T1', { ms: x.ms, errorEvent: x.err, storedStatus: x.stored.status, storedContent: x.stored.content, usage: x.rows, retryAnswer: x.retryAnswer });
+    [['0', 'failed', 'unavailable', null, null, null], ['8', 'succeeded', 'reported', 41, 7, null]]);
+  note('T1', { upstreamClosedAfterMs: x.upstreamClosedAfterMs, ms: x.ms, errorEvent: x.err, storedStatus: x.stored.status, storedContent: x.stored.content, usage: x.rows, retryAnswer: x.retryAnswer });
 });
 await check('T2 slow (headers + role chunk, no text): MODEL_TIMEOUT < 30 s; retry succeeds', async () => {
   const x = await faultThenRetry('[noreply-once]', 'Slow');
   assert.deepEqual(x.rows.map((r) => [r.key.split(':').at(-1), r.outcome]), [['0', 'failed'], ['8', 'succeeded']]);
-  note('T2', { ms: x.ms, errorEvent: x.err, storedContent: x.stored.content, usage: x.rows });
+  note('T2', { upstreamClosedAfterMs: x.upstreamClosedAfterMs, ms: x.ms, errorEvent: x.err, storedContent: x.stored.content, usage: x.rows });
 });
 await check('T3 no response headers at all: MODEL_TIMEOUT < 30 s; retry succeeds', async () => {
   const x = await faultThenRetry('[noheaders-once]', 'Silent');
-  note('T3', { ms: x.ms, errorEvent: x.err, storedContent: x.stored.content, usage: x.rows });
+  note('T3', { upstreamClosedAfterMs: x.upstreamClosedAfterMs, ms: x.ms, errorEvent: x.err, storedContent: x.stored.content, usage: x.rows });
 });
 await check('T4 upstream HTTP 500: neutral MODEL_UNAVAILABLE fast; two concurrent retries -> exactly one runs (other 409), one model call, no duplicate usage', async () => {
   const tid = (await newThread('memberA')).json.thread.id;
@@ -221,6 +234,59 @@ await check('T5 client cancels mid-stream: answer stored as stopped, lease relea
   assert.deepEqual(rows.map((r) => [r.key.split(':').at(-1), r.outcome, r.basis]), [['0', 'cancelled', 'unavailable']]);
   assert.equal(leaseOf(turnId), '0');
   note('T5', { stored: { status: stored[0].status, content: stored[0].content }, usage: rows });
+});
+
+await check('T6 model ends the stream cleanly with no text: stored as a retryable error (MODEL_BAD_RESPONSE), not an empty completed answer; retry succeeds', async () => {
+  const tid = (await newThread('memberA')).json.thread.id;
+  const turnId = randomUUID();
+  const content = `Empty ${run} [empty-once]`;
+  const a = await send('memberA', tid, { content, turnId });
+  const err = last(ndjson(a.text), 'error');
+  assert.equal(err?.code, 'MODEL_BAD_RESPONSE', a.text.slice(-300));
+  noLeak('empty stream', a.text);
+  const stored = (await messages('memberA', tid)).filter((m) => m.turnId === turnId && m.role === 'assistant');
+  assert.equal(stored.length, 1); assert.equal(stored[0].status, 'error'); assert.notEqual(stored[0].content.trim(), '');
+  assert.equal(leaseOf(turnId), '0');
+  const r = await send('memberA', tid, { content, turnId, retry: true });
+  assert.equal(r.status, 200, r.text.slice(0, 200));
+  assert.ok(last(ndjson(r.text), 'done'), r.text.slice(-300));
+  const rows = await waitRows(turnId, 2);
+  // The empty call did reach the model and was answered (tokens reported), so it is metered as a call.
+  assert.deepEqual(rows.map((x) => [x.key.split(':').at(-1), x.outcome, x.basis]), [['0', 'succeeded', 'reported'], ['8', 'succeeded', 'reported']]);
+  note('T6', { errorEvent: err, stored: { status: stored[0].status, content: stored[0].content }, usage: rows });
+});
+await check('T7 crash during usage recording (an earlier run recorded idx 0 but stored no answer): the next run still records its call once, at the next slot; idx 0 untouched', async () => {
+  const tid = (await newThread('memberA')).json.thread.id;
+  const turnId = randomUUID();
+  // Simulates the crashed run: the row exists, no assistant message for the turn exists.
+  sql(`SET ROLE service_role; SELECT public.record_chat_usage('${ORG_A}', '${MEMBER_A}', '${tid}', '${turnId}', 0, 'chat', 'private-gpu', 'fake-e2e', 100, 1, 'reported', 'failed')`);
+  const before = usageRows(turnId);
+  assert.equal(before.length, 1);
+  const s = await send('memberA', tid, { content: `Crash ${run}`, turnId });
+  assert.equal(s.status, 200, s.text.slice(0, 200));
+  assert.ok(last(ndjson(s.text), 'done'), s.text.slice(-300));
+  const rows = await waitRows(turnId, 2);
+  assert.deepEqual(rows.map((x) => [x.key.split(':').at(-1), x.outcome, x.basis, x.input, x.output]),
+    [['0', 'failed', 'reported', 100, 1], ['8', 'succeeded', 'reported', 41, 7]]);
+  assert.equal(callsFor(`Crash ${run}`), 1);
+  note('T7', { preRecorded: before, usage: rows });
+});
+await check('T8 double submit of a NEW turn (two concurrent first POSTs, same turnId): one runs, the other 409; exactly one model call and one usage row', async () => {
+  const tid = (await newThread('memberA')).json.thread.id;
+  const turnId = randomUUID();
+  const content = `Double ${run} [slow]`;
+  const [r1, r2] = await Promise.all([send('memberA', tid, { content, turnId }), sleep(150).then(() => send('memberA', tid, { content, turnId }))]);
+  const statuses = [r1.status, r2.status].sort();
+  assert.deepEqual(statuses, [200, 409], `statuses ${statuses} ${r1.text.slice(0, 120)} ${r2.text.slice(0, 120)}`);
+  const loser = r1.status === 409 ? r1 : r2;
+  noLeak('double-submit 409', loser.text);
+  assert.equal(callsFor(`Double ${run}`), 1, 'double submit made more than one model call');
+  await sleep(500);
+  const rows = await waitRows(turnId, 1);
+  assert.equal(rows.length, 1);
+  const stored = (await messages('memberA', tid)).filter((m) => m.turnId === turnId);
+  assert.deepEqual(stored.map((m) => m.role).sort(), ['assistant', 'user']);
+  note('T8', { statuses, loserCode: loser.json?.code, usage: rows.map((x) => [x.key.split(':').at(-1), x.outcome]) });
 });
 
 await check('U1 normal turn: exactly one row, key chat:<turn>:0, right org/user/thread, reported tokens; [nousage] -> unavailable + NULL cost', async () => {
@@ -264,13 +330,35 @@ await check('U4 customer report (org_usage_report as memberA, scope self) counts
   assert.ok(!/cost|micros|price|currency|"provider"|"model"/i.test(json), `report exposes cost/provider/model: ${json.slice(0, 300)}`);
   const total = sql(`SELECT count(*) FROM public.provider_usage_events WHERE organization_id = '${ORG_A}' AND user_id = '${MEMBER_A}' AND idempotency_key LIKE 'chat:%'`);
   note('U4', { report: JSON.parse(json), chatRowsInDb: Number(total) });
-  assert.ok(Number(total) >= 12, `only ${total} chat rows`);
+  assert.ok(Number(total) >= 17, `only ${total} chat rows`);
   assert.ok(json.includes(String(total)) || /"requests"\s*:\s*\d+/.test(json), 'report has no request counts');
 });
 await check('U5 provider/model stay backend-only: present on the row, never in any customer response above', async () => {
   const rows = JSON.parse(sql(`SELECT json_agg(DISTINCT provider || '|' || coalesce(model, '')) FROM public.provider_usage_events WHERE organization_id = '${ORG_A}' AND idempotency_key LIKE 'chat:%'`));
   note('U5', { backendProviderModel: rows });
   assert.deepEqual(rows, ['private-gpu|fake-e2e']);
+});
+
+await check('U6 known zero vs unknown: [zerousage] is reported with 0 tokens and NOT unmetered; [nousage] is unavailable and counted in unmetered_requests', async () => {
+  const report = () => JSON.parse(sql(`SET LOCAL ROLE authenticated; SELECT set_config('request.jwt.claims', '{"sub":"${MEMBER_A}","role":"authenticated"}', true);
+    SELECT public.org_usage_report('${ORG_A}', now() - interval '1 day', now() + interval '1 minute', 'day', 'self')::text`).split('\n').at(-1)).totals;
+  const tid = (await newThread('memberA')).json.thread.id;
+  const t0 = report();
+  const tz = randomUUID();
+  await send('memberA', tid, { content: `Zero ${run} [zerousage]`, turnId: tz });
+  const rz = await waitRows(tz, 1);
+  const t1 = report();
+  const tn = randomUUID();
+  await send('memberA', tid, { content: `Unknown ${run} [nousage]`, turnId: tn });
+  const rn = await waitRows(tn, 1);
+  const t2 = report();
+  assert.deepEqual([rz[0].basis, rz[0].input, rz[0].output], ['reported', 0, 0]);
+  assert.deepEqual([rn[0].basis, rn[0].input, rn[0].output, rn[0].cost], ['unavailable', null, null, null]);
+  assert.equal(t1.requests - t0.requests, 1); assert.equal(t1.unmetered_requests - t0.unmetered_requests, 0, 'a reported zero must not be unmetered');
+  assert.equal(t1.input_tokens - t0.input_tokens, 0); assert.equal(t1.output_tokens - t0.output_tokens, 0);
+  assert.equal(t2.requests - t1.requests, 1); assert.equal(t2.unmetered_requests - t1.unmetered_requests, 1, 'missing usage must be unmetered');
+  assert.equal(t2.input_tokens - t1.input_tokens, 0); assert.equal(t2.output_tokens - t1.output_tokens, 0);
+  note('U6', { zero: rz[0], unknown: rn[0], unknownRawComponents: rn[0].rawComponents, reportDeltas: { zero: { req: t1.requests - t0.requests, unmetered: t1.unmetered_requests - t0.unmetered_requests }, unknown: { req: t2.requests - t1.requests, unmetered: t2.unmetered_requests - t1.unmetered_requests } } });
 });
 
 const summary = { run, passed, failed, model: 'SIMULATED loopback fake (fake-llm.mjs)', http: 'REAL next start + PostgREST + RLS', db: 'REAL disposable branch Postgres' };

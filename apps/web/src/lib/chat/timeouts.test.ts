@@ -166,3 +166,58 @@ describe('TIMEOUT-1 turn budget (the turn must end before its 150 s lease can ex
     expect(r.ms).toBeLessThan(200);
   });
 });
+
+describe('TIMEOUT-1 silent streams before the first text (edge cases, Q15 follow-up)', () => {
+  it('reasoning-only deltas are not answer text: MODEL_TIMEOUT after firstTokenMs, nothing shown, upstream cancelled', async () => {
+    const seen = { cancelled: false } as { cancelled: boolean; signal?: AbortSignal };
+    const think = (s: string) => sse({ choices: [{ delta: { reasoning_content: s, reasoning: s } }] });
+    const r = await collect(streamCompletion(EP, 'm', [], { timeouts: T, fetchImpl: upstream([think('Let me think'), think(' more')], 'hang', seen) }));
+    expect(r.out).toEqual([]);
+    expect(JSON.stringify(r.out)).not.toContain('think');
+    expect(code(r.error)).toBe('MODEL_TIMEOUT');
+    expect(r.ms).toBeLessThan(1_000);
+    expect(seen.signal?.aborted).toBe(true);
+  });
+
+  it('empty-string content deltas do not count as the first text', async () => {
+    const seen = { cancelled: false };
+    const r = await collect(streamCompletion(EP, 'm', [], { timeouts: T, fetchImpl: upstream([text(''), text('')], 'hang', seen) }));
+    expect(r.out).toEqual([]);
+    expect(code(r.error)).toBe('MODEL_TIMEOUT');
+  });
+
+  it('malformed SSE lines before the first text do not count either', async () => {
+    const seen = { cancelled: false };
+    const junk = enc.encode('data: {not json\n\n');
+    const r = await collect(streamCompletion(EP, 'm', [], { timeouts: T, fetchImpl: upstream([junk, junk], 'hang', seen) }));
+    expect(r.out).toEqual([]);
+    expect(code(r.error)).toBe('MODEL_TIMEOUT');
+  });
+
+  it('a stream that ends cleanly with no text is not a timeout and not an error (the turn layer supplies its fallback)', async () => {
+    const seen = { cancelled: false };
+    const done = sse({ choices: [{ delta: {}, finish_reason: 'stop' }] });
+    const r = await collect(streamCompletion(EP, 'm', [], { timeouts: T, fetchImpl: upstream([done, enc.encode('data: [DONE]\n\n')], 'end', seen) }));
+    expect(r.out).toEqual([]);
+    expect(r.error).toBeNull();
+    expect(r.ms).toBeLessThan(T.firstTokenMs);
+  });
+
+  it('first text arriving just before the deadline switches to the idle timer (no early cut)', async () => {
+    const late: FetchLike = async (_url, init) => {
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          setTimeout(() => c.enqueue(text('late ')), 100); // < firstTokenMs 150
+          setTimeout(() => c.enqueue(text('but fine')), 200); // 100 ms after the first text < idleMs 150
+          setTimeout(() => c.close(), 260);
+        },
+      });
+      void init;
+      return new Response(body, { status: 200, headers: { 'content-type': 'text/event-stream' } });
+    };
+    const r = await collect(streamCompletion(EP, 'm', [], { timeouts: T, fetchImpl: late }));
+    expect(r.out.join('')).toBe('late but fine');
+    expect(r.error).toBeNull();
+  });
+});
+

@@ -18,7 +18,7 @@
  *   - Message order per round: one assistant message listing the calls, then
  *     exactly one tool message per call, in the same order.
  */
-import type { ParsedToolCall, ToolSpec, WireMessage } from './openai-compatible';
+import { ModelCallError, type ParsedToolCall, type ToolSpec, type WireMessage } from './openai-compatible';
 import { cleanToolTurnText, TurnBoundaryFilter } from './model-text';
 
 export interface ToolExecution {
@@ -113,6 +113,10 @@ async function* streamClean(source: AsyncIterable<string>): AsyncGenerator<TurnE
   }
   const rest = f.flush();
   if (rest) { answer += rest; yield { type: 'delta', text: rest }; }
+  // A model that ends its stream cleanly without any text (or only a leaked header / whitespace)
+  // must not become a completed empty answer: that cannot be retried (TURN_EXISTS). Fail with an
+  // existing neutral code so the turn is stored as an error and the customer can retry it.
+  if (answer.trim() === '') throw new ModelCallError('MODEL_BAD_RESPONSE');
   return answer;
 }
 
@@ -124,12 +128,42 @@ async function* emitToolTurnText(raw: string, offered: ReadonlySet<string>, anyS
   return answer;
 }
 
+/** A tool ran, but the model failed (timeout, dropped stream, provider error) before the answer was complete. */
+export const TOOL_ANSWER_INTERRUPTED =
+  'The tool ran, but TuGPT\u2019s answer was interrupted before it was complete. Ask again for a summary of the result.';
+
+/** Thrown by collectStream: the model failed after `partial` was received. */
+class PartialStreamError extends Error {
+  constructor(readonly partial: string, readonly cause: unknown) { super('partial stream'); }
+}
+
 async function collectStream(source: AsyncIterable<string>): Promise<string> {
   const f = new TurnBoundaryFilter();
   let text = '';
-  for await (const chunk of source) { text += f.push(chunk); if (f.ended) break; }
+  try {
+    for await (const chunk of source) { text += f.push(chunk); if (f.ended) break; }
+  } catch (e) {
+    throw new PartialStreamError(text + f.flush(), e);
+  }
   return text + f.flush();
 }
+
+/**
+ * TIMEOUT-1 edge case: the model failed after at least one tool ran. Show and store what is
+ * presentable (cleaned like any tool-turn text), a fixed sentence saying the answer was cut off,
+ * and the approval tail when a card is waiting, then rethrow so the route records the error code.
+ */
+async function* interruptedAfterTools(e: unknown, offered: ReadonlySet<string>, pending: boolean): AsyncGenerator<TurnEvent, never> {
+  const partial = e instanceof PartialStreamError ? e.partial : '';
+  const cleaned = partial ? cleanToolTurnText(partial, { offered, anySucceeded: true }) : '';
+  let text = cleaned ? `${cleaned}\n\n${TOOL_ANSWER_INTERRUPTED}` : TOOL_ANSWER_INTERRUPTED;
+  if (pending) text += `\n\n${APPROVAL_PENDING_ANSWER}`;
+  yield { type: 'delta', text };
+  throw e instanceof PartialStreamError ? e.cause : e;
+}
+
+/** Unwraps collectStream's error where no tool ran (behaviour unchanged: nothing shown, error rethrown). */
+function unwrap(e: unknown): unknown { return e instanceof PartialStreamError ? e.cause : e; }
 
 export async function* runTurn(input: TurnInput, ports: TurnPorts): AsyncGenerator<TurnEvent, string> {
   const messages: WireMessage[] = [...input.messages];
@@ -145,7 +179,13 @@ export async function* runTurn(input: TurnInput, ports: TurnPorts): AsyncGenerat
   let pending = false;
   const rounds = input.maxToolRounds ?? 2;
   for (let round = 0; round < rounds && !pending; round++) {
-    const r = await ports.completeWithTools(messages, input.tools);
+    let r: Awaited<ReturnType<TurnPorts['completeWithTools']>>;
+    try {
+      r = await ports.completeWithTools(messages, input.tools);
+    } catch (e) {
+      if (anySucceeded) return yield* interruptedAfterTools(e, offered, pending);
+      throw e;
+    }
     const calls = assignCallIds(dedupeCalls(r.toolCalls), usedIds, round);
     if (calls.length === 0) {
       if (r.text) return yield* emitToolTurnText(r.text, offered, anySucceeded);
@@ -166,7 +206,14 @@ export async function* runTurn(input: TurnInput, ports: TurnPorts): AsyncGenerat
     yield { type: 'delta', text: APPROVAL_PENDING_ANSWER };
     return APPROVAL_PENDING_ANSWER;
   }
-  const answer = yield* emitToolTurnText(await collectStream(ports.stream(messages)), offered, anySucceeded);
+  let raw: string;
+  try {
+    raw = await collectStream(ports.stream(messages));
+  } catch (e) {
+    if (anySucceeded) return yield* interruptedAfterTools(e, offered, pending);
+    throw unwrap(e);
+  }
+  const answer = yield* emitToolTurnText(raw, offered, anySucceeded);
   if (!pending) return answer;
   const tail = `\n\n${APPROVAL_PENDING_ANSWER}`;
   yield { type: 'delta', text: tail };
@@ -205,7 +252,14 @@ export async function* runApprovedCall(input: { readonly messages: readonly Wire
     yield { type: 'delta', text: APPROVED_CALL_REFUSED_ANSWER };
     return APPROVED_CALL_REFUSED_ANSWER;
   }
-  return yield* emitToolTurnText(await collectStream(ports.stream(messages)), new Set([call.name]), outcome.ok);
+  let raw: string;
+  try {
+    raw = await collectStream(ports.stream(messages));
+  } catch (e) {
+    if (outcome.ok) return yield* interruptedAfterTools(e, new Set([call.name]), false);
+    throw unwrap(e);
+  }
+  return yield* emitToolTurnText(raw, new Set([call.name]), outcome.ok);
 }
 
 /**

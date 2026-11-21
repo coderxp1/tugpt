@@ -11,10 +11,19 @@
  *   A retry therefore gets fresh indices (no under-count), and recording the same
  *   call twice is a DB duplicate (no double count). Concurrent retries of one turn
  *   are already refused by the Q-13 run lease (409) before any model call.
+ *   Crash edge case: a run that recorded calls but died before storing its answer
+ *   leaves `attempt` unchanged, so the next run's first index collides. A meter records
+ *   each of its own calls exactly once, so a `duplicate` it receives always belongs to
+ *   another (dead) run: the meter moves to the next attempt slot and keeps that shift for
+ *   its later calls. Residual: a crash between a model call and its record loses that one
+ *   record (under-count, never a double count).
  * Outcome: 'succeeded' when the call returned; 'cancelled' when the caller went away;
  * 'failed' for errors and TIMEOUT-1 timeouts. Usage comes from the provider's own
- * `usage` object only; without one the row is recorded as unavailable (NULL tokens,
- * NULL cost), never as zero.
+ * `usage` object only; without one the call is passed as `usage: null` and the event is
+ * recorded with usage_basis = 'unavailable' (NULL cost). The event's usage_basis is the
+ * authoritative marker: Agent 6's record_chat_usage currently writes 0-quantity token
+ * components for such events, which must not be read as "0 tokens" (see
+ * docs/backend-api.md "Unknown usage").
  * Recording never throws and never delays the answer: calls are recorded when they
  * end, and flush() is awaited only after the answer was persisted and sent.
  * Provider and model are passed for the backend-only columns; nothing here reaches
@@ -64,15 +73,36 @@ export function createUsageMeter(scope: UsageMeterScope): UsageMeter {
   const pending: Promise<unknown>[] = [];
   const logger = scope.logger ?? defaultLogger;
 
+  // Slots skipped because an earlier (crashed) run already used them; shared by later calls.
+  let shift = 0;
+  // Records run one after another so a learned shift applies to every later call.
+  let chain: Promise<unknown> = Promise.resolve();
+
   function begin(): number | null {
     const i = n++;
     if (!scope.turnId || scope.attempt === null || !Number.isInteger(scope.attempt) || scope.attempt < 0) return null;
-    const index = scope.attempt * ATTEMPT_SLOT + i;
-    if (i >= ATTEMPT_SLOT || index > MAX_CALL_INDEX) {
+    if (i >= ATTEMPT_SLOT) {
       logger.warn('Chat usage not recorded: call index out of range', { reason: 'index_out_of_range' });
       return null;
     }
-    return index;
+    return i;
+  }
+
+  async function recordAt(i: number, outcome: Outcome, raw: unknown): Promise<void> {
+    const usage = parseOpenAiUsage(raw);
+    for (;;) {
+      const index = ((scope.attempt as number) + shift) * ATTEMPT_SLOT + i;
+      if (index > MAX_CALL_INDEX) {
+        logger.warn('Chat usage not recorded: call index out of range', { reason: 'index_out_of_range' });
+        return;
+      }
+      const result = await recordChatUsage(scope.control, {
+        organizationId: scope.organizationId, userId: scope.userId, threadId: scope.threadId, turnId: scope.turnId as string,
+        callIndex: index, feature: scope.feature, provider: scope.provider, model: scope.model, outcome, usage,
+      }, logger);
+      if (result !== 'duplicate') return;
+      shift += 1;
+    }
   }
 
   function outcomeOf(e: unknown): Outcome {
@@ -80,13 +110,10 @@ export function createUsageMeter(scope: UsageMeterScope): UsageMeter {
     return 'failed';
   }
 
-  function record(index: number | null, outcome: Outcome, raw: unknown): void {
-    if (index === null || !scope.turnId) return;
-    pending.push(recordChatUsage(scope.control, {
-      organizationId: scope.organizationId, userId: scope.userId, threadId: scope.threadId, turnId: scope.turnId,
-      callIndex: index, feature: scope.feature, provider: scope.provider, model: scope.model, outcome,
-      usage: parseOpenAiUsage(raw),
-    }, logger).catch(() => 'failed'));
+  function record(i: number | null, outcome: Outcome, raw: unknown): void {
+    if (i === null || !scope.turnId) return;
+    chain = chain.then(() => recordAt(i, outcome, raw)).catch(() => undefined);
+    pending.push(chain);
   }
 
   return {

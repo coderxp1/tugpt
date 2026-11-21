@@ -13,6 +13,10 @@
  *   "[noreply-once]"   first request: 200 + a role chunk, then silence (no first token)
  *   "[noheaders-once]" first request: never sends response headers
  *   "[nousage]"        never reports usage
+ *   "[zerousage]"      reports usage, but 0 prompt and 0 completion tokens (a real, known zero)
+ *   "[empty-once]"     first request: a clean SSE stream with no text at all, then [DONE]
+ * Every request gets an `id` in its log line. When the client closes a response before this
+ * server ended it, a line { event: 'closed', id, ms } is appended (proof the app aborted upstream).
  * Usage (Q-15 USAGE-1): when the request sets stream_options.include_usage, a final
  * chunk { choices: [], usage } follows the text (the shape Ollama/OpenAI send);
  * non-streaming answers always carry usage. Reported numbers: FAKE_USAGE below.
@@ -27,7 +31,8 @@ const LOG = process.env.FAKE_LLM_LOG;
 if (!PORT || !LOG) { console.error('FAKE_LLM_PORT and FAKE_LLM_LOG are required'); process.exit(2); }
 const ANSWER = 'Hello from the fake model';
 export const FAKE_USAGE = { stream: { prompt_tokens: 41, completion_tokens: 7 }, tools: { prompt_tokens: 23, completion_tokens: 5 } };
-const once = new Map([['[fail-once]', new Set()], ['[stall-once]', new Set()], ['[noreply-once]', new Set()], ['[noheaders-once]', new Set()]]);
+const once = new Map([['[fail-once]', new Set()], ['[stall-once]', new Set()], ['[noreply-once]', new Set()], ['[noheaders-once]', new Set()], ['[empty-once]', new Set()]]);
+let seq = 0;
 const firstTime = (marker, last) => {
   if (!last.includes(marker)) return false;
   const seen = once.get(marker);
@@ -36,7 +41,8 @@ const firstTime = (marker, last) => {
 };
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const chunk = (part) => `data: ${JSON.stringify({ choices: [{ delta: { content: part } }] })}\n\n`;
-const usageChunk = () => `data: ${JSON.stringify({ choices: [], usage: FAKE_USAGE.stream })}\n\n`;
+const ZERO = { prompt_tokens: 0, completion_tokens: 0 };
+let usageChunk = () => '';
 
 http.createServer((req, res) => {
   if (req.method !== 'POST' || !req.url.endsWith('/chat/completions')) { res.writeHead(404); res.end(); return; }
@@ -47,7 +53,19 @@ http.createServer((req, res) => {
     try { body = JSON.parse(raw); } catch { res.writeHead(400); res.end(); return; }
     const last = String((body.messages ?? []).at(-1)?.content ?? '');
     const wantsUsage = body.stream_options?.include_usage === true && !last.includes('[nousage]');
-    appendFileSync(LOG, JSON.stringify({ at: new Date().toISOString(), stream: body.stream === true, includeUsage: body.stream_options?.include_usage === true, model: body.model, messages: body.messages ?? [] }) + '\n');
+    const zero = last.includes('[zerousage]');
+    usageChunk = () => `data: ${JSON.stringify({ choices: [], usage: zero ? ZERO : FAKE_USAGE.stream })}\n\n`;
+    const id = ++seq;
+    const t0 = Date.now();
+    appendFileSync(LOG, JSON.stringify({ id, at: new Date().toISOString(), stream: body.stream === true, includeUsage: body.stream_options?.include_usage === true, model: body.model, messages: body.messages ?? [] }) + '\n');
+    res.on('close', () => {
+      if (!res.writableEnded) appendFileSync(LOG, JSON.stringify({ event: 'closed', id, at: new Date().toISOString(), ms: Date.now() - t0 }) + '\n');
+    });
+    if (body.stream === true && firstTime('[empty-once]', last)) {
+      res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-cache' });
+      res.end(`data: ${JSON.stringify({ choices: [{ delta: {}, finish_reason: 'stop' }] })}\n\n${wantsUsage ? usageChunk() : ''}data: [DONE]\n\n`);
+      return;
+    }
     if (firstTime('[fail-once]', last)) { res.writeHead(500); res.end('{"error":"fake upstream failure"}'); return; }
     if (firstTime('[noheaders-once]', last)) { return; /* never answers; the socket stays open until the client leaves */ }
     if (body.stream === true && firstTime('[noreply-once]', last)) {
@@ -79,7 +97,7 @@ http.createServer((req, res) => {
       res.end(`${wantsUsage ? usageChunk() : ''}data: [DONE]\n\n`);
     } else {
       res.writeHead(200, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: ANSWER } }], ...(last.includes('[nousage]') ? {} : { usage: FAKE_USAGE.tools }) }));
+      res.end(JSON.stringify({ choices: [{ message: { role: 'assistant', content: ANSWER } }], ...(last.includes('[nousage]') ? {} : { usage: zero ? ZERO : FAKE_USAGE.tools }) }));
     }
   });
 }).listen(PORT, '127.0.0.1', () => console.log(`fake LLM on 127.0.0.1:${PORT}`));

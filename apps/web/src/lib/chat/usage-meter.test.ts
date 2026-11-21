@@ -45,7 +45,7 @@ describe('usage meter (USAGE-1)', () => {
     expect(c.calls[0].p_call_index).toBe(ATTEMPT_SLOT);
   });
 
-  it('missing usage is stored as unavailable (NULL tokens), never zero', async () => {
+  it('missing usage is passed as null with basis unavailable, never as zero', async () => {
     const c = control();
     const m = createUsageMeter(scope(c));
     await drain(m.stream(() => chunks(['a'], null)));
@@ -90,3 +90,58 @@ describe('usage meter (USAGE-1)', () => {
     await expect(m.flush()).resolves.toBeUndefined();
   });
 });
+
+describe('usage meter: crash during recording (TIMEOUT-1 / USAGE-1 edge case)', () => {
+  // A DB in which a crashed earlier run already recorded some indices of this turn.
+  function dbWith(taken: number[]) {
+    const used = new Set(taken);
+    const calls: Record<string, unknown>[] = [];
+    const rpc = vi.fn(async (_fn: string, args: Record<string, unknown>) => {
+      calls.push(args);
+      const i = args.p_call_index as number;
+      if (used.has(i)) return { data: { duplicate: true }, error: null };
+      used.add(i);
+      return { data: { recorded: true }, error: null };
+    });
+    return { rpc, calls, used };
+  }
+
+  it('a duplicate from a crashed run moves this run to the next slot, so its call is still counted once', async () => {
+    const c = dbWith([0, 1]); // crashed run: 2 calls recorded, no answer stored, so attempt is still 0
+    const m = createUsageMeter(scope(c as never, { attempt: 0 }));
+    await drain(m.stream(() => chunks(['a'], null)));
+    await m.flush();
+    expect(c.calls.map((a) => a.p_call_index)).toEqual([0, ATTEMPT_SLOT]);
+    expect([...c.used].sort((a, b) => a - b)).toEqual([0, 1, ATTEMPT_SLOT]);
+  });
+
+  it('the learned shift applies to later calls of the same run (no second collision, no gaps reused)', async () => {
+    const c = dbWith([0]);
+    const m = createUsageMeter(scope(c as never, { attempt: 0 }));
+    await m.call(async (onUsage) => { onUsage({ prompt_tokens: 1, completion_tokens: 1 }); return 'tool'; });
+    await drain(m.stream(() => chunks(['answer'], null)));
+    await m.flush();
+    // index 0 duplicate -> 8; next call goes straight to 9, never back to 1
+    expect(c.calls.map((a) => a.p_call_index)).toEqual([0, ATTEMPT_SLOT, ATTEMPT_SLOT + 1]);
+  });
+
+  it('gives up with a log (never throws, never double counts) when every slot is taken', async () => {
+    const all = Array.from({ length: 64 }, (_, i) => i);
+    const c = dbWith(all);
+    const warn = vi.fn();
+    const m = createUsageMeter(scope(c as never, { attempt: 6, logger: { warn } }));
+    await drain(m.stream(() => chunks(['a'], null)));
+    await m.flush();
+    expect(c.calls.map((a) => a.p_call_index)).toEqual([48, 56]);
+    expect(warn).toHaveBeenCalledWith(expect.any(String), { reason: 'index_out_of_range' });
+  });
+
+  it('a provider-reported zero is "reported" with 0 tokens, distinct from missing usage', async () => {
+    const c = control();
+    const m = createUsageMeter(scope(c));
+    await drain(m.stream((onUsage) => (async function* () { yield 'a'; onUsage({ prompt_tokens: 0, completion_tokens: 0 }); })()));
+    await m.flush();
+    expect(c.calls[0]).toMatchObject({ p_input_tokens: 0, p_output_tokens: 0, p_usage_basis: 'reported' });
+  });
+});
+
