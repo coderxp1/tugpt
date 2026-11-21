@@ -103,9 +103,12 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
     return fresh;
   }, [fetcher, t]);
 
+  // State is only set once requests settle; the call is deferred so nothing updates during the effect itself.
   useEffect(() => {
     if (!canList) return;
-    void reload();
+    let live = true;
+    void Promise.resolve().then(() => { if (live) void reload(); });
+    return () => { live = false; };
   }, [canList, reload]);
 
   async function register(ev: React.FormEvent) {
