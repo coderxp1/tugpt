@@ -91,3 +91,14 @@ it('does not describe an enabled, empty catalogue as a disconnected preview', as
   expect(screen.queryByText(/Custom-agent actions are disabled/)).toBeNull();
   expect((screen.getByRole('button', { name: 'Create agent' }) as HTMLButtonElement).disabled).toBe(false);
 });
+it('blocks saving an unavailable saved capability without exposing its internal name', async () => {
+ const api=setup('agent',{...agent,visibility:'private',modelKey:'internal-provider-secret-name'});
+ fireEvent.click(await screen.findByRole('button',{name:'Options for agent Research'}));fireEvent.click(screen.getByRole('menuitem',{name:'Edit'}));
+ const d=screen.getByRole('dialog');expect((within(d).getByRole('button',{name:'Save'}) as HTMLButtonElement).disabled).toBe(true);
+ expect(d.textContent).not.toContain('internal-provider-secret-name');fireEvent.submit(d.querySelector('form')!);expect(api.calls.some(c=>c.method==='PATCH')).toBe(false);
+});
+it('does not duplicate agent saves on repeated form submission', async () => {
+ const api=setup('agent',{...agent,visibility:'private'});fireEvent.click(await screen.findByRole('button',{name:'Options for agent Research'}));fireEvent.click(screen.getByRole('menuitem',{name:'Edit'}));
+ const form=screen.getByRole('dialog').querySelector('form')!;fireEvent.submit(form);fireEvent.submit(form);
+ await waitFor(()=>expect(api.calls.filter(c=>c.method==='PATCH')).toHaveLength(1));
+});

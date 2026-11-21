@@ -14,6 +14,7 @@ export interface DialogProps {
   /** `alert` for confirmations of consequential actions (delete, approve): role="alertdialog". */
   readonly tone?: 'default' | 'alert';
   readonly wide?: boolean;
+  readonly preview?: boolean;
   onClose(): void;
   readonly children: React.ReactNode;
   /** The action row. */
@@ -25,7 +26,7 @@ export interface DialogProps {
  * labelled by its title, focus moves in (first field, else first control), Tab is trapped, Escape
  * closes, and focus returns to whatever opened it. The page behind is inert to the pointer.
  */
-export function Dialog({ title, description, tone = 'default', wide = false, onClose, children, footer }: DialogProps) {
+export function Dialog({ title, description, tone = 'default', wide = false, preview = false, onClose, children, footer }: DialogProps) {
   const t = useT();
   const titleId = useId();
   const descId = useId();
@@ -62,7 +63,7 @@ export function Dialog({ title, description, tone = 'default', wide = false, onC
 
   return createPortal(
     <div className={u.overlay} onMouseDown={(e) => { if (e.target === e.currentTarget) onClose(); }}>
-      <div ref={box} className={`${u.dialog} ${wide ? u.dialogWide : ''}`} role={tone === 'alert' ? 'alertdialog' : 'dialog'} aria-modal="true"
+      <div ref={box} className={`${u.dialog} ${wide ? u.dialogWide : ''} ${preview ? u.dialogPreview : ''}`} role={tone === 'alert' ? 'alertdialog' : 'dialog'} aria-modal="true"
         aria-labelledby={titleId} aria-describedby={description ? descId : undefined} tabIndex={-1}>
         <div className={u.dialogHead}>
           <h2 id={titleId}>{title}</h2>

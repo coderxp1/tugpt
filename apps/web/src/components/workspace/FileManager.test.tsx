@@ -36,3 +36,7 @@ it('requires explicit deletion confirmation', async () => {
  fireEvent.click(within(d).getByRole('button',{name:'Delete'}));
  await screen.findByText('File deleted.'); expect(calls.filter(c=>c.startsWith('DELETE'))).toHaveLength(1);
 });
+it.each([['image','photo.png'],['pdf','manual.pdf'],['office','budget.xlsx'],['text','policy.txt']])('filters real API metadata by %s without claiming indexing',async(kind,name)=>{
+ const files=[file,{...file,id:'f2',filename:'photo.png',mediaType:'image/png'},{...file,id:'f3',filename:'manual.pdf',mediaType:'application/pdf'},{...file,id:'f4',filename:'budget.xlsx',mediaType:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'}];
+ vi.stubGlobal('fetch',vi.fn(async()=>new Response(JSON.stringify({files,nextCursor:null}))));render(<FileManager role="agent"/>);await screen.findByText('policy.txt');fireEvent.change(screen.getByLabelText('File type on this page'),{target:{value:kind}});expect(screen.getByText(name)).toBeTruthy();for(const f of files.filter(f=>f.filename!==name))expect(screen.queryByText(f.filename)).toBeNull();expect(screen.queryByText('Indexed')).toBeNull();
+});

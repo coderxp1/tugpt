@@ -13,6 +13,7 @@ import s from './chat.module.css';
 
 export interface ChatViewProps {
   models: PublicModel[];
+  uploadScope?: string;
   /** Owner or admin of the active organization: may approve MCP calls (the backend checks again). */
   canApprove?: boolean;
   /** For the greeting on a new chat. Never the email address. */
@@ -24,8 +25,8 @@ export interface ChatViewProps {
  * conversation, the composer docks at the bottom. Model, agent, @ apps and files live in the
  * composer, so switching any of them never changes the layout. Recent chats live in the sidebar.
  */
-export function ChatView({ models: configured, canApprove = false, firstName = null }: ChatViewProps) {
-  const c = useChatSession(configured);
+export function ChatView({ models: configured, canApprove = false, firstName = null, uploadScope }: ChatViewProps) {
+  const c = useChatSession(configured, uploadScope);
   const models = c.models;
   const t = useT();
   const { threads, manage } = useThreads();
@@ -53,8 +54,8 @@ export function ChatView({ models: configured, canApprove = false, firstName = n
         {c.toolsUnavailable && <p role="status">{t('workspace.agent.toolsUnavailable')}</p>}
         {c.error && <p className={s.error} role="alert">{c.error.text}{!c.recovery && c.draft.trim() && <>{' '}<button type="button" className={s.tool} disabled={c.busy || c.uploading || c.overLimit || c.agentBlocked || !c.model} onClick={() => void c.send()}>{t('workspace.chat.resendDraft')}</button></>}{c.error.connect && <> <Link href="/dashboard/connect">Open Connect</Link></>}</p>}
         {c.recovery && <section className={`${s.error} ${s.recovery}`} aria-label={t('workspace.chat.recoveryTitle')}>
-          <p role="status">{t('workspace.chat.recoveryNote')}</p>
-          <details><summary>{t('workspace.chat.original')}</summary><p>{c.recovery.original}</p></details>
+          <p role="status">{t('workspace.chat.recoveryNote')}</p><p>{t('workspace.chat.recoveryDurable')}</p>
+          {c.recovery.metadataOnly ? <p>{t('workspace.chat.metadataOnly')}</p> : <details><summary>{t('workspace.chat.original')}</summary><p>{c.recovery.original}</p></details>}
           {c.recovery.partial && <details><summary>{t('workspace.chat.partial')}</summary><p>{c.recovery.partial}</p></details>}
           <button type="button" className={s.tool} disabled={c.reconciling || c.busy} onClick={() => void c.reconcile()}>{t(c.reconciling ? 'workspace.chat.reconciling' : 'workspace.chat.reconcile')}</button>
         </section>}
@@ -63,7 +64,7 @@ export function ChatView({ models: configured, canApprove = false, firstName = n
 
         <Composer draft={c.draft} attached={c.attached} matches={c.matches} pickerIndex={c.picker.index} showPicker={c.showPicker}
           activeOption={c.activeOption} listId={c.listId} models={models} modelKey={c.modelKey} model={c.model} busy={c.busy}
-          disabled={models.length === 0 || c.agentBlocked || !!c.recovery} agentLabel={c.agentLabel} inputRef={c.input} files={c.files} fileNotice={c.fileNotice} uploads={c.uploads} uploadCap={c.uploadCap} onRemoveUpload={c.removeUpload} length={c.length} overLimit={c.overLimit}
+          disabled={models.length === 0 || c.agentBlocked || !!c.recovery} agentLabel={c.agentLabel} inputRef={c.input} files={c.files} fileNotice={c.fileNotice} uploads={c.uploads} uploadCap={c.uploadCap} onRemoveUpload={c.removeUpload} onRetryUpload={c.retryUpload} length={c.length} overLimit={c.overLimit}
           hero={fresh} onDraft={c.onDraft} onKey={c.onKey} onChoose={c.choose} onDetach={c.detach} onModel={c.setModelKey} onApps={c.openApps}
           onFiles={(f) => void c.addFiles(f)} onRemoveFile={c.removeFile} onSend={() => void c.send()} onStop={c.stop} />
 

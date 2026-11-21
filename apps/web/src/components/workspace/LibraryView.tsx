@@ -18,6 +18,7 @@ export interface LibraryViewProps {
   /** Owner or admin: may manage knowledge in the Dashboard (the API checks the role again). */
   readonly canManage: boolean;
   readonly role?: string;
+  readonly uploadScope?: string;
 }
 
 /**
@@ -25,7 +26,7 @@ export interface LibraryViewProps {
  * active organization, members read) and TuGPT's starter prompts. Editing knowledge stays in the
  * Dashboard, which is the administration surface.
  */
-export function LibraryView({ canManage, role }: LibraryViewProps) {
+export function LibraryView({ canManage, role, uploadScope }: LibraryViewProps) {
   const t = useT();
   const [load, setLoad] = useState<Load>({ state: 'loading' });
   const [query, setQuery] = useState('');
@@ -60,8 +61,8 @@ export function LibraryView({ canManage, role }: LibraryViewProps) {
           <p>{t('workspace.library.intro')}</p>
         </header>
 
-        <Collections />
-        <FileManager role={role} />
+        <Collections uploadScope={uploadScope} role={role} />
+        <FileManager role={role} uploadScope={uploadScope} />
 
         <section className={s.section} aria-labelledby="lib-starters">
           <div className={s.sectionHead}><h2 id="lib-starters">{t('workspace.library.starters')}</h2><p>{t('workspace.library.startersNote')}</p></div>
