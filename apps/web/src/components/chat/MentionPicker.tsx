@@ -5,6 +5,7 @@ import { useT } from '@/i18n/provider';
 import type { Translator } from '@/i18n/types';
 import { pickerBlock } from '@/lib/connect-ui/chat-errors';
 import s from './chat.module.css';
+import { foldText } from '@/lib/text/fold';
 
 export interface Capability {
   capabilityKey: string; providerKey: string; providerName: string; description: string; permissionClass: string;
@@ -15,7 +16,7 @@ export interface Capability {
   unavailableReason?: string;
 }
 
-const fold = (v: string) => v.normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase();
+const fold = foldText;
 
 /**
  * Picker search: every word of the query must appear in the provider name, the
