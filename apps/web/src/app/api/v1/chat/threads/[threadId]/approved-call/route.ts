@@ -14,6 +14,11 @@
  *     approval for this endpoint + tool + argument hash. No approval, an
  *     expired, revoked or already used one, or different arguments: the call
  *     is refused with APPROVAL_REQUIRED and nothing runs.
+ * Audit (20261120000010): the claim is classified in the database
+ * (claim_tool_approval_audited, source approved_call). This route records the
+ * two denials the database never sees: swapped arguments (409,
+ * invalid_arguments) and an unknown or foreign thread (404,
+ * authorization_denied, stored in the caller's own organization).
  * The model is offered no tools in this turn.
  */
 import { NextResponse } from 'next/server';
@@ -27,6 +32,7 @@ import { buildChatToolset, toolAvailable } from '@/lib/chat/connect';
 import { loadChatToolRegistry, MCP_PROVIDER } from '@/lib/chat/mcp';
 import { argumentsSha256, MAX_ARGUMENT_BYTES } from '@/lib/chat/approval.server';
 import { appendServerMessage, asChatDb, getThread, listCapabilities, listMessages, touchThread } from '@/lib/chat/store';
+import { recordRouteDenial } from '@/lib/chat/approval-audit.server';
 
 export const dynamic = 'force-dynamic';
 export const maxDuration = 120;
@@ -51,15 +57,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     || typeof capability !== 'string' || !CAPABILITY.test(capability)
     || typeof shownHash !== 'string' || !SHA256.test(shownHash) || !isPlainObject(args)) return jsonError(400, 'Invalid request');
   if (Buffer.byteLength(JSON.stringify(args), 'utf8') > MAX_ARGUMENT_BYTES) return jsonError(400, 'Invalid request');
-  if (argumentsSha256(args) !== shownHash) return jsonError(409, 'The arguments do not match the approved call');
+  const hashMatches = argumentsSha256(args) === shownHash;
   const model = findModel(configuredModels(), body.modelKey);
   const endpoint = model ? endpointFor(model) : null;
-  if (!model || !endpoint) return jsonError(400, 'Unknown model');
-  if (!model.toolCalling) return jsonError(409, 'This model cannot use integrations');
+  if (hashMatches && (!model || !endpoint)) return jsonError(400, 'Unknown model');
+  if (hashMatches && !model?.toolCalling) return jsonError(409, 'This model cannot use integrations');
 
   const ctx = await chatContext(request);
   if (ctx instanceof NextResponse) return ctx;
   const orgId = ctx.tenant.organizationId;
+  const denial = { organizationId: orgId, connectionId, capability, argumentsSha256: shownHash, threadId } as const;
+  if (!hashMatches) {
+    await recordRouteDenial(ctx.db, { ...denial, event: 'invalid_arguments', reason: 'ARGUMENTS_HASH_MISMATCH' });
+    return jsonError(409, 'The arguments do not match the approved call');
+  }
+  if (!model || !endpoint) return jsonError(400, 'Unknown model');
 
   let toolset: ReturnType<typeof buildChatToolset>;
   let history: Awaited<ReturnType<typeof listMessages>>;
@@ -67,14 +79,19 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   // Assistant/tool messages are server-authored through sso_control (Q-9c F-3).
   let control: ReturnType<typeof asChatDb>;
   try {
-    await getThread(ctx.db, orgId, threadId);
+    try { await getThread(ctx.db, orgId, threadId); }
+    catch (e) {
+      const res = storeErrorResponse(e);
+      if (res.status === 404) await recordRouteDenial(ctx.db, { ...denial, event: 'authorization_denied', reason: 'THREAD_NOT_ACCESSIBLE' });
+      return res;
+    }
     control = asChatDb(await createSsoControlClient());
     const caps = await listCapabilities(ctx.db, orgId);
     const row = caps.find((c) => c.providerKey === MCP_PROVIDER && c.connectionId === connectionId && c.capabilityKey === capability);
     if (!row || row.state !== 'connected') return jsonError(409, 'An attached integration is not connected');
     const registry = await loadChatToolRegistry(ctx.db, orgId, { serviceDb: await createSsoControlClient() });
     if (!toolAvailable(row, registry)) return jsonError(409, 'This integration is not available in chat yet');
-    toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, [row], { registry });
+    toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId, approvalSource: 'approved_call' }, [row], { registry });
     const spec = toolset.specs.length === 1 ? toolset.specs[0] : undefined;
     const target = spec ? toolset.approvalTarget(spec.name) : null;
     if (!spec || !target || target.endpointId !== connectionId || target.capability !== capability) return jsonError(409, 'This tool does not need an approval');

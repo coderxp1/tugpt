@@ -20,7 +20,7 @@ const ORIGIN = 'https://app.test';
 let state: FakeState;
 let user = OWNER;
 const appended: Record<string, unknown>[] = [];
-const { streamed } = vi.hoisted(() => ({ streamed: [] as { role: string; content: unknown }[][] }));
+const { streamed, threadMissing } = vi.hoisted(() => ({ streamed: [] as { role: string; content: unknown }[][], threadMissing: { on: false } }));
 
 vi.mock('@/lib/chat/request', async (orig) => ({
   ...(await orig<typeof import('@/lib/chat/request')>()),
@@ -33,7 +33,10 @@ vi.mock('@/lib/supabase/server', async (orig) => ({
 }));
 vi.mock('@/lib/chat/store', async (orig) => ({
   ...(await orig<typeof import('@/lib/chat/store')>()),
-  getThread: async () => ({ id: THREAD }),
+  getThread: async () => {
+    if (threadMissing.on) { const { ChatStoreError } = await import('@/lib/chat/store'); throw new ChatStoreError('NOT_FOUND'); }
+    return { id: THREAD };
+  },
   listMessages: async () => [{ id: 'm1', role: 'user', content: 'open a ticket', status: 'complete', mentions: [], capabilityKey: null }],
   appendMessage: async (_db: unknown, m: Record<string, unknown>) => { appended.push(m); return { id: `saved-${appended.length}`, ...m }; },
   // Q-9c F-3: assistant/tool messages are server-authored (sso_control client), tagged so the tests can tell.
@@ -52,6 +55,13 @@ const { GET: status } = await import('./status/route');
 const { POST: approvedCall } = await import('../threads/[threadId]/approved-call/route');
 const { POST: messages } = await import('../threads/[threadId]/messages/route');
 const { parsePendingApproval } = await import('@/lib/chat/approval');
+const { POST: rejectedCall } = await import('../threads/[threadId]/rejected-call/route');
+function rejectReq(b: Record<string, unknown>, headers: Record<string, string> = {}) {
+  return rejectedCall(new Request(`${ORIGIN}/api/v1/chat/threads/${THREAD}/rejected-call`, {
+    method: 'POST', body: JSON.stringify(b),
+    headers: { origin: ORIGIN, 'x-tugpt-csrf': '1', 'content-type': 'application/json', ...headers },
+  }), { params: Promise.resolve({ threadId: THREAD }) });
+}
 
 function seed(): FakeState {
   const s = emptyState();
@@ -83,7 +93,7 @@ async function events(res: Response) {
 }
 
 beforeEach(() => {
-  state = seed(); user = OWNER; appended.length = 0; streamed.length = 0;
+  state = seed(); user = OWNER; appended.length = 0; streamed.length = 0; threadMissing.on = false;
   vi.stubEnv('TUGPT_APP_ORIGIN', ORIGIN);
   vi.stubEnv('TUGPT_PRIVATE_LLM_URL', 'http://127.0.0.1:12435/v1');
   vi.stubEnv('TUGPT_CHAT_VERIFIED_TOOL_MODELS', 'tugpt-scout');
@@ -132,7 +142,7 @@ describe('POST /api/v1/chat/threads/[id]/approved-call', () => {
   it('refuses arguments that differ from the card (hash recomputed on the server)', async () => {
     const res = await runReq(body({ arguments: { title: 'something else' } }));
     expect(res.status).toBe(409);
-    expect(state.rpcLog.some((r) => r.fn === 'claim_tool_approval')).toBe(false);
+    expect(state.rpcLog.some((r) => r.fn.startsWith('claim_tool_approval'))).toBe(false);
   });
   it('refuses when chat MCP execution is switched off', async () => {
     vi.stubEnv('TUGPT_CHAT_MCP_EXECUTION_ENABLED', '');
@@ -171,6 +181,17 @@ describe('POST /api/v1/chat/threads/[id]/approved-call', () => {
     expect(String(system?.content)).not.toMatch(/waiting for their approval/);
     expect(String(system?.content)).toMatch(/approved this exact call/);
   });
+  it('a replay of a used approval is refused, calls no model and stores an answer that says nothing was run (real-stack regression)', async () => {
+    approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
+    await events(await runReq(body()));
+    streamed.length = 0; appended.length = 0;
+    const again = await events(await runReq(body({ callId: 'call_2' })));
+    expect(again[1]).toMatchObject({ code: 'APPROVAL_REQUIRED' });
+    expect(streamed).toHaveLength(0);
+    const saved = appended.find((m) => m.role === 'assistant');
+    expect(String(saved?.content)).toMatch(/Nothing was run/);
+    expect(String(saved?.content)).not.toMatch(/Model answer/);
+  });
   it('a member can run an approval that an owner recorded; the claim is per organization', async () => {
     approve(state, { requested_by: OWNER, thread_id: THREAD,  organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
     user = MEMBER;
@@ -208,5 +229,84 @@ describe('POST /api/v1/chat/threads/[id]/messages emits approval_required', () =
       body: JSON.stringify({ content: 'x', modelKey: 'tugpt-scout', mentions: [{ capability: 'external.create_ticket', provider: 'mcp' }], timeZone: 'UTC' }),
     }), { params: Promise.resolve({ threadId: THREAD }) });
     expect((await events(res)).some((e) => e.type === 'approval_required')).toBe(false);
+  });
+});
+
+describe('approval audit (20261120000010): every decision is one classified event', () => {
+  const ev = () => state.approvalEvents.map((e) => `${String(e.event)}:${String(e.reason)}`);
+  const ownerApproval = (over: Record<string, unknown> = {}) => approve(state, { requested_by: OWNER, thread_id: THREAD, organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000, ...over });
+
+  it('approved-call claims through the audited function as approved_call; the old claim is never used', async () => {
+    ownerApproval();
+    await events(await runReq(body()));
+    expect(state.rpcLog.filter((r) => r.fn === 'claim_tool_approval')).toHaveLength(0);
+    expect(state.rpcLog.find((r) => r.fn === 'claim_tool_approval_audited')?.args).toMatchObject({ p_source: 'approved_call', p_thread_id: THREAD, p_arguments_sha256: HASH });
+    expect(ev()).toEqual(['claimed:null']);
+  });
+  it('a chat turn claims as chat_turn and records approval_requested', async () => {
+    await events(await messages(new Request(`${ORIGIN}/api/v1/chat/threads/${THREAD}/messages`, {
+      method: 'POST', headers: { origin: ORIGIN, 'x-tugpt-csrf': '1', 'content-type': 'application/json' },
+      body: JSON.stringify({ content: 'open a ticket', modelKey: 'tugpt-scout', mentions: [{ capability: 'external.create_ticket', provider: 'mcp' }], timeZone: 'UTC' }),
+    }), { params: Promise.resolve({ threadId: THREAD }) }));
+    expect(state.rpcLog.find((r) => r.fn === 'claim_tool_approval_audited')?.args).toMatchObject({ p_source: 'chat_turn' });
+    expect(ev()).toEqual(['approval_requested:APPROVAL_REQUIRED']);
+  });
+  it('replay, expiry and revocation are told apart', async () => {
+    ownerApproval();
+    await events(await runReq(body()));
+    await events(await runReq(body({ callId: 'call_2' })));
+    expect(ev()).toEqual(['claimed:null', 'replayed:ALREADY_USED']);
+    state = seed(); ownerApproval({ expires_at: Date.now() - 1 });
+    await events(await runReq(body()));
+    expect(ev()).toEqual(['expired:EXPIRED']);
+    state = seed(); ownerApproval().revoked_at = Date.now();
+    await events(await runReq(body()));
+    expect(ev()).toEqual(['revoked:CLAIM_AFTER_REVOKE']);
+  });
+  it('a card whose arguments were swapped is a 409 recorded as invalid_arguments with the shown hash only', async () => {
+    const res = await runReq(body({ arguments: { title: 'something else' } }));
+    expect(res.status).toBe(409);
+    expect(state.approvalEvents).toEqual([expect.objectContaining({ event: 'invalid_arguments', reason: 'ARGUMENTS_HASH_MISMATCH', arguments_sha256: HASH, capability: 'external.create_ticket', endpoint_id: EP, thread_id: THREAD, organization_id: ORG })]);
+    expect(JSON.stringify(state.approvalEvents)).not.toContain('something else');
+  });
+  it('an unknown or foreign thread is a 404 recorded as authorization_denied in the caller organization', async () => {
+    threadMissing.on = true;
+    expect((await runReq(body())).status).toBe(404);
+    expect(state.approvalEvents).toEqual([expect.objectContaining({ event: 'authorization_denied', reason: 'THREAD_NOT_ACCESSIBLE', organization_id: ORG })]);
+  });
+  it('the response does not depend on the audit write (a failing audit still refuses)', async () => {
+    state.members = { [ORG]: {} }; // record_mcp_approval_event is refused for non-members
+    expect((await runReq(body({ arguments: { title: 'x' } }))).status).toBe(409);
+  });
+});
+
+describe('POST /api/v1/chat/threads/[id]/rejected-call (server-side Reject)', () => {
+  const rb = (over: Record<string, unknown> = {}) => ({ connectionId: EP, capability: 'external.create_ticket', argumentsSha256: HASH, ...over });
+  it('requires a same-origin JSON mutation and a valid body', async () => {
+    expect((await rejectReq(rb(), { origin: 'https://evil.test' })).status).toBe(403);
+    for (const b of [rb({ connectionId: 'x' }), rb({ capability: 'calendar.find' }), rb({ argumentsSha256: 'abc' }), { ...rb(), extra: 1 }]) {
+      expect((await rejectReq(b)).status).toBe(400);
+    }
+    expect(state.rpcLog.some((r) => r.fn === 'reject_tool_call')).toBe(false);
+  });
+  it('records rejected_by_user, revokes an open approval for exactly this call, and the call never runs afterwards', async () => {
+    const a = approve(state, { requested_by: OWNER, thread_id: THREAD, organization_id: ORG, connection_id: EP, capability: 'external.create_ticket', arguments_sha256: HASH, expires_at: Date.now() + 60_000 });
+    const res = await rejectReq(rb());
+    expect(res.status).toBe(200);
+    expect(res.headers.get('cache-control')).toContain('no-store');
+    expect(await res.json()).toEqual({ rejected: true, revokedApprovals: 1 });
+    expect(a.revoked_at).not.toBeNull();
+    const after = await events(await runReq(body()));
+    expect(after[1]).toMatchObject({ ok: false, code: 'APPROVAL_REQUIRED' });
+    expect(state.approvalEvents.map((e) => `${String(e.event)}:${String(e.reason)}`)).toEqual(['rejected_by_user:REJECTED_BY_USER', 'rejected_by_user:CLAIM_AFTER_REJECT']);
+  });
+  it('an unknown or foreign thread is 404 and nothing is rejected', async () => {
+    threadMissing.on = true;
+    expect((await rejectReq(rb())).status).toBe(404);
+    expect(state.rpcLog.some((r) => r.fn === 'reject_tool_call')).toBe(false);
+  });
+  it('a database refusal is a 403, a database error a 503', async () => {
+    state.members = { [ORG]: {} };
+    expect((await rejectReq(rb())).status).toBe(403);
   });
 });

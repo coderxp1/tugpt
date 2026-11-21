@@ -3,7 +3,7 @@
 -- to every API role, and the trusted SECURITY DEFINER paths still work.
 -- Real Postgres, behavioural SET ROLE assertions plus catalogue checks.
 BEGIN;
-SELECT plan(27);
+SELECT plan(28);
 
 -- ---- fixture (two tenants) -----------------------------------------------
 INSERT INTO auth.users (id, email) VALUES
@@ -102,17 +102,22 @@ SELECT is((SELECT count(*)::int FROM public.tool_approvals
   1, 'B9: authenticated member SELECT sees own-tenant approval (RLS read path intact)');
 SELECT lives_ok($$SELECT count(*) FROM public.mcp_tool_calls$$, 'B10: authenticated SELECT mcp_tool_calls allowed');
 
--- positive control: trusted definer path still writes after the revoke
-SELECT is(
-  public.claim_tool_approval('a2000000-0000-4000-8000-00000000000a',
+-- Since 20261120000010 the unaudited claim is closed to API roles; the
+-- audited claim is the trusted definer path that must still consume.
+SELECT throws_ok($$SELECT public.claim_tool_approval('a2000000-0000-4000-8000-00000000000a',
     'a2000000-0000-4000-8000-0000000e0001', 'external.create_ticket', repeat('a', 64),
-    'a2000000-0000-4000-8000-00000000c001'),
-  true, 'P1: claim_tool_approval (SECURITY DEFINER) still consumes an approval');
+    'a2000000-0000-4000-8000-00000000c001')$$,
+  '42501', NULL, 'P0: authenticated can no longer execute the unaudited claim_tool_approval');
 SELECT is(
-  public.claim_tool_approval('a2000000-0000-4000-8000-00000000000a',
+  (SELECT claimed::text||':'||reason FROM public.claim_tool_approval_audited('a2000000-0000-4000-8000-00000000000a',
     'a2000000-0000-4000-8000-0000000e0001', 'external.create_ticket', repeat('a', 64),
-    'a2000000-0000-4000-8000-00000000c001'),
-  false, 'P2: single-use preserved — second claim refused');
+    'a2000000-0000-4000-8000-00000000c001', 'approved_call')),
+  'true:OK', 'P1: claim_tool_approval_audited (SECURITY DEFINER) still consumes an approval');
+SELECT is(
+  (SELECT claimed::text||':'||reason FROM public.claim_tool_approval_audited('a2000000-0000-4000-8000-00000000000a',
+    'a2000000-0000-4000-8000-0000000e0001', 'external.create_ticket', repeat('a', 64),
+    'a2000000-0000-4000-8000-00000000c001', 'approved_call')),
+  'false:ALREADY_USED', 'P2: single-use preserved — second claim refused');
 RESET ROLE;
 
 SELECT isnt((SELECT used_at FROM public.tool_approvals WHERE id='a2000000-0000-4000-8000-0000000a9001'),
@@ -126,10 +131,10 @@ SELECT is((SELECT count(*)::int FROM public.tool_approvals
             WHERE organization_id='a2000000-0000-4000-8000-00000000000a'),
   0, 'T1: foreign-tenant member sees no org A approvals');
 SELECT is(
-  public.claim_tool_approval('a2000000-0000-4000-8000-00000000000a',
+  (SELECT claimed::text||':'||reason FROM public.claim_tool_approval_audited('a2000000-0000-4000-8000-00000000000a',
     'a2000000-0000-4000-8000-0000000e0001', 'external.create_ticket', repeat('a', 64),
-    'a2000000-0000-4000-8000-00000000c001'),
-  false, 'T2: foreign-tenant claim refused');
+    'a2000000-0000-4000-8000-00000000c001', 'approved_call')),
+  'false:FORBIDDEN', 'T2: foreign-tenant claim refused');
 RESET ROLE;
 
 -- ---- behaviour: anon / service_role --------------------------------------

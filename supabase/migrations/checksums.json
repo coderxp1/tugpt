@@ -111,6 +111,8 @@
   "20261120000007_mcp_snapshot_legacy_revoke_owner_first.sql": "b476315003d05b2d3a2cc9786ea7989ed47a95fe8ed9d12824d3bb7b55f4edd5",
   "20261120000008_mcp_activation_requires_approved_snapshot.sql": "75fd467dded2c1b545b46487fac6f644ab7dbc03a64c0648f89b56cda2c3402a",
   "20261120000009_mcp_tool_error_outcome.sql": "bcc252dbbebb26057c5d53399839b2f5b3ea2cd85e063019d0bd134850140fc2",
+  "20261120000010_mcp_approval_audit.sql": "40242c187e9d91b8009215ae49f30322edb766098ec7d4a9e77d5e6b4a9cd8b7",
+  "20261120000011_mcp_approval_events_service_role_revoke.sql": "85473f0d6874b9f959e0492ed9bf09706f0ca3bce0465353478e26b3f210989c",
   "20261120100001_workspace_knowledge_vectors.sql": "926f6dff51e6327c71fbf29f31fa7098a2bc8a559661689f80ffde443bd10742",
   "20261120100002_workspace_document_jobs.sql": "f43f1758a1a5e3fce255bcb4204561bcc631a17b8aba44dc9c52399f2b7f349b",
   "20261120100003_workspace_rate_limits.sql": "195812bfb54c2479fffdbe9d7cf6bf1668c92d8f1c20c649d9bfa021a1332efb",

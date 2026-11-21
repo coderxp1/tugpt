@@ -187,10 +187,21 @@ describe('runApprovedCall', () => {
     expect(final.at(-1)).toEqual({ role: 'tool', tool_call_id: 'call_7', content: '{"busy":[]}' });
     expect(answer).toBe('Tuesday is free.');
   });
-  it('reports a refused claim as a failed tool result and still lets the model explain', async () => {
+  it('a refused claim (APPROVAL_REQUIRED, nothing ran) never reaches the model; the answer says plainly that nothing was run (real-stack regression)', async () => {
+    // Real run (server-memory, TuGPT Scout, thread 81097e67): replays of a used approval were refused with
+    // APPROVAL_REQUIRED and the memory file was unchanged, yet the follow-up answer said
+    // "The create_entities tool was used to create one entity ... Beta AG".
     const p = ports({ async executeTool() { return { ok: false, code: 'APPROVAL_REQUIRED', content: '{"ok":false,"error":"APPROVAL_REQUIRED"}' }; } });
-    const { events } = await collect(runApprovedCall({ messages: [], call: call('c', {}) }, p));
+    const { events, answer } = await collect(runApprovedCall({ messages: [], call: call('c', {}) }, p));
     expect(events).toContainEqual({ type: 'tool_result', tool: tool.name, callId: 'c', ok: false, code: 'APPROVAL_REQUIRED' });
+    expect(p.streamed).toHaveLength(0);
+    expect(answer).toMatch(/Nothing was run/);
+    expect(events.filter((e) => e.type === 'delta').map((e) => (e as { text: string }).text).join('')).toBe(answer);
+  });
+  it('any other failure of the approved call still lets the model explain the error', async () => {
+    const p = ports({ async executeTool() { return { ok: false, code: 'UPSTREAM_ERROR', content: '{"ok":false,"error":"UPSTREAM_ERROR"}' }; } });
+    const { events } = await collect(runApprovedCall({ messages: [], call: call('c', {}) }, p));
+    expect(events).toContainEqual({ type: 'tool_result', tool: tool.name, callId: 'c', ok: false, code: 'UPSTREAM_ERROR' });
     expect(p.streamed).toHaveLength(1);
   });
 });
@@ -218,5 +229,8 @@ describe('helpers', () => {
     expect(p).toMatch(/approved this exact call/);
     expect(p).toMatch(/untrusted data/);
     expect(systemPrompt(base)).toMatch(/waiting for their approval/);
+    // The prompt is built before the call runs, so it must not assert that the call succeeded.
+    expect(p).not.toMatch(/has now run/);
+    expect(p).toMatch(/did not succeed/);
   });
 });

@@ -254,11 +254,13 @@ export interface FakeState {
   rpcLog: { fn: string; args: Row }[];
   /** Rows written by record_mcp_tool_call (20261115000006_mcp_audit.sql). */
   mcpAudit: Row[];
+  /** Rows of mcp_approval_events (20261120000010_mcp_approval_audit.sql). */
+  approvalEvents: Row[];
   now: () => number;
 }
 
 export function emptyState(): FakeState {
-  return { members: {}, endpoints: [], snapshots: [], tools: [], approvals: [], catalogue: ['calendar.find_availability'], rpcLog: [], mcpAudit: [], now: () => Date.now() };
+  return { members: {}, endpoints: [], snapshots: [], tools: [], approvals: [], catalogue: ['calendar.find_availability'], rpcLog: [], mcpAudit: [], approvalEvents: [], now: () => Date.now() };
 }
 
 const RLS_ADMIN_ONLY = new Set(['external_tool_endpoints', 'external_tool_snapshots', 'external_tools']);
@@ -360,14 +362,55 @@ export function fakeDb(state: FakeState, userId: string, identity: FakeIdentity 
         return { data: rows, error: null };
       }
       if (fn === 'claim_tool_approval') {
-        if (!isMember(org)) return { data: false, error: null };
+        // 20261120000010 revokes EXECUTE from users: every claim goes through the audited function.
+        return { data: null, error: { code: '42501', message: 'permission denied for function claim_tool_approval' } };
+      }
+      if (fn === 'claim_tool_approval_audited') {
+        // Mirrors 20261120000010: classify in the same transaction and write exactly one event.
+        const source = args.p_source;
+        if (source !== 'chat_turn' && source !== 'approved_call') return { data: null, error: { code: '22023', message: 'INVALID_SOURCE' } };
+        if (!isMember(org)) return { data: [{ claimed: false, reason: 'FORBIDDEN' }], error: null };
         const now = state.now();
-        const a = state.approvals.filter((x) => x.organization_id === org && x.connection_id === args.p_connection_id && x.capability === args.p_capability
-          && x.arguments_sha256 === args.p_arguments_sha256 && x.expires_at > now && x.used_at === null && x.revoked_at === null
-          && x.requested_by === userId && x.thread_id === args.p_thread_id)[0];
-        if (!a) return { data: false, error: null };
-        a.used_at = now;
-        return { data: true, error: null };
+        const same = (x: Approval) => x.organization_id === org && x.connection_id === args.p_connection_id && x.capability === args.p_capability && x.thread_id === args.p_thread_id;
+        const exact = state.approvals.filter((x) => same(x) && x.arguments_sha256 === args.p_arguments_sha256);
+        const log = (event: string, reason: string | null, approvalId: string | null = null) => state.approvalEvents.push({
+          organization_id: org, actor_user_id: userId, endpoint_id: args.p_connection_id, thread_id: args.p_thread_id,
+          capability: args.p_capability, arguments_sha256: args.p_arguments_sha256, approval_id: approvalId, event, reason,
+        });
+        const claimable = exact.find((x) => x.requested_by === userId && x.expires_at > now && x.used_at === null && x.revoked_at === null);
+        if (claimable) { claimable.used_at = now; log('claimed', null, claimable.id); return { data: [{ claimed: true, reason: 'OK' }], error: null }; }
+        const mine = exact.filter((x) => x.requested_by === userId);
+        const rejected = source === 'approved_call' && state.approvalEvents.some((e) => e.event === 'rejected_by_user' && e.reason === 'REJECTED_BY_USER' && e.thread_id === args.p_thread_id && e.arguments_sha256 === args.p_arguments_sha256 && e.capability === args.p_capability);
+        const open = (x: Approval) => x.requested_by === userId && x.expires_at > now && x.used_at === null && x.revoked_at === null;
+        const [event, reason] = rejected ? ['rejected_by_user', 'CLAIM_AFTER_REJECT']
+          : source === 'chat_turn' ? ['approval_requested', 'APPROVAL_REQUIRED']
+          : mine.some((x) => x.used_at !== null) ? ['replayed', 'ALREADY_USED']
+          : mine.some((x) => x.revoked_at !== null) ? ['revoked', 'CLAIM_AFTER_REVOKE']
+          : mine.some((x) => x.expires_at <= now) ? ['expired', 'EXPIRED']
+          : exact.length > 0 ? ['authorization_denied', 'NOT_REQUESTER']
+          : state.approvals.some((x) => same(x) && open(x)) ? ['invalid_arguments', 'ARGUMENTS_MISMATCH']
+          : ['authorization_denied', 'NO_APPROVAL'];
+        log(event, reason);
+        return { data: [{ claimed: false, reason }], error: null };
+      }
+      if (fn === 'reject_tool_call') {
+        if (!isMember(org)) return { data: null, error: { code: '42501', message: 'FORBIDDEN' } };
+        let n = 0;
+        for (const a of state.approvals) {
+          if (a.organization_id === org && a.connection_id === args.p_connection_id && a.capability === args.p_capability && a.arguments_sha256 === args.p_arguments_sha256
+            && a.thread_id === args.p_thread_id && a.used_at === null && a.revoked_at === null) { a.revoked_at = state.now(); n++; }
+        }
+        state.approvalEvents.push({ organization_id: org, actor_user_id: userId, endpoint_id: args.p_connection_id, thread_id: args.p_thread_id,
+          capability: args.p_capability, arguments_sha256: args.p_arguments_sha256, approval_id: null, event: 'rejected_by_user', reason: 'REJECTED_BY_USER' });
+        return { data: n, error: null };
+      }
+      if (fn === 'record_mcp_approval_event') {
+        // Users may only record route-level denials, as themselves, in their own organization.
+        if (!isMember(org)) return { data: null, error: { code: '42501', message: 'FORBIDDEN' } };
+        if (args.p_event !== 'authorization_denied' && args.p_event !== 'invalid_arguments') return { data: null, error: { code: '22023', message: 'INVALID_EVENT' } };
+        state.approvalEvents.push({ organization_id: org, actor_user_id: userId, endpoint_id: args.p_connection_id ?? null, thread_id: args.p_thread_id ?? null,
+          capability: args.p_capability, arguments_sha256: args.p_arguments_sha256, approval_id: null, event: args.p_event, reason: args.p_reason });
+        return { data: null, error: null };
       }
       if (fn === 'is_tool_approved') {
         if (!isMember(org)) return { data: false, error: null };

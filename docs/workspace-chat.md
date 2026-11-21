@@ -150,7 +150,12 @@ Tests: `approval.test.ts`, `ApprovalCard.test.tsx`, `approval-routes.test.ts`,
    non-read MCP tools, and executes through the Connect runtime, which claims
    the approval atomically. The model gets no tools in that turn. A refused
    claim (expired, revoked, already used, or different arguments) shows "Not
-   run". If the route refuses the request before anything runs (for example
+   run", and the model is not asked for that turn: the stored answer is the
+   fixed text "Nothing was run. ..." (`APPROVED_CALL_REFUSED_ANSWER` in
+   `lib/chat/turn.ts`), because a model can misreport a refusal as success.
+   Other failures of the approved call still go to the model, whose prompt
+   says the call was tried once and must be reported as not successful if it
+   failed. The fixed text is English only; localizing it is open. If the route refuses the request before anything runs (for example
    the MCP gate is closed, or the arguments changed), the card shows the
    server's reason and says the approval was not used; it stays approved, so
    it can be run later or revoked. No page-level error is raised for this.
@@ -166,3 +171,101 @@ them, although the refused tool step stays in the history. The runtime claims
 the approval before it executes, so a call that then fails (for example, the
 proxy is down) still uses up the approval.
 
+
+## Approval audit (migration `20261120000010_mcp_approval_audit.sql`)
+
+Every decision about an approval-bound MCP call writes exactly one row in
+`public.mcp_approval_events`. The row holds the organization, actor, endpoint,
+thread, capability, the canonical **argument hash**, the approval id when there
+is one, the event and a short reason code. It never holds arguments, provider
+output, tokens or credentials.
+
+| Event | Reason | Written by |
+|---|---|---|
+| `approval_requested` | `APPROVAL_REQUIRED` | `claim_tool_approval_audited` (chat turn, no usable approval) |
+| `approved` | - | trigger on `tool_approvals` insert (actor = approver) |
+| `claimed` | - | `claim_tool_approval_audited` (atomic consume, names the approval) |
+| `executed` / `execution_failed` | runtime outcome | trigger on `mcp_tool_calls` (trusted writer only), only for an open claim |
+| `replayed` | `ALREADY_USED` | audited claim, approved-call |
+| `expired` | `EXPIRED` | audited claim, approved-call |
+| `revoked` | `REVOKED_BY_ADMIN`, `REJECTED_BY_USER`, `CLAIM_AFTER_REVOKE` | trigger on `revoked_at`; audited claim |
+| `rejected_by_user` | `REJECTED_BY_USER`, `CLAIM_AFTER_REJECT` | `reject_tool_call`; audited claim |
+| `invalid_arguments` | `ARGUMENTS_MISMATCH`, `ARGUMENTS_HASH_MISMATCH` | audited claim; approved-call route (409) |
+| `authorization_denied` | `NOT_REQUESTER`, `NO_APPROVAL`, `THREAD_NOT_ACCESSIBLE`, `ENDPOINT_NOT_ACTIVE`, `TOOL_NOT_APPROVAL_BOUND`, `APPROVER_ROLE_REQUIRED` | audited claim; routes |
+
+Rules:
+
+- The refusal reason is decided in the database, in the claim's transaction.
+  `claim_tool_approval` is no longer executable by users; the runtime port
+  (`dbApprovals`) calls `claim_tool_approval_audited` with `p_source`
+  `chat_turn` (default) or `approved_call` (the approved-call route).
+- The table is append-only (UPDATE raises), has no write grants, FORCE RLS,
+  and only owners/admins of the same organization can read it.
+- `record_mcp_approval_event` accepts only `authorization_denied` and
+  `invalid_arguments`, only as the caller and only in an organization the
+  caller belongs to. Endpoint and thread ids that are not in that
+  organization are stored as NULL, so a foreign-tenant attempt is recorded in
+  the actor's own organization without any id from the other tenant.
+- The audit write never changes a route's response.
+
+### Reject is binding
+
+`POST /api/v1/chat/threads/[threadId]/rejected-call` with
+`{ connectionId, capability, argumentsSha256 }` (same-origin; thread loaded
+through RLS) calls `reject_tool_call`: the requester or an owner/admin records
+`rejected_by_user`, every open approval for exactly that call on that thread is
+revoked, an approved-call for it is refused (`CLAIM_AFTER_REJECT`), and
+`record_tool_approval` raises `CALL_REJECTED` (route: 409) until a newer
+`approval_requested` event (a new request) exists. The chat UI must call this
+route from the card's Reject; see `docs/connect/approval-reject-ui-spec.md`.
+
+Verified: pgTAP `supabase/tests/database/mcp_approval_audit.test.sql`
+(44 assertions, run against the isolated database), Vitest route and port
+tests.
+
+**Privileges.** Nobody writes `mcp_approval_events` directly: `anon` has nothing; `authenticated` and `service_role` have exactly `SELECT` (RLS limits `authenticated` to owners/admins of the row's organization; `service_role` bypasses RLS and is read-only since `20261120000011`, which closed the default-privilege `ALL` grant that `20261120000010` left in place). Every event is written by a `SECURITY DEFINER` function or trigger; `UPDATE` is refused by an append-only trigger.
+
+## Model text is not a tool result
+
+Only results produced by the server's own tool execution (`tool_result`
+events) count as tool results. Anything that appears in the model's text and
+looks like a tool call, a tool result or another chat turn is removed on the
+server before it is streamed or stored. The UI does not do this filtering.
+
+Root cause found on the private serving (`tugpt-scout`, Ollama, `llama4:scout`
+template); the evidence is in the takeover notes:
+
+- The template does not close the last message with `<|eot|>`. After a tool
+  result the model continues the pattern: it invents result JSON, writes an
+  `assistant` header and further turns, and calls tools as plain text.
+- With tools offered, the template drops `role: system` messages, so the
+  untrusted-data and approval rules in TuGPT's system prompt are lost on tool
+  turns.
+- Tool content is inserted unescaped into `{"response": "..."}`.
+- Request `stop` values (`<|eot|>`, `<|header_start|>`) did not stop it
+  (2 of 3 runs still ran on).
+
+What the server does (`lib/chat/model-text.ts`, `lib/chat/turn.ts`):
+
+1. Plain chat streams through `TurnBoundaryFilter`: the answer ends at the first
+   leaked turn header (`assistant`, `user`, `ipython` followed by a blank
+   line). The upstream stream is then cancelled.
+2. Answers in tool turns are buffered, then cleaned by `cleanToolTurnText`. It
+   cuts at a turn boundary and removes text-form calls of offered tools,
+   including unfinished ones. If no tool succeeded, it also removes any JSON
+   that looks like a result.
+3. If any call in a turn returns `APPROVAL_REQUIRED`, there is no further tool
+   round, because the model then tends to call the same tool again. If nothing
+   succeeded, the model is not asked at all. The answer is the fixed text
+   `APPROVAL_PENDING_ANSWER` ("Nothing has run yet. ..."). If some calls ran,
+   the model summarizes those results and the server appends the same
+   sentence.
+4. If cleaning leaves nothing, the answer is a fixed text instead:
+   `RESULT_WITHOUT_SUMMARY_ANSWER` if a tool ran, otherwise
+   `NO_TOOL_RESULT_ANSWER`.
+5. The follow-up after **Run now** is cleaned the same way.
+
+Fixed texts are English only. A corrected serving template (with `<|eot|>`
+after every message, the system prompt kept when tools are offered, and
+escaped tool content) is proposed but not applied. The private model is shared
+infrastructure.

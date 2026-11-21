@@ -18,7 +18,7 @@ import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch } from './mcp-egress';
 import { loadChatToolRegistry, mcpUnavailableReason, runnableEndpoints, type McpAuditSink, type McpDeps } from './mcp';
 import { argumentsSha256 } from './approval.server';
-import { canonicalJson, runTurn, type TurnEvent } from './turn';
+import { APPROVAL_PENDING_ANSWER, canonicalJson, runTurn, type TurnEvent } from './turn';
 import type { WireMessage } from './openai-compatible';
 import { listCapabilities, type CapabilityRow } from './store';
 import { toolLabel, toolProblem } from '../connect-ui/chat-errors';
@@ -219,7 +219,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect(proxy.connects.length).toBeGreaterThan(connectsBefore);
       expect(proxy.connects.slice(connectsBefore).every((c) => c === `${MCP_HOST}:443`)).toBe(true);
       expect(audits.map((a) => [a.capability, a.outcome, a.endpointId, a.connectionId])).toEqual([['external.search_docs', 'ok', EP_A, EP_A]]);
-      expect(state.rpcLog.some((x) => x.fn === 'claim_tool_approval')).toBe(false);
+      expect(state.rpcLog.some((x) => x.fn.startsWith('claim_tool_approval'))).toBe(false);
     });
 
     it('accepts SSE-framed replies (Streamable HTTP)', async () => {
@@ -234,9 +234,10 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       const r = await toolset([pick(EP_A, 'create_ticket')]).execute(call('create_ticket', { q: 'new' }));
       expect(r.code).toBe('APPROVAL_REQUIRED');
       expect(server.toolCalls().length).toBe(before);
-      expect(state.rpcLog.find((x) => x.fn === 'claim_tool_approval')?.args).toEqual({
-        p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: sha({ q: 'new' }), p_thread_id: THREAD,
+      expect(state.rpcLog.find((x) => x.fn === 'claim_tool_approval_audited')?.args).toEqual({
+        p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: sha({ q: 'new' }), p_thread_id: THREAD, p_source: 'chat_turn',
       });
+      expect(state.approvalEvents.map((e) => [e.event, e.reason])).toEqual([['approval_requested', 'APPROVAL_REQUIRED']]);
     });
 
     it('a single-use approval runs the exact call once; a reuse is refused', async () => {
@@ -539,7 +540,7 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       let round = 0;
       const events: TurnEvent[] = [];
       const gen = runTurn({ messages: [{ role: 'user', content: 'go' }], tools: ts.specs }, {
-        async completeWithTools(messages) {
+        async completeWithTools() {
           round += 1;
           if (round === 1) {
             return { text: null, toolCalls: [
@@ -548,10 +549,10 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
               { id: 't3', name: 'create_ticket', arguments: { q: 'ok' } },
             ] };
           }
-          for (const m of messages) if (m.role === 'tool') toolMessages.push(m.content);
-          return { text: 'Done.', toolCalls: [] };
+          return { text: 'unused: a pending approval ends the tool rounds', toolCalls: [] };
         },
-        stream: async function* () { yield 'unused'; },
+        // One call waits for approval, so the turn asks for no further tool round; the model only summarizes.
+        stream: async function* (messages) { for (const m of messages) if (m.role === 'tool') toolMessages.push(m.content); yield 'Done.'; },
         executeTool: (c) => ts.execute(c),
       });
       for (;;) { const n = await gen.next(); if (n.done) break; events.push(n.value); }
@@ -560,7 +561,9 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
         { type: 'tool_start', tool: 'create_ticket', callId: 't2' }, { type: 'tool_result', tool: 'create_ticket', callId: 't2', ok: false, code: 'APPROVAL_REQUIRED' },
         { type: 'tool_start', tool: 'create_ticket', callId: 't3' }, { type: 'tool_result', tool: 'create_ticket', callId: 't3', ok: true },
         { type: 'delta', text: 'Done.' },
+        { type: 'delta', text: `\n\n${APPROVAL_PENDING_ANSWER}` },
       ]);
+      expect(round).toBe(1);
       // What the messages route adds to each tool event, and what the UI renders from it.
       const d = ts.describe('search_docs');
       expect(d).toEqual({ capabilityKey: 'external.search_docs', providerName: 'Acme Docs MCP', providerKey: 'mcp' });
@@ -598,20 +601,28 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       expect((await ts.execute(call('create_ticket', args))).code).toBe('APPROVAL_REQUIRED');
       expect((await ts.execute(call('create_ticket', { ...args, title: 'changed' }))).code).toBe('APPROVAL_REQUIRED');
     });
+    /** 20261120000010: users can only claim through the audited function; the old one is refused. */
+    async function claimAudited(user: string, a: Record<string, unknown>) {
+      const db = fakeDb(state, user);
+      expect((await db.rpc('claim_tool_approval', a)).error).toMatchObject({ code: '42501' });
+      const r = await db.rpc('claim_tool_approval_audited', { ...a, p_source: 'approved_call' });
+      expect(r.error).toBeNull();
+      return (r.data as { claimed: boolean; reason: string }[])[0];
+    }
     it('F-4: another user cannot claim an approval', async () => {
       const args = { q: 'x' };
       approve(state, { requested_by: OWNER_A, thread_id: THREAD, organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
-      expect((await fakeDb(state, MEMBER_A).rpc('claim_tool_approval', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: THREAD })).data).toBe(false);
+      expect(await claimAudited(MEMBER_A, { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: THREAD })).toMatchObject({ claimed: false });
     });
     it('F-4: another thread cannot reuse an approval', async () => {
       const args = { q: 'y' };
       approve(state, { requested_by: OWNER_A, thread_id: THREAD, organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
-      expect((await fakeDb(state, OWNER_A).rpc('claim_tool_approval', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: 'c0000000-0000-4000-8000-0000000000ff' })).data).toBe(false);
+      expect(await claimAudited(OWNER_A, { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: 'c0000000-0000-4000-8000-0000000000ff' })).toMatchObject({ claimed: false });
     });
     it('F-4: missing requester/thread cannot pass', async () => {
       const args = { q: 'z' };
       approve(state, { organization_id: ORG_A, connection_id: EP_A, capability: 'external.create_ticket', arguments_sha256: argumentsSha256(args), expires_at: Date.now() + 60_000 });
-      expect((await fakeDb(state, OWNER_A).rpc('claim_tool_approval', { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: THREAD })).data).toBe(false);
+      expect(await claimAudited(OWNER_A, { p_organization_id: ORG_A, p_connection_id: EP_A, p_capability: 'external.create_ticket', p_arguments_sha256: argumentsSha256(args), p_thread_id: THREAD })).toMatchObject({ claimed: false });
     });
   });
 

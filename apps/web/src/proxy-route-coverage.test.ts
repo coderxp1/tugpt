@@ -328,6 +328,12 @@ const ROUTES: RouteExpectation[] = [
     why: 'Proxy requires a session first (401 JSON). Then: Same-origin POST; handler authenticates, loads the thread through RLS (owner only), re-validates capability, MCP gate, tool, model and argument hash (409 on mismatch), and the runtime claims the single-use approval and audits the call.',
   },
   {
+    path: '/api/v1/chat/threads/[threadId]/rejected-call',
+    kind: 'api',
+    type: 'protected',
+    why: 'Proxy requires a session first (401 JSON). Then: Same-origin POST; handler authenticates, loads the thread through RLS (owner only), and reject_tool_call() (requester or owner/admin) records rejected_by_user and revokes open approvals for exactly this call. Nothing runs.',
+  },
+  {
     path: '/api/v1/chat/approvals/status',
     kind: 'api',
     type: 'protected',

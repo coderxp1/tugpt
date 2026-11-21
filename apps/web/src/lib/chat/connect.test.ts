@@ -55,21 +55,34 @@ describe('conflictingAttachments', () => {
   });
 });
 
-describe('dbApprovals (claim_tool_approval)', () => {
+describe('dbApprovals (claim_tool_approval_audited)', () => {
   const ctx = { organizationId: 'org-1', userId: 'u-1', threadId: 't-1' };
   const input = { organizationId: 'org-1', actorUserId: 'u-1', connectionId: '11111111-1111-4111-8111-111111111111', capability: 'x.write', argumentsSha256: 'ab' };
   const db = (rpc: ChatDb['rpc']) => ({ from: vi.fn(), rpc: vi.fn(rpc) }) as unknown as ChatDb & { rpc: ReturnType<typeof vi.fn> };
+  const claimed = (v: boolean, reason = v ? 'OK' : 'APPROVAL_REQUIRED') => async () => ({ data: [{ claimed: v, reason }], error: null });
 
-  it('claims through the RPC with the exact arguments and accepts only true', async () => {
-    const d = db(async () => ({ data: true, error: null }));
+  it('claims through the audited RPC with the exact arguments; chat turns are the default source', async () => {
+    const d = db(claimed(true));
     expect(await dbApprovals(d, ctx).claimApproval(input)).toBe(true);
-    expect(d.rpc).toHaveBeenCalledWith('claim_tool_approval', { p_organization_id: 'org-1', p_connection_id: input.connectionId, p_capability: 'x.write', p_arguments_sha256: 'ab', p_thread_id: 't-1' });
+    expect(d.rpc).toHaveBeenCalledWith('claim_tool_approval_audited', { p_organization_id: 'org-1', p_connection_id: input.connectionId, p_capability: 'x.write', p_arguments_sha256: 'ab', p_thread_id: 't-1', p_source: 'chat_turn' });
+    expect(d.rpc).not.toHaveBeenCalledWith('claim_tool_approval', expect.anything());
   });
-  it('fails closed on false, errors, throws, other tenant, other user or a bad id', async () => {
-    expect(await dbApprovals(db(async () => ({ data: false, error: null })), ctx).claimApproval(input)).toBe(false);
-    expect(await dbApprovals(db(async () => ({ data: true, error: { message: 'x' } } as never)), ctx).claimApproval(input)).toBe(false);
+  it('the approved-call route claims as approved_call', async () => {
+    const d = db(claimed(true));
+    expect(await dbApprovals(d, { ...ctx, approvalSource: 'approved_call' }).claimApproval(input)).toBe(true);
+    expect(d.rpc).toHaveBeenCalledWith('claim_tool_approval_audited', expect.objectContaining({ p_source: 'approved_call' }));
+  });
+  it('accepts a single row object as PostgREST may return it', async () => {
+    expect(await dbApprovals(db(async () => ({ data: { claimed: true, reason: 'OK' }, error: null })), ctx).claimApproval(input)).toBe(true);
+  });
+  it('fails closed on refusals, odd shapes, errors, throws, other tenant, other user or a bad id', async () => {
+    expect(await dbApprovals(db(claimed(false, 'ALREADY_USED')), ctx).claimApproval(input)).toBe(false);
+    expect(await dbApprovals(db(async () => ({ data: true, error: null })), ctx).claimApproval(input)).toBe(false);
+    expect(await dbApprovals(db(async () => ({ data: [{ claimed: 'true' }], error: null })), ctx).claimApproval(input)).toBe(false);
+    expect(await dbApprovals(db(async () => ({ data: [{ claimed: true }, { claimed: true }], error: null })), ctx).claimApproval(input)).toBe(false);
+    expect(await dbApprovals(db(async () => ({ data: [{ claimed: true, reason: 'OK' }], error: { message: 'x' } } as never)), ctx).claimApproval(input)).toBe(false);
     expect(await dbApprovals(db(async () => { throw new Error('down'); }), ctx).claimApproval(input)).toBe(false);
-    const never = db(async () => ({ data: true, error: null }));
+    const never = db(claimed(true));
     expect(await dbApprovals(never, ctx).claimApproval({ ...input, organizationId: 'org-2' })).toBe(false);
     expect(await dbApprovals(never, ctx).claimApproval({ ...input, actorUserId: 'u-2' })).toBe(false);
     expect(await dbApprovals(never, ctx).claimApproval({ ...input, connectionId: 'not-a-uuid' })).toBe(false);
