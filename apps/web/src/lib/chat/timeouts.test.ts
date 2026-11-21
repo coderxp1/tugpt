@@ -5,7 +5,7 @@
  * abort signal, and ordinary failures.
  */
 import { describe, expect, it } from 'vitest';
-import { chatTimeouts, completeWithTools, DEFAULT_TIMEOUTS, ModelCallError, streamCompletion, type FetchLike } from './openai-compatible';
+import { chatTimeouts, completeWithTools, DEFAULT_TIMEOUTS, ModelCallError, streamCompletion, TURN_BUDGET_MS, turnDeadline, type FetchLike } from './openai-compatible';
 
 const EP = { baseUrl: 'http://upstream.test/v1', apiKey: null };
 const T = { firstTokenMs: 150, idleMs: 150, totalMs: 2_000 };
@@ -128,5 +128,41 @@ describe('chatTimeouts', () => {
     expect(DEFAULT_TIMEOUTS.idleMs).toBeLessThan(30_000);
     expect(chatTimeouts({ TUGPT_CHAT_FIRST_TOKEN_TIMEOUT_MS: '5000', TUGPT_CHAT_IDLE_TIMEOUT_MS: '10', TUGPT_CHAT_TOTAL_TIMEOUT_MS: 'x' }))
       .toEqual({ ...DEFAULT_TIMEOUTS, firstTokenMs: 5_000 });
+  });
+});
+
+describe('TIMEOUT-1 turn budget (the turn must end before its 150 s lease can expire)', () => {
+  const LEASE_TTL_MS = 150_000; // migration 20261122100001, p_ttl_seconds default
+  const MAX_DURATION_MS = 120_000; // messages / approved-call / agent run routes
+
+  it('budget sits below maxDuration and the lease, and the per-call cap never exceeds it', () => {
+    expect(TURN_BUDGET_MS).toBeLessThan(MAX_DURATION_MS);
+    expect(TURN_BUDGET_MS).toBeLessThan(LEASE_TTL_MS);
+    expect(DEFAULT_TIMEOUTS.totalMs).toBeLessThanOrEqual(TURN_BUDGET_MS);
+    expect(turnDeadline(1_000)).toBe(1_000 + TURN_BUDGET_MS);
+  });
+
+  it('a later call of a turn gets only the time left: a trickling answer is cut at the turn deadline, not at totalMs', async () => {
+    const trickle: FetchLike = async () => new Response(new ReadableStream<Uint8Array>({
+      async pull(c) { await new Promise((r) => setTimeout(r, 40)); c.enqueue(text('x')); },
+    }));
+    const r = await collect(streamCompletion(EP, 'm', [], { timeouts: { ...T, totalMs: 5_000 }, turnDeadlineAt: Date.now() + 300, fetchImpl: trickle }));
+    expect(code(r.error)).toBe('MODEL_TIMEOUT');
+    expect(r.ms).toBeLessThan(1_000);
+  });
+
+  it('an operator total override above the budget cannot stretch the turn', async () => {
+    const never: FetchLike = () => new Promise<Response>(() => undefined);
+    const t0 = Date.now();
+    const e = await completeWithTools(EP, 'm', [], [], { timeouts: { firstTokenMs: 60_000, idleMs: 60_000, totalMs: 600_000 }, turnDeadlineAt: Date.now() + 200, fetchImpl: never }).catch((x: unknown) => x);
+    expect(code(e)).toBe('MODEL_TIMEOUT');
+    expect(Date.now() - t0).toBeLessThan(1_000);
+  });
+
+  it('a spent budget fails the next call at once with MODEL_TIMEOUT', async () => {
+    const never: FetchLike = () => new Promise<Response>(() => undefined);
+    const r = await collect(streamCompletion(EP, 'm', [], { timeouts: T, turnDeadlineAt: Date.now() - 1, fetchImpl: never }));
+    expect(code(r.error)).toBe('MODEL_TIMEOUT');
+    expect(r.ms).toBeLessThan(200);
   });
 });

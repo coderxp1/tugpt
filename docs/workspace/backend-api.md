@@ -193,6 +193,73 @@ Worker-side features (document formats) are not reported: the web app cannot see
   `latest` are computed with indexed per-turn queries, independent of thread length.
 - On a database without `20261122100001` the app behaves as in Q-12 (no lease; see operations §1c).
 
+### Capabilities, call deadlines and usage metering (Q-15: CONF-1, TIMEOUT-1, USAGE-1; no migration)
+
+**CONF-1 — opaque capability ids.** Customer responses never carry a provider, upstream model id,
+host, port or endpoint.
+
+- `GET /api/v1/chat/capabilities/models` (session required, `401` otherwise; `Cache-Control: no-store`)
+  returns `{ contract: "chat-model-capabilities/1", capabilities: [{ id, label, description, available,
+  reasonCode, features: { toolCalling } }], defaultCapabilityId }`. `reasonCode` is `null`,
+  `TEMPORARILY_UNAVAILABLE` or `NOT_PERMITTED`. It is built only from the public model list, never from
+  routing data.
+- Ids: the private model is `assistant` ("TuGPT Assistant"). Hosted routes are `hosted-<8 hex>`
+  ("TuGPT Assistant (hosted option N)"; **interim labels until ROUTE-1**). A stored key that left the
+  catalogue reads as `retired-<8 hex>` and resolves to nothing.
+- Outputs (threads, thread list, agents, agent threads, agent turns) carry **both** `capabilityId` and
+  `modelKey`, and both hold the opaque id. `modelKey` stays for compatibility; new clients should read
+  `capabilityId`.
+- Inputs (`POST /chat/threads`, `POST .../messages`, `POST .../approved-call`, agents create/PATCH)
+  accept `capabilityId`. The legacy `modelKey` is still accepted, including a legacy stored key such as
+  `tugpt-scout`, as an alias. If both are sent and differ, the request is refused like an unknown
+  capability: `400 {"error":"Unknown model"}` on the chat routes (the existing body; agent runs use
+  `UNKNOWN_MODEL`) and `400 INVALID_MODEL` on agent create/PATCH.
+- Stored values are unchanged: `chat_threads.model_key` / `custom_agents.model_key` keep the internal
+  routing key. An agent whose stored model is retired can still be saved by echoing its `retired-*` id
+  back unchanged; the stored key is kept. It cannot be newly chosen.
+- Images API responses no longer include a model field.
+
+**TIMEOUT-1 — every model call ends.** Each call has a first-token deadline (25 s: request sent to
+first answer text, or the whole tool-round response), an idle deadline (20 s between chunks after the
+first text) and a hard cap. The cap is `min(totalMs (100 s), turn deadline − now)`. All calls of one
+turn share a **turn budget of 100 s** (`TURN_BUDGET_MS`, not configurable upward), so a turn always ends
+before the route's `maxDuration` (120 s) and before its 150 s turn lease can expire. Without that, an
+answer still streaming after the lease expired could race a Retry into a second model call. This
+matters because `next start` does not enforce `maxDuration`.
+
+- When a deadline fires, the upstream request is aborted, the stream ends with
+  `{type:'error', code:'MODEL_TIMEOUT', message, turnId}`, the answer is stored as `error`, and the
+  lease is released, so Retry works at once. Text already streamed is kept as the stored partial answer.
+  An empty answer stores "The model could not be reached. Try again in a moment."
+- Upstream HTTP errors or a refused connection: `MODEL_UNAVAILABLE`, returned at once. Neither code
+  carries provider detail.
+- A client disconnect is a stop, not a timeout: the answer is stored `stopped`.
+- Measured over HTTP against the scripted upstream (`rc-blockers-q15-http.e2e.mjs`): idle stall
+  20.1 s, no text after headers 25.1 s, no response headers 25.1 s, HTTP 500 in 0.1 s.
+- Known limit: a reasoning model that thinks silently for more than 25 s before its first text is
+  cut. Raise `TUGPT_CHAT_FIRST_TOKEN_TIMEOUT_MS` for such a route; the turn budget still applies.
+- Known limit: in a turn with tools, text from a tool round or final stream that fails mid-way is not
+  kept; the fixed error text is stored.
+
+**USAGE-1 — one usage row per model call** (Agent 6's `recordChatUsage`, table from
+`20261121700002_usage_accounting`).
+
+- Key: `<feature>:<turnId>:<callIndex>`, with `callIndex = attempt × 8 + n`. `n` is the call within the
+  attempt (tool rounds, then the answer), and `attempt` is 0 for a fresh turn or the number of stored
+  answers for a retry (maximum 63). So a retry never reuses a key, and a duplicate request that loses
+  the lease (`409`) makes no call and writes no row.
+- Feature: `chat` (messages, approved-call) or `agents` (agent turns). Approved-call has no chat turn,
+  so it uses a per-request random turn id with attempt 0.
+- Outcome: `succeeded`, `failed` (timeout, upstream error) or `cancelled` (client stop). A consumer
+  that stops reading early, e.g. at a leaked role header, counts as `succeeded`.
+- Tokens come from the provider's final `usage` chunk (`stream_options.include_usage` is sent;
+  `TUGPT_CHAT_STREAM_USAGE=false` disables it for an upstream that rejects it). Without one, the row
+  has `usage_basis = unavailable`, component quantities 0 and NULL cost (Agent 6's design).
+- Rows are written after the lease is released. They are best-effort: a recording failure never fails
+  the turn, and a crash between the model call and the write can under-count.
+- Provider and upstream model are stored on the row (backend-only). The customer report
+  `org_usage_report` exposes neither, and neither does any customer response.
+
 ## 3. Approvals (persistent)
 
 These extend Agent 2's MCP approvals; they don't replace them. A **request** can exist before anyone
@@ -487,6 +554,7 @@ Details hold IDs, hashes and classes only: no arguments, file content, filenames
 | 415 | `UNSUPPORTED_MEDIA_TYPE`, `MEDIA_TYPE_MISMATCH` |
 | 429 | `RATE_LIMITED` (with `Retry-After`), `LIMIT_EXCEEDED`, `TOO_MANY_PENDING`, `TOO_MANY_CHUNKS` |
 | 503 | `STORE_UNAVAILABLE`, `STORAGE_NOT_CONFIGURED`, `STORAGE_UNAVAILABLE`, `INTEGRITY_CHECK_FAILED` |
+| stream `error` event | `MODEL_TIMEOUT` (a deadline fired, Q-15), `MODEL_UNAVAILABLE` (upstream error or unreachable), `MODEL_BAD_RESPONSE`, `TURN_FAILED`, `STORE_UNAVAILABLE` |
 
 ### 7a. Client handling (frontend quick reference)
 
@@ -507,6 +575,7 @@ Every error body is JSON with `code`; turn conflicts also carry `turn` (the turn
 | `409 IDEMPOTENCY_KEY_REUSED` | key used for different bytes | client bug: new file → new key |
 | `400 INVALID_IDEMPOTENCY_KEY` | key is not a UUID | client bug |
 | `429 RATE_LIMITED` + `Retry-After` | rate limit | wait, then retry |
+| stream `error` `MODEL_TIMEOUT` / `MODEL_UNAVAILABLE` | the model call failed; the answer (with any partial text) is stored as `error` and the lease is released | show the stored text; offer Retry at once (it gets a new usage key) |
 | document `failed` + `PDF_NO_TEXT_LAYER` | scanned PDF, no OCR yet | "This PDF has no text layer (a scan). OCR is not available yet." |
 | document `unsupported` + `UNSUPPORTED_FOR_INDEXING` | images | stored and attachable, not searchable |
 
@@ -520,6 +589,8 @@ Every error body is JSON with `code`; turn conflicts also carry `turn` (the turn
 | `TUGPT_FILE_MAX_BYTES` | Upload cap, default 26214400, clamped to 52428800. |
 | `TUGPT_APP_ORIGIN` | The exact origin used for the mutation check. |
 | `TUGPT_EMBEDDINGS_URL`, `TUGPT_EMBEDDINGS_MODEL`, `TUGPT_EMBEDDINGS_DIMS`, `TUGPT_EMBEDDINGS_API_KEY` | OpenAI-compatible `/embeddings` endpoint, used by the worker (documents) and the web app (queries). HTTPS, or http on loopback only. All three of URL/model/dims are required, otherwise search is keyword-only. The key comes from the secret store. |
+| `TUGPT_CHAT_FIRST_TOKEN_TIMEOUT_MS`, `TUGPT_CHAT_IDLE_TIMEOUT_MS`, `TUGPT_CHAT_TOTAL_TIMEOUT_MS` | Per-call model deadlines in ms (Q-15). Defaults 25000, 20000, 100000; values outside 1000..600000 are ignored. Always capped by the 100 s turn budget. |
+| `TUGPT_CHAT_STREAM_USAGE` | `false` stops sending `stream_options.include_usage` (for an upstream that rejects it); usage rows are then `unavailable`. Default on. |
 | `TUGPT_STALE_UPLOAD_MINUTES`, `TUGPT_BLOB_SWEEP_GRACE_HOURS`, `TUGPT_BLOB_SWEEP_DELETE`, `TUGPT_ORG_PURGE_ENABLED`, `TUGPT_ORG_PURGE_GRACE_DAYS` | Maintenance worker (section 5c). Defaults 60 min, 24 h, `false`, `false`, 30 days. Destructive steps are opt-in. |
 
 ## 9. Migrations (forward-only, new IDs)
@@ -565,6 +636,20 @@ the unmerged stack. The approval functions are covered by `tests/database/worksp
 `supabase test db --local` scan covers `supabase/tests/`; if the stack is ever merged, this file would likely fail CI.
 Owner of the fix: the Connect area (rewrite into `tests/database` or remove), not Workspace. Not changed here.
 
+
+### pgTAP baseline (Q-15, on RC4 `4b7eac5` + this branch, disposable 133-migration stack)
+
+`supabase/tests/database`: **85 files, 2,524 ok, 1 not ok. 83 files are clean; the 2 known environment
+failures are unchanged** (`appointment_requests` test 26; `draft_attribution_and_audit` psql exit 3).
+The stale top-level `tool_approvals.test.sql` adds its 4 legacy failures (Connect area, as above).
+The IT suite `workspace-api.integration.test.ts` passed 54/54 against real PostgREST + RLS.
+
+Found and fixed in Q-15: **`workspace_approval_requests.test.sql` was already failing on RC4**
+(36 ok, then psql exit 3, `permission denied for function claim_tool_approval`). The Connect migration
+`20261120000010_mcp_approval_audit` revokes the unaudited `claim_tool_approval` from `authenticated`
+on purpose ("no unaudited claim path remains for users"), and test 36 still called it. The test now
+claims through `claim_tool_approval_audited(..., 'approved_call')`, as the app does: 40/40. Test only;
+no migration changed.
 
 ### F-4: edit permission and resulting visibility
 

@@ -40,7 +40,18 @@ export type FetchLike = (url: string, init: RequestInit) => Promise<Response>;
  */
 export interface CallTimeouts { readonly firstTokenMs: number; readonly idleMs: number; readonly totalMs: number }
 
-export const DEFAULT_TIMEOUTS: CallTimeouts = { firstTokenMs: 25_000, idleMs: 20_000, totalMs: 240_000 };
+export const DEFAULT_TIMEOUTS: CallTimeouts = { firstTokenMs: 25_000, idleMs: 20_000, totalMs: 100_000 };
+
+/**
+ * Whole-turn budget. A turn makes up to three model calls (two tool rounds + the answer) and must end
+ * before the route's maxDuration (120 s) and, above all, before its turn lease expires (150 s,
+ * migration 20261122100001): an answer still streaming after the lease expired could race a
+ * concurrent Retry into a second model call. `next start` does not enforce maxDuration, so the
+ * budget is enforced here: every call of a turn gets turnDeadlineAt, and its hard cap is
+ * min(totalMs, turnDeadlineAt - now). Not configurable upward on purpose.
+ */
+export const TURN_BUDGET_MS = 100_000;
+export function turnDeadline(now: number = Date.now()): number { return now + TURN_BUDGET_MS; }
 
 type Env = Readonly<Record<string, string | undefined>>;
 
@@ -64,6 +75,8 @@ export interface CallOptions {
   readonly maxTokens?: number;
   /** Defaults to chatTimeouts(). */
   readonly timeouts?: Partial<CallTimeouts>;
+  /** Epoch ms by which the whole turn must end (turnDeadline()); caps this call's total time. */
+  readonly turnDeadlineAt?: number;
   /** Receives the provider's raw `usage` object when one arrives (USAGE-1). Untrusted; parse before use. */
   readonly onUsage?: (usage: unknown) => void;
 }
@@ -136,7 +149,9 @@ class Deadline {
 }
 
 function deadline(opts: CallOptions): Deadline {
-  return new Deadline(opts.signal, { ...chatTimeouts(), ...opts.timeouts });
+  const t = { ...chatTimeouts(), ...opts.timeouts };
+  const left = opts.turnDeadlineAt === undefined ? t.totalMs : Math.max(0, opts.turnDeadlineAt - Date.now());
+  return new Deadline(opts.signal, { ...t, totalMs: Math.min(t.totalMs, left) });
 }
 
 const MAX_ARGUMENT_BYTES = 16_384;

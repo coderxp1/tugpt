@@ -1174,7 +1174,7 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
 
           const g = await getThread(tid);
           expect(g.status).toBe(200);
-          expect(Object.keys(g.json.thread).sort()).toEqual(['agentId', 'id', 'modelKey', 'title', 'updatedAt']);
+          expect(Object.keys(g.json.thread).sort()).toEqual(['agentId', 'capabilityId', 'id', 'modelKey', 'title', 'updatedAt']);
           expect(g.json.thread).toMatchObject({ id: tid, agentId: privAgent });
           expect(g.json.messages.map((m: { role: string }) => m.role)).toEqual(['user', 'assistant']);
           expect(g.json.messages[0]).toMatchObject({ role: 'user', citations: [], knowledgeUnavailable: false });
@@ -1400,8 +1400,11 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
           starters: ['What ships in Q2?', 'Who owns it?'], collectionIds: [privateCol],
         } });
         expect(c.status).toBe(201);
-        expect(c.json.agent).toMatchObject({ version: 1, modelKey: 'tugpt-scout', starters: ['What ships in Q2?', 'Who owns it?'], collectionIds: [privateCol] });
+        // CONF-1: the legacy key is accepted on input; only the opaque capability id comes back.
+        expect(c.json.agent).toMatchObject({ version: 1, modelKey: 'assistant', capabilityId: 'assistant', starters: ['What ships in Q2?', 'Who owns it?'], collectionIds: [privateCol] });
+        expect(JSON.stringify(c.json)).not.toContain('tugpt-scout');
         echo = c.json.agent.id;
+        expect((await sv().from('custom_agents').select('model_key').eq('id', echo).single()).data).toEqual({ model_key: 'tugpt-scout' });
         const got = (await call('agent', 'GET', { params: { agentId: echo } })).json.agent;
         // AgentsView sends the full object, read-only fields included.
         const saved = await call('agent', 'PATCH', { params: { agentId: echo }, body: { ...got, name: 'Echo 2', starters: ['What ships in Q2?'], collectionIds: [privateCol, orgCol] } });
@@ -1428,8 +1431,14 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         // A stored model that has left the catalogue is accepted when echoed back unchanged, but cannot be newly chosen.
         expect((await sv().from('custom_agents').update({ model_key: 'tugpt-retired' }).eq('id', echo)).error).toBeNull();
         const stale = (await call('agent', 'GET', { params: { agentId: echo } })).json.agent;
+        // CONF-1: a retired stored key reads back as an opaque retired-<hash> id, never the stored key.
+        expect(stale.modelKey).toMatch(/^retired-[0-9a-f]{8}$/);
+        expect(stale.capabilityId).toBe(stale.modelKey);
+        expect(JSON.stringify(stale)).not.toContain('tugpt-retired');
         expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { ...stale, description: 'still saves' } })).json.agent)
-          .toMatchObject({ modelKey: 'tugpt-retired', description: 'still saves' });
+          .toMatchObject({ modelKey: stale.modelKey, capabilityId: stale.modelKey, description: 'still saves' });
+        // Echoing the opaque id back keeps the stored routing key unchanged.
+        expect((await sv().from('custom_agents').select('model_key').eq('id', echo).single()).data).toEqual({ model_key: 'tugpt-retired' });
         expect(await patch({ modelKey: 'tugpt-other' })).toBe('400:INVALID_MODEL');
         expect((await call('agent', 'PATCH', { params: { agentId: echo }, body: { modelKey: 'tugpt-scout' } })).status).toBe(200);
       });
@@ -1484,7 +1493,7 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         as(U.memberA);
         const t = await call('threads', 'POST', { body: { agentId: echo } });
         expect(t.status).toBe(201);
-        expect(t.json.thread).toMatchObject({ agentId: echo, modelKey: 'tugpt-scout', title: 'New chat' });
+        expect(t.json.thread).toMatchObject({ agentId: echo, modelKey: 'assistant', capabilityId: 'assistant', title: 'New chat' });
         const tid: string = t.json.thread.id;
         const own = clients.get(U.memberA.id) as PostgrestClient;
         expect((await own.from('chat_threads').select('agent_id').eq('id', tid).single()).data).toEqual({ agent_id: echo });
@@ -1527,7 +1536,7 @@ describe.skipIf(!URL_ || !SECRET_FILE)('workspace API against real PostgREST + R
         as(U.memberA);
         expect((await sv().from('custom_agents').update({ model_key: 'tugpt-retired' }).eq('id', echo)).error).toBeNull();
         expect((await call('threads', 'POST', { body: { agentId: echo } })).json).toEqual({ error: 'Unknown model' });
-        expect((await call('threads', 'POST', { body: { agentId: echo, modelKey: 'tugpt-scout' } })).json.thread.modelKey).toBe('tugpt-scout');
+        expect((await call('threads', 'POST', { body: { agentId: echo, modelKey: 'tugpt-scout' } })).json.thread.modelKey).toBe('assistant');
         llmBodies.length = 0;
         expect(events((await send(tid, 'Still there?')).text).at(-1)!.type).toBe('done');
         expect(llmBodies[0].model).toBe('it-model');

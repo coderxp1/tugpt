@@ -114,7 +114,9 @@ SELECT ok(NOT public.revoke_approval_request('f5a00000-0000-4000-8000-0000000000
 
 SELECT set_config('request.jwt.claims','{"sub":"f5222222-2222-4222-8222-222222222222","role":"authenticated"}',true);
 SELECT is((SELECT count(*)::int FROM public.list_approval_history('f5a00000-0000-4000-8000-00000000000a','mine')), 5, 'requester sees own history incl. direct approval'); -- 35
-SELECT ok(public.claim_tool_approval('f5a00000-0000-4000-8000-00000000000a','f5e00000-0000-4000-8000-00000000000a','external.send_invoice',repeat('6',64),'f5700000-0000-4000-8000-0000000000a2'), 'requester''s tool call consumes the direct approval (Agent 2 claim)'); -- 36
+-- Since 20261120000010 users claim only through the audited claim (the unaudited claim_tool_approval is
+-- revoked from authenticated); approved_call is the source the approved-call route uses.
+SELECT ok((SELECT claimed FROM public.claim_tool_approval_audited('f5a00000-0000-4000-8000-00000000000a','f5e00000-0000-4000-8000-00000000000a','external.send_invoice',repeat('6',64),'f5700000-0000-4000-8000-0000000000a2','approved_call')), 'requester''s tool call consumes the direct approval (audited claim)'); -- 36
 SELECT is((SELECT status FROM public.list_approval_history('f5a00000-0000-4000-8000-00000000000a','mine','used')), 'used', 'a consumed approval shows as used'); -- 37
 
 RESET ROLE;

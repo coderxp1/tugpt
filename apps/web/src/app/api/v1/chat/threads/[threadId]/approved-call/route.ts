@@ -27,7 +27,7 @@ import { createSsoControlClient } from '@/lib/supabase/server';
 import { isSameOriginMutation, readJsonRecord } from '@/lib/http/mutations';
 import { chatContext, isUuid, jsonError, storeErrorResponse, validTimeZone } from '@/lib/chat/request';
 import { CAPABILITY_FIELDS, configuredModels, endpointFor, findModel, requestedCapability } from '@/lib/chat/models';
-import { ModelCallError, streamCompletion, type WireMessage } from '@/lib/chat/openai-compatible';
+import { ModelCallError, streamCompletion, type WireMessage, turnDeadline } from '@/lib/chat/openai-compatible';
 import { runApprovedCall, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, toolAvailable } from '@/lib/chat/connect';
 import { loadChatToolRegistry, MCP_PROVIDER } from '@/lib/chat/mcp';
@@ -115,6 +115,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   });
   const encoder = new TextEncoder();
   const signal = request.signal;
+  const turnDeadlineAt = turnDeadline(); // TIMEOUT-1: whole turn ends before the lease (150 s) can expire
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (e: object) => controller.enqueue(encoder.encode(`${JSON.stringify(e)}\n`));
@@ -123,7 +124,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
       let errorCode: string | null = null;
       try {
         const gen = runApprovedCall({ messages: wire, call: { id: callId, name: toolName, arguments: args } }, {
-          stream: (m) => meter.stream((onUsage) => streamCompletion(endpoint, model.upstreamModel, m, { signal, onUsage })),
+          stream: (m) => meter.stream((onUsage) => streamCompletion(endpoint, model.upstreamModel, m, { signal, onUsage, turnDeadlineAt })),
           executeTool: (call) => toolset.execute(call),
         });
         for (;;) {

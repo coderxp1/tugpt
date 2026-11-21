@@ -22,7 +22,7 @@ import { NextResponse } from 'next/server';
 import { createSsoControlClient } from '@/lib/supabase/server';
 import { jsonError, validTimeZone, type ChatRequestContext } from '@/lib/chat/request';
 import { configuredModels, endpointFor, findModel, publicCapabilityId } from '@/lib/chat/models';
-import { completeWithTools, ModelCallError, streamCompletion, type ParsedToolCall, type WireMessage } from '@/lib/chat/openai-compatible';
+import { completeWithTools, ModelCallError, streamCompletion, type ParsedToolCall, type WireMessage, turnDeadline } from '@/lib/chat/openai-compatible';
 import { pendingApproval } from '@/lib/chat/approval.server';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
@@ -250,6 +250,7 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
 
   const encoder = new TextEncoder();
   const signal = request.signal;
+  const turnDeadlineAt = turnDeadline(); // TIMEOUT-1: whole turn ends before the lease (150 s) can expire
   const stream = new ReadableStream<Uint8Array>({
     async start(controller) {
       const send = (e: object) => controller.enqueue(encoder.encode(`${JSON.stringify(e)}\n`));
@@ -263,8 +264,8 @@ export async function runAgentTurn(o: AgentTurnOptions): Promise<Response> {
       const calls = new Map<string, ParsedToolCall>();
       try {
         const gen = runTurn({ messages: wire, tools: toolset.specs }, {
-          stream: (m) => meter.stream((onUsage) => streamCompletion(endpoint, model.upstreamModel, m, { signal, onUsage })),
-          completeWithTools: (m, t) => meter.call((onUsage) => completeWithTools(endpoint, model.upstreamModel, m, t, { signal, onUsage })),
+          stream: (m) => meter.stream((onUsage) => streamCompletion(endpoint, model.upstreamModel, m, { signal, onUsage, turnDeadlineAt })),
+          completeWithTools: (m, t) => meter.call((onUsage) => completeWithTools(endpoint, model.upstreamModel, m, t, { signal, onUsage, turnDeadlineAt })),
           executeTool: (call) => { calls.set(call.id, call); return toolset.execute(call); },
         });
         for (;;) {
