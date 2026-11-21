@@ -86,7 +86,7 @@ export function McpToolReview({ tools, approved, serverStatus = 'pending', onApp
       </div>
       <p className={s.muted}><small>{t('mcp.review.descNote')}</small></p>
       <dl className={s.levels}>{PERMISSION_LEVELS.map((p) => <div key={p}><dt>{permissionText(p, t).label}</dt><dd>{permissionText(p, t).help}</dd></div>)}</dl>
-      {risky && <GapNote gap={BACKEND_GAPS.CALL_APPROVAL} label={t('connect.gap.goodToKnow')}>{t('mcp.review.perUse')}</GapNote>}
+      {risky && <GapNote gap={BACKEND_GAPS.CALL_APPROVAL}>Tools that are not Read only are blocked on every use until an owner or admin approves that exact call in the approval card in Chat. An approval covers one call with exactly those arguments and expires.</GapNote>}
       {editable ? (
         <>
           <label className={s.check}><input type="checkbox" checked={reviewed} onChange={(e) => setReviewed(e.target.checked)} /> {t('mcp.review.confirm')}</label>
