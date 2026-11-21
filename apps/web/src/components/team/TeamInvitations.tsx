@@ -202,7 +202,7 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
         <div className={s.tableWrap}>
           <table className={`${s.table} ${s.stack}`}>
             <caption className={s.sr}>{t('team.inv.caption', { org })}</caption>
-            <thead><tr><th scope="col">{t('team.col.email')}</th><th scope="col">{t('team.col.role')}</th><th scope="col">{t('team.col.status')}</th><th scope="col">{t('team.col.expires')}</th><th scope="col">{t('team.col.action')}</th></tr></thead>
+            <thead><tr><th scope="col">{t('team.col.email')}</th><th scope="col">{t('team.col.role')}</th><th scope="col">{t('team.col.status')}</th><th scope="col">{t('team.col.expires')}</th><th scope="col">{t('team.col.manage')}</th></tr></thead>
             <tbody>
               {items.map((inv) => {
                 const st = effectiveStatus(inv);
@@ -212,7 +212,7 @@ export function TeamInvitations({ role, organizationName }: { role: string | nul
                     <td data-label={t('team.col.role')}>{roleLabel(inv.role, t)}</td>
                     <td data-label={t('team.col.status')}><span className={`${s.badge} ${st === 'pending' ? s.idle : s.off}`}>{STATUSES.has(st) ? t(`team.inv.status.${st as 'pending'}`) : st}</span></td>
                     <td data-label={t('team.col.expires')} className={s.nowrap}>{st === 'pending' ? formatDate(inv.expires_at) : '—'}</td>
-                    <td data-label={t('team.col.action')}>
+                    <td data-label={t('team.col.manage')}>
                       {st === 'pending' && (confirmId === inv.id ? (
                         <span role="group" aria-label={t('team.inv.confirmFor', { email: inv.email })} style={{ display: 'inline-flex', gap: '0.5rem', flexWrap: 'wrap' }}>
                           <button type="button" className={s.danger} disabled={busy} onClick={() => void revoke(inv)}>{t('team.inv.revoke')}</button>

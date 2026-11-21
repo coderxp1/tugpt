@@ -53,6 +53,19 @@ describe('TeamInvitations', () => {
     expect(screen.getAllByRole('button', { name: /Revoke invitation for/ })).toHaveLength(1);
   });
 
+  it('labels every cell for the stacked mobile layout with a meaningful name, never "Action"', async () => {
+    fetchMock.mockResolvedValueOnce(json({ invitations: INV }));
+    render(<TeamInvitations role="owner" organizationName="Acme" />);
+    await screen.findByText('pending@example.com');
+    const cells = [...screen.getByRole('table').querySelectorAll('tbody td')];
+    expect(cells.length).toBe(INV.length * 5);
+    for (const c of cells) expect((c.getAttribute('data-label') ?? '').trim()).not.toBe('');
+    const labels = new Set(cells.map((c) => c.getAttribute('data-label')));
+    expect([...labels]).toEqual(['Email', 'Role', 'Status', 'Expires', 'Manage']);
+    expect(screen.getByRole('columnheader', { name: 'Manage' })).toBeTruthy();
+    expect(screen.queryByRole('columnheader', { name: 'Action' })).toBeNull();
+  });
+
   it('shows an empty state', async () => {
     fetchMock.mockResolvedValueOnce(json({ invitations: [] }));
     render(<TeamInvitations role="admin" organizationName="Acme" />);
