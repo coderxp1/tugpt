@@ -6,6 +6,9 @@ import { useT } from '@/i18n/provider';
 import s from '@/components/connect/connect.module.css';
 
 const ABOUT = new Set(['inbox', 'drafts', 'knowledge', 'media']);
+const TITLE: Partial<Record<FeatureStatus['state'], 'unavail.titleNotYet' | 'unavail.titleReview' | 'unavail.titleUnknown'>> = {
+  not_implemented: 'unavail.titleNotYet', under_review: 'unavail.titleReview', unknown: 'unavail.titleUnknown',
+};
 
 /**
  * Honest page for a feature this organization cannot use. It renders no form,
@@ -19,7 +22,7 @@ export function FeatureUnavailable({ feature, about }: { feature: FeatureStatus;
     <div className={s.page}>
       <header className={s.head}>
         <p className={s.eyebrow}>{feature.name}</p>
-        <h1>{t(feature.state === 'not_implemented' ? 'unavail.titleNotYet' : 'unavail.titleOff', { name: feature.name })}</h1>
+        <h1>{t(TITLE[feature.state] ?? 'unavail.titleOff', { name: feature.name })}</h1>
         {text && <p>{text}</p>}
       </header>
       <section className={s.card} aria-labelledby="feature-off-h" data-feature={feature.key} data-state={feature.state}>
@@ -28,9 +31,10 @@ export function FeatureUnavailable({ feature, about }: { feature: FeatureStatus;
           <span className={`${s.badge} ${s.off}`}>{stateLabel(feature.state, t)}</span>
         </div>
         <p className={s.next}>{feature.detail}</p>
+        {feature.who && <p className={s.next} data-testid="feature-who">{feature.who}</p>}
         <p className={s.muted}>{t('unavail.nothing')}</p>
         <div className={s.actions}>
-          <Link className={s.primary} href="/dashboard/chat" prefetch={false}>{t('unavail.openChat')}</Link>
+          <Link className={s.primary} href="/workspace" prefetch={false}>{t('unavail.openChat')}</Link>
           <Link className={s.secondary} href="/dashboard/settings#features" prefetch={false}>{t('unavail.allStatuses')}</Link>
         </div>
       </section>

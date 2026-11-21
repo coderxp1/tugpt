@@ -81,7 +81,7 @@ export default async function ConnectPage({ searchParams }: { searchParams: Sear
           const name = known ? PROVIDER_NAME[known] : p.name;
           const notInChat = p.caps.filter((c) => !hasRegisteredTool(c.capabilityKey, c.providerKey));
           return (
-            <li key={p.key} className={s.card} data-provider={p.key} data-state={p.state}>
+            <li key={p.key} id={`provider-${p.key}`} className={s.card} data-provider={p.key} data-state={p.state}>
               <div className={s.cardHead}>
                 <span className={s.logo} aria-hidden="true">{p.name.charAt(0)}</span>
                 <div><h2>{p.name}</h2>{known && <p>{t(`connect.provider.${known}.blurb`)}</p>}</div>

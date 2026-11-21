@@ -5,7 +5,7 @@ import { stateLabel, type FeatureState, type FeatureStatus } from '@/lib/hub/fea
 import { useT } from '@/i18n/provider';
 import s from '@/components/connect/connect.module.css';
 
-const TONE: Record<FeatureState, string> = { available: s.ok, partial: s.idle, disabled: s.off, not_implemented: s.off };
+const TONE: Record<FeatureState, string> = { available: s.ok, partial: s.idle, setup_required: s.idle, disabled: s.off, under_review: s.off, not_implemented: s.off, unknown: s.off };
 
 /** What this organization can use now. Read from the real gates; nothing here can be toggled. */
 export function FeatureStatusPanel({ features }: { features: readonly FeatureStatus[] }) {
@@ -21,7 +21,7 @@ export function FeatureStatusPanel({ features }: { features: readonly FeatureSta
           <tr key={f.key} data-feature={f.key} data-state={f.state}>
             <th scope="row">{f.href ? <Link href={f.href} prefetch={false}>{f.name}</Link> : f.name}</th>
             <td data-label={t('feature.col.status')}><span className={`${s.badge} ${TONE[f.state]}`}>{stateLabel(f.state, t)}</span></td>
-            <td data-label={t('feature.col.meaning')}>{f.detail}</td>
+            <td data-label={t('feature.col.meaning')}>{f.detail}{f.who && <><br /><small>{f.who}</small></>}</td>
           </tr>))}
         </tbody>
       </table></div>

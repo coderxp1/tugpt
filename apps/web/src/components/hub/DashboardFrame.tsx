@@ -11,21 +11,34 @@ import s from './reference.module.css';
 import type { MessageKey } from '@/i18n/types';
 import { roleLabel } from '@/lib/team/roles';
 
-const modules: readonly { href: string; title: MessageKey; icon: ProductGlyph; feature: FeatureKey; held?: boolean; planned?: boolean }[] = [
+type NavItem = { href: string; title: MessageKey; icon: ProductGlyph; feature?: FeatureKey };
+/** Every entry is a real page. Pages for features that are off explain why and who can switch them on. */
+const workspaceNav: readonly NavItem[] = [
+  { href: '/workspace', title: 'shell.item.chat', icon: 'chat', feature: 'chat' },
+  { href: '/workspace/library', title: 'shell.item.library', icon: 'book', feature: 'library' },
+  { href: '/workspace/approvals', title: 'shell.item.approvals', icon: 'draft', feature: 'approvals' },
+  { href: '/workspace/images', title: 'shell.item.images', icon: 'spark', feature: 'images' },
+  { href: '/workspace/agents', title: 'shell.item.customAgents', icon: 'spark', feature: 'custom_agents' },
+];
+const orgNav: readonly NavItem[] = [
+  { href: '/dashboard/connect', title: 'shell.item.apps', icon: 'calendar' },
+  { href: '/dashboard/settings', title: 'shell.item.team', icon: 'book' },
+  { href: '/dashboard/analytics', title: 'shell.item.analytics', icon: 'chart', feature: 'analytics' },
+];
+const messagingNav: readonly NavItem[] = [
   { href: '/dashboard/inbox', title: 'shell.item.inbox', icon: 'chat', feature: 'inbox' },
   { href: '/dashboard/drafts', title: 'shell.item.drafts', icon: 'draft', feature: 'drafts' },
   { href: '/dashboard/knowledge', title: 'shell.item.knowledge', icon: 'book', feature: 'knowledge' },
-  { href: '/dashboard/media', title: 'shell.item.media', icon: 'film', feature: 'media', held: true },
-  { href: '/dashboard/analytics', title: 'shell.item.analytics', icon: 'chart', feature: 'analytics' },
-  { href: '/dashboard/agents', title: 'shell.item.agents', icon: 'spark', feature: 'agents', planned: true },
+  { href: '/dashboard/media', title: 'shell.item.media', icon: 'film', feature: 'media' },
 ];
+/** Dashboard pages, for the breadcrumb and aria-current (Workspace pages have their own frame). */
 const destinations: readonly { href: string; title: MessageKey }[] = [
   { href: '/dashboard/chat', title: 'shell.item.chat' },
-  { href: '/dashboard/connect', title: 'shell.item.connect' },
   { href: '/dashboard/create', title: 'shell.item.create' },
-  { href: '/dashboard/settings', title: 'shell.item.settings' },
-  ...modules,
+  ...orgNav, ...messagingNav,
 ];
+/** A tag is shown for anything that is not plainly usable; "partial" works and needs no tag in the menu. */
+const tagged = (st: FeatureState | undefined) => st !== undefined && st !== 'available' && st !== 'partial';
 /**
  * The customer-facing frame: the signed-in person and the organization they are
  * working in now (their own active organization only; never another tenant's).
@@ -66,12 +79,14 @@ export function DashboardFrame({ fullName = null, email, organizationName = null
     return () => { document.body.style.overflow = old; document.removeEventListener('keydown', key); };
   }, [open]);
   function follow() { setOpen(false); window.dispatchEvent(new Event('tugpt:clear-capability-search')); }
-  const navLink = (href: string, label: string, glyph: ProductGlyph, active = false, feature?: FeatureKey) => {
-    const state = feature ? features[feature] : undefined;
-    const tag = state && state !== 'available' ? stateLabel(state, t) : null;
+  const navLink = (item: NavItem) => {
+    // A feature-backed entry with no reported state is shown as "Couldn't check", never as plainly usable.
+    const state = item.feature ? features[item.feature] ?? 'unknown' : undefined;
+    const tag = tagged(state) ? stateLabel(state!, t) : null;
+    const active = current?.href === item.href;
     return (
-      <Link href={href} prefetch={false} onClick={follow} className={`${s.sideBtn} ${active ? s.current : ''} ${tag && state !== 'partial' ? s.unavailable : ''}`} aria-current={active ? 'page' : undefined} data-state={feature ? state ?? 'unknown' : undefined}>
-        <Glyph name={glyph} /><span className={tag ? s.sideText : undefined}>{label}{tag && <><span className={s.sr}>, </span><small className={s.sideState}>{tag}</small></>}</span>
+      <Link key={item.href} href={item.href} prefetch={false} onClick={follow} className={`${s.sideBtn} ${active ? s.current : ''} ${tag ? s.unavailable : ''}`} aria-current={active ? 'page' : undefined} data-state={state}>
+        <Glyph name={item.icon} /><span className={s.sideText}>{t(item.title)}{tag && <><span className={s.sr}>, </span><small className={s.sideState}>{tag}</small></>}</span>
       </Link>
     );
   };
@@ -80,29 +95,16 @@ export function DashboardFrame({ fullName = null, email, organizationName = null
     <aside id="dashboard-sidebar" ref={sidebar} className={`${s.sidebar} ${open ? s.open : ''}`} aria-label={t('shell.nav.aria')}>
       <Link href="/dashboard" className={s.brand} aria-label={t('shell.brandAria')} prefetch={false} onClick={follow}><TuGPTMark size={32} />tugpt</Link>
       <button type="button" className={s.mobileClose} onClick={close} aria-label={t('shell.close')}>×</button>
+      <Link href="/workspace" prefetch={false} onClick={follow} className={s.sideWorkspace} data-testid="nav-open-workspace">{t('shell.openWorkspaceNav')} <span aria-hidden="true">→</span></Link>
       <nav className={s.sideNav} aria-label={t('shell.nav.overviewAria')}>
-        {navLink('/dashboard', t('shell.item.overview'), 'chart', overview)}
-        {/* Chat moved to the Workspace (Phase 1): same session, separate app frame. */}
-        {navLink('/workspace', t('workspace.name'), 'chat')}
+        <Link href="/dashboard" prefetch={false} onClick={follow} className={`${s.sideBtn} ${overview ? s.current : ''}`} aria-current={overview ? 'page' : undefined}><Glyph name="chart" /><span>{t('shell.item.overview')}</span></Link>
       </nav>
-      <div className={s.sideLabel}>{t('shell.section.platform')}</div>
-      <nav className={s.sideNav} aria-label={t('shell.nav.platformAria')}>
-        {navLink('/dashboard/connect', t('shell.item.connect'), 'calendar', is('/dashboard/connect'))}
-        {navLink('/dashboard/create', t('shell.item.create'), 'spark', is('/dashboard/create'), 'images')}
-        {navLink('/dashboard/settings', t('shell.item.settings'), 'book', is('/dashboard/settings'))}
-      </nav>
-      <div className={s.sideLabel}>{t('shell.section.tools')}</div>
-      <nav className={s.sideNav} aria-label={t('shell.nav.modulesAria')}>
-        {modules.map(m => {
-          const state = features[m.feature];
-          if (m.planned || m.held) return <div key={m.href}><span className={`${s.sideBtn} ${s.unavailable}`} aria-disabled="true" data-state={m.held ? 'held' : 'planned'}><Glyph name={m.icon} /><span className={s.sideText}>{t(m.title)}<span className={s.sr}>, </span><small className={s.sideState}>{m.held ? t('hub.state.held') : t('shell.notYet')}</small></span></span></div>;
-          const tag = state && state !== 'available' ? stateLabel(state, t) : null;
-          const active = current?.href === m.href;
-          return <div key={m.href}><Link href={m.href} prefetch={false} onClick={follow} className={`${s.sideBtn} ${active ? s.current : ''} ${tag && state !== 'partial' ? s.unavailable : ''}`} aria-current={active ? 'page' : undefined} data-state={state ?? 'unknown'}>
-            <Glyph name={m.icon} /><span className={s.sideText}>{t(m.title)}{tag && <><span className={s.sr}>, </span><small className={s.sideState}>{tag}</small></>}</span>
-          </Link></div>;
-        })}
-      </nav>
+      <div className={s.sideLabel} id="nav-workspace">{t('shell.section.workspace')}</div>
+      <nav className={s.sideNav} aria-labelledby="nav-workspace">{workspaceNav.map(navLink)}</nav>
+      <div className={s.sideLabel} id="nav-org">{t('shell.section.organization')}</div>
+      <nav className={s.sideNav} aria-labelledby="nav-org">{orgNav.map(navLink)}</nav>
+      <div className={s.sideLabel} id="nav-messaging">{t('shell.section.messaging')}</div>
+      <nav className={s.sideNav} aria-labelledby="nav-messaging">{messagingNav.map(navLink)}</nav>
       <div className={s.sideBottom}>
         <Link href="/dashboard/settings" prefetch={false} onClick={follow} className={s.profile} aria-current={is('/dashboard/settings') ? 'page' : undefined}>
           <span className={s.avatar} aria-hidden="true">{initial}</span>

@@ -1,77 +1,137 @@
 'use client';
+/**
+ * The Dashboard Overview as a control center: what this organization can use
+ * now (with the action that opens it), what needs setup, what is switched off
+ * and by whom it is switched on, what is held for review, what could not be
+ * checked, and, by name only, what is not part of TuGPT yet.
+ *
+ * Every row comes from describeFeatures (lib/hub/features.ts), which only
+ * reports a state a real gate returned. This component adds no claims.
+ */
 import Link from 'next/link';
-import { useEffect, useState, useTransition } from 'react';
+import { useTransition } from 'react';
 import { useRouter } from 'next/navigation';
 import { useT } from '@/i18n/provider';
-import { capabilityViews, groupText, GROUPS } from '@/lib/hub/capabilities';
 import type { ProductView } from '@/lib/hub/products';
-import { isUsable, stateLabel, type FeatureKey, type FeatureState } from '@/lib/hub/features';
-import { Glyph } from './glyphs';
-import s from './reference.module.css';
+import { NOT_YET, sectionOf, stateLabel, type FeatureStatus, type OverviewSection } from '@/lib/hub/features';
+import s from './control.module.css';
+import r from './reference.module.css';
 
-export function Overview({ products, hasOrganization, features }: { products: readonly ProductView[]; hasOrganization: boolean; features?: Partial<Record<FeatureKey, FeatureState>> }) {
+export interface OverviewProps {
+  readonly statuses: readonly FeatureStatus[];
+  readonly products: readonly ProductView[];
+  readonly hasOrganization: boolean;
+  readonly organizationName?: string | null;
+  readonly firstName?: string | null;
+}
+
+const TONE: Record<OverviewSection, string> = { ready: s.ready, setup: s.setup, disabled: s.off, review: s.review, unknown: s.unknown, later: s.off };
+
+export function Overview({ statuses, products, hasOrganization, organizationName = null, firstName = null }: OverviewProps) {
   const t = useT();
-  const [search, setSearch] = useState('');
   const [pending, startTransition] = useTransition();
   const router = useRouter();
-  useEffect(() => {
-    const reset = () => setSearch('');
-    window.addEventListener('tugpt:clear-capability-search', reset);
-    return () => window.removeEventListener('tugpt:clear-capability-search', reset);
-  }, []);
-  const q = search.trim().toLocaleLowerCase(t.locale);
-  const capabilities = capabilityViews(products, t);
-  const matches = capabilities.filter(c => [c.title, c.description, c.area, groupText(c.group, t).title].join(' ').toLocaleLowerCase(t.locale).includes(q));
-  const waiting = products.filter(p => p.state === 'attention' && p.href && (!p.featureAccess || p.featureAccess === 'enabled'));
-  const unknown = products.some(p => p.state === 'unknown' || p.featureAccess === 'unknown');
-  return <>
-    <div className={s.heading}>
-      <div><p className={s.eyebrow}>{t('overview.eyebrow')}</p><h1>{t('overview.title')}</h1><p>{t('overview.lead')}</p></div>
-      <div className={s.headingNote}>{t('overview.headingNote')}</div>
+  const by = (sec: OverviewSection) => statuses.filter((f) => sectionOf(f.state) === sec);
+  const workspace = statuses.find((f) => f.key === 'chat');
+  const workspaceReady = workspace ? sectionOf(workspace.state) === 'ready' : false;
+  const waiting = products.filter((p) => p.state === 'attention' && p.href && (!p.featureAccess || p.featureAccess === 'enabled'));
+  // Not part of TuGPT yet: features with their own page (e.g. a provider TuGPT does not offer yet) get a row
+  // that explains why; everything else is listed by name only.
+  const laterRows = statuses.filter((f) => f.state === 'not_implemented' && f.href);
+  const laterNames = [...new Set(NOT_YET.map((k) => t(`notyet.${k}`)))];
+
+  const badge = (f: FeatureStatus) => <span className={`${s.badge} ${TONE[sectionOf(f.state)]}`}>{f.state === 'partial' ? t('cc.partly') : stateLabel(f.state, t)}</span>;
+
+  const head = (sec: Exclude<OverviewSection, 'later'> | 'later', count: number) => (
+    <div className={s.secHead}>
+      <h2 id={`cc-${sec}`}>{t(`cc.sec.${sec}`)} <span className={s.count}>{count}</span></h2>
+      <p>{t(`cc.sec.${sec}.lead`)}</p>
     </div>
-    <section className={s.hero} aria-labelledby="hero-title">
-      <div className={s.heroCopy}><span className={s.tag}>{t('overview.tag')}</span><h2 id="hero-title">{t('overview.heroTitle1')}<br />{t('overview.heroTitle2')}</h2><p>{t('overview.heroBody')}</p>
-        <div className={s.heroActions}><Link className={s.primary} href="/workspace" prefetch={false}>{t('overview.start')} <span aria-hidden="true">→</span></Link><a className={s.heroLink} href="#platform">{t('overview.explore')}</a></div>
+  );
+
+  const ready = by('ready');
+  const setup = by('setup');
+  const rows: ['disabled' | 'review' | 'unknown', FeatureStatus[]][] = [['disabled', by('disabled')], ['review', by('review')], ['unknown', by('unknown')]];
+  const rowList = (list: readonly FeatureStatus[]) => <ul className={s.rows}>
+    {list.map((f) => <li key={f.key} className={s.row} data-feature={f.key} data-state={f.state}>
+      <div className={s.rowName}><h3>{f.name}</h3>{badge(f)}</div>
+      <div className={s.rowBody}><p>{f.detail}</p>{f.who && <p className={s.who}>{f.who}</p>}</div>
+      {f.href && <Link href={f.href} prefetch={false} className={s.rowLink}>{t('cc.learnMore')}<span className={r.sr}>: {f.name}</span></Link>}
+    </li>)}
+  </ul>;
+
+  return <div className={s.cc}>
+    <header className={s.head}>
+      <div>
+        <p className={r.eyebrow}>{t('cc.eyebrow')}{organizationName ? <> · <span data-testid="cc-org">{organizationName}</span></> : null}</p>
+        <h1>{firstName ? t('cc.title', { name: firstName }) : t('cc.titleNoName')}</h1>
+        <p className={s.lead}>{organizationName ? t('cc.lead', { org: organizationName }) : t('cc.leadNoOrg')}</p>
       </div>
-      <div className={s.heroArt} aria-hidden="true"><div className={s.orbit} />
-        <div className={`${s.floatCard} ${s.one}`}><span className={s.floatIcon}><Glyph name="spark" /></span><div>{t('overview.float1')}<small>{t('overview.float1s')}</small></div></div>
-        <div className={`${s.floatCard} ${s.two}`}><span className={s.floatIcon}><Glyph name="chat" /></span><div>{t('overview.float2')}<small>{t('overview.float2s')}</small></div></div>
+      <div className={s.headActions}>
+        <button className={s.ghost} type="button" disabled={pending} onClick={() => startTransition(() => router.refresh())}>{pending ? t('cc.refreshing') : t('cc.refresh')}</button>
+        <span className={r.sr} role="status">{pending ? t('cc.refreshingSr') : ''}</span>
       </div>
-    </section>
-    <div className={s.activity} aria-label={t('overview.attention')} aria-busy={pending}>
-      <div><strong>{t('overview.attention')}</strong><span className={s.sr}>: </span><span>{!hasOrganization ? t('overview.att.noOrg') : unknown ? t('overview.att.unknown') : waiting.length ? t('overview.att.waiting') : t('overview.att.none')}</span>
-        {waiting.length > 0 && <div className={s.attentionLinks}>{waiting.map(p => <Link key={p.id} href={p.href!} prefetch={false}>{t(p.titleKey)}{p.metric !== null && p.metricKey ? ` · ${p.metric} ${t(p.metricKey)}` : ` · ${t('overview.reconnect')}`} ↗</Link>)}</div>}
+    </header>
+
+    {!hasOrganization && <p className={s.notice} role="status">{t('cc.noOrg')}</p>}
+
+    {workspace && <section className={s.front} aria-labelledby="cc-workspace" data-testid="cc-workspace" data-state={workspace.state}>
+      <div className={s.frontCopy}>
+        <h2 id="cc-workspace">{t('shell.section.workspace')}</h2>
+        <p>{workspaceReady ? t('cc.workspaceLead') : workspace.detail}</p>
+        {!workspaceReady && workspace.who && <p className={s.who}>{workspace.who}</p>}
       </div>
-      <button className={s.refresh} type="button" disabled={pending} onClick={() => startTransition(() => router.refresh())}>{pending ? t('overview.refreshing') : t('overview.refresh')}</button>
-      <span className={s.sr} role="status">{pending ? t('overview.refreshingSr') : ''}</span>
+      <div className={s.frontActions}>
+        {workspaceReady
+          ? <Link href="/workspace" prefetch={false} className={s.cta}>{t('cc.openWorkspace')} <span aria-hidden="true">→</span></Link>
+          : badge(workspace)}
+        {workspaceReady && <ul className={s.jump} aria-label={t('shell.nav.workspaceAria')}>
+          {statuses.filter((f) => f.group === 'workspace' && f.key !== 'chat' && f.href && sectionOf(f.state) === 'ready').map((f) => <li key={f.key}><Link href={f.href!} prefetch={false}>{f.name}</Link></li>)}
+        </ul>}
+      </div>
+    </section>}
+
+    {waiting.length > 0 && <div className={s.attention} role="status">
+      <strong>{t('overview.attention')}</strong>
+      <span>{t('overview.att.waiting')}</span>
+      {waiting.map((p) => <Link key={p.id} href={p.href!} prefetch={false}>{t(p.titleKey)}{p.metric !== null && p.metricKey ? ` · ${p.metric} ${t(p.metricKey)}` : ''}</Link>)}
+    </div>}
+
+    <div className={s.sections}>
+      <section aria-labelledby="cc-ready" data-section="ready">
+        {head('ready', ready.length)}
+        {ready.length === 0 ? <p className={s.empty}>{t('cc.readyEmpty')}</p> : <ul className={s.grid}>
+          {ready.map((f) => <li key={f.key} className={s.card} data-feature={f.key} data-state={f.state}>
+            <div className={s.cardTop}><h3>{f.name}</h3>{badge(f)}</div>
+            <p>{f.detail}</p>
+            {f.action && <Link href={f.action.href} prefetch={false} className={s.action}>{f.action.label} <span aria-hidden="true">→</span></Link>}
+          </li>)}
+        </ul>}
+      </section>
+
+      {setup.length > 0 && <section aria-labelledby="cc-setup" data-section="setup">
+        {head('setup', setup.length)}
+        <ul className={s.grid}>
+          {setup.map((f) => <li key={f.key} className={`${s.card} ${s.setupCard}`} data-feature={f.key} data-state={f.state}>
+            <div className={s.cardTop}><h3>{f.name}</h3>{badge(f)}</div>
+            <p>{f.detail}</p>
+            {f.action ? <Link href={f.action.href} prefetch={false} className={s.actionStrong}>{f.action.label} <span aria-hidden="true">→</span></Link> : f.who && <p className={s.who}>{f.who}</p>}
+          </li>)}
+        </ul>
+      </section>}
+
+      {rows.map(([sec, list]) => list.length > 0 && <section key={sec} aria-labelledby={`cc-${sec}`} data-section={sec}>
+        {head(sec, list.length)}
+        {rowList(list)}
+      </section>)}
+
+      <section aria-labelledby="cc-later" data-section="later">
+        {head('later', laterRows.length + laterNames.length)}
+        {laterRows.length > 0 && rowList(laterRows)}
+        <ul className={s.names}>{laterNames.map((name) => <li key={name}>{name}</li>)}</ul>
+      </section>
     </div>
-    <div className={s.sectionHead} id="platform"><div><p className={s.eyebrow}>{t('overview.sectEyebrow')}</p><h2>{t('overview.sectTitle')}</h2><p>{t('overview.sectLead')}</p></div>
-      <label className={s.search}><svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" aria-hidden="true"><circle cx="10.5" cy="10.5" r="6.5" /><path d="m16 16 4 4" /></svg><span className={s.sr}>{t('overview.search')}</span><input type="search" placeholder={t('overview.searchPh')} value={search} onChange={e => setSearch(e.target.value)} autoComplete="off" /></label>
-    </div>
-    <div className={s.groups} role="list" aria-label={t('overview.products')}>
-      {GROUPS.map((g, i) => {
-        const entries = matches.filter(c => c.group === g.name);
-        return <section key={g.name} role="listitem" className={`${s.group} ${s[g.name.toLowerCase()]}`} id={`group-${g.name}`} aria-labelledby={`heading-${g.name}`} hidden={!entries.length}>
-          <div className={s.groupHead}><div><h3 id={`heading-${g.name}`}>{groupText(g.name, t).title}</h3><p>{groupText(g.name, t).sub}</p></div><span className={s.groupNumber}>0{i + 1}</span></div>
-          <div className={s.items} role="list" aria-labelledby={`heading-${g.name}`}>{entries.map(c => {
-            const p = c.productView;
-            const fs = c.feature ? features?.[c.feature] : undefined;
-            // Product cards keep their destination (the page explains a disabled state); feature-only cards link only while usable.
-            const href = !hasOrganization ? null : p?.href ?? (c.href && isUsable(fs) ? c.href : null);
-            const base = p?.state === 'held' ? t('hub.state.held') : !href ? c.product && !hasOrganization ? t('overview.st.membership') : fs && fs !== 'not_implemented' ? stateLabel(fs, t) : t('overview.st.notYet') : p?.featureAccess === 'disabled' || fs === 'disabled' ? t('overview.st.notEnabled') : p?.featureAccess === 'unknown' ? t('overview.st.unknownAccess') : p?.state === 'unknown' ? t('overview.st.activityUnavailable') : p?.state === 'attention' ? t('overview.st.attention') : c.id === 'calendar' ? p?.state === 'connected' ? t('overview.st.connected') : t('overview.st.setup') : fs === 'partial' ? stateLabel('partial', t) : t('overview.st.available');
-            // Counts are shown only for features that are actually on; a disabled feature never shows "0 open".
-            const showMetric = href && p?.metric !== null && p?.metric !== undefined && p.metricKey && p.featureAccess !== 'disabled' && p.featureAccess !== 'unknown' && fs !== 'disabled';
-            const status = base;
-            const body = <><span className={s.box}><Glyph name={c.glyph} /></span><span className={s.itemText}><span className={s.itemName}>{c.title}</span><span className={s.itemDesc}>{c.description}</span><span className={`${s.itemStatus} ${href ? s.available : ''}`}>{status}{showMetric ? ` · ${p!.metric} ${t(p!.metricKey!)}` : ''}</span></span>{href && <span className={s.itemArrow} aria-hidden="true">↗</span>}</>;
-            return <div key={c.id} role="listitem" data-capability={c.id} data-blueprint-area={c.area}>
-              {href ? <Link prefetch={false} href={href} className={s.item}>{body}</Link> : <div className={`${s.item} ${s.planned}`}>{body}</div>}
-              {c.note && <p className={s.scopeNote}>{c.note}</p>}
-            </div>;
-          })}</div>
-        </section>;
-      })}
-      {!matches.length && <div className={s.empty} role="status">{t('overview.empty')}<button type="button" onClick={() => setSearch('')}>{t('overview.clear')}</button></div>}
-    </div>
-    <div className={s.bottomNote}><span><strong>{t('overview.bottomStrong')}</strong> {t('overview.bottomBody')}</span><Link href="/dashboard/settings#features" prefetch={false}>{t('overview.bottomLink')}</Link></div>
-  </>;
+
+    <p className={s.foot}><Link href="/dashboard/settings#features" prefetch={false}>{t('cc.statusPage')}</Link> · {t('cc.checked')}</p>
+  </div>;
 }

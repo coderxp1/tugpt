@@ -43,6 +43,7 @@ export default async function DashboardHubPage() {
   }
 
   const role = session?.tenant?.role ?? null;
+  const statuses = await loadOrgFeatures();
 
   return (
     <ProductHub
@@ -51,7 +52,8 @@ export default async function DashboardHubPage() {
       email={session?.email || null}
       role={role ? t.maybe(`hub.role.${role}`, role) : null}
       roleKey={role}
-      features={featureMap(await loadOrgFeatures())}
+      features={featureMap(statuses)}
+      statuses={statuses}
       products={resolveProducts(signals)}
       t={t}
     />

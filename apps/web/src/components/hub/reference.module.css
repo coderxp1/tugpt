@@ -40,3 +40,4 @@ a.profile:hover strong{text-decoration:underline}
 .sideBtn.current .sideState{color:#3a3a35}
 /* Short windows (e.g. 1440x900): tighten the sidebar so the profile and sign-out fit without scrolling; targets stay >= 40px. */
 @media (max-height:960px){.sidebar{padding-top:20px}.sideLabel{margin:16px 11px 6px}.sideBtn{padding:8px 12px;min-height:40px}.sideBottom{padding-top:10px}.profile{padding-top:12px;margin-top:10px}}
+.sideWorkspace{display:flex;align-items:center;justify-content:space-between;gap:8px;min-height:46px;margin:4px 0 14px;padding:0 16px;border-radius:100px;background:var(--yellow);color:#171715!important;font-weight:700;font-size:15px}.sideWorkspace:hover{background:#ffed78}.sideWorkspace:focus-visible{outline-color:var(--yellow)!important}

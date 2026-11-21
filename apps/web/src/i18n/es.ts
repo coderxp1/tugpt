@@ -185,7 +185,7 @@ export const es = {
   'workspace.starter.analyze.prompt': 'Revisa el CSV adjunto y describe las tendencias principales, los valores atípicos y tres preguntas que merezca la pena investigar.',
   'workspace.starter.write.title': 'Mejorar mi texto',
   'workspace.starter.write.prompt': 'Reescribe el siguiente texto para que sea más claro y conciso, sin cambiar su significado:',
-  'dashboard.openWorkspace': 'Abrir Workspace',
+  'dashboard.openWorkspace': 'Abrir el Workspace',
 
   'integrations.title': 'Integraciones',
   'integrations.noOrganization': 'No hay una organización activa en esta sesión.',

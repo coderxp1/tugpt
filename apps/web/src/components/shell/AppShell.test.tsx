@@ -48,6 +48,7 @@ function renderShell(overrides: { organizationName?: string | null; email?: stri
       organizationName={overrides.organizationName === undefined ? 'Panadería La Espiga' : overrides.organizationName}
       fullName={overrides.fullName === undefined ? null : overrides.fullName}
       email={overrides.email === undefined ? 'revisor@example.com' : overrides.email}
+      features={{ drafts: 'available', inbox: 'disabled', media: 'under_review' }}
       t={t}
     >
       <p>contenido de la página</p>
@@ -136,7 +137,8 @@ describe('navigation', () => {
 
   it('carries a label, so it is not just "navigation" to a screen reader', () => {
     renderShell();
-    expect(screen.getByRole('navigation', { name: 'Application modules' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Customer messaging' })).toBeTruthy();
+    expect(screen.getByRole('navigation', { name: 'Workspace' })).toBeTruthy();
   });
 });
 
@@ -210,7 +212,9 @@ it('keeps organization selection explicit and held modules non-operational', () 
   const { container } = renderShell();
   // The switcher lives in Settings → Organization, not in the frame.
   expect(screen.queryByRole('button', { name: 'Switch organization' })).toBeNull();
-  expect(container.querySelector('a[href="/dashboard/media"]')).toBeNull();
+  // Held modules link to their own page, which explains the review and offers no tool (the page gate
+  // in lib/hub/gate.server.ts blocks it); the menu says so before anyone clicks.
+  expect(container.querySelector('a[href="/dashboard/media"]')?.textContent).toBe('Media Studio, Under review');
   expect(container.querySelector('a[href="/dashboard/agents"]')).toBeNull();
   expect(container.querySelector('a[href="/settings/integrations"]')).toBeNull();
 });
