@@ -62,7 +62,7 @@ describe('DashboardFrame', () => {
     const hrefs = screen.getAllByRole('link').map((a) => a.getAttribute('href'));
     expect(hrefs.filter((h) => h === '/workspace').length).toBeGreaterThanOrEqual(2);
     expect(hrefs).not.toContain('/dashboard/chat');
-    expect(screen.getByRole('link', { name: 'dashboard.openWorkspace' }).getAttribute('href')).toBe('/workspace');
+    expect(screen.getByRole('link', { name: 'Open Workspace' }).getAttribute('href')).toBe('/workspace');
   });
 
   it('falls back to the email when the person has no display name', () => {
