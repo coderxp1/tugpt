@@ -37,14 +37,16 @@ export interface MentionPickerProps {
   matches: readonly Capability[];
   activeIndex: number;
   modelCanUseTools: boolean;
-  query: string;
+  /** Optional for callers that do not track the typed filter yet (RC4: Workspace Composer); default ''. */
+  query?: string;
   /** Total apps known to Chat before filtering, to tell "no match" from "none at all". */
-  total: number;
+  /** Optional; defaults to matches.length. */
+  total?: number;
   onChoose(c: Capability): void;
 }
 
 /** The @ listbox. Unusable apps stay visible with the reason, but cannot be chosen. */
-export function MentionPicker({ id, matches, activeIndex, modelCanUseTools, query, total, onChoose }: MentionPickerProps) {
+export function MentionPicker({ id, matches, activeIndex, modelCanUseTools, query = '', total, onChoose }: MentionPickerProps) {
   const t = useT();
   const blocks = matches.map((c) => pickerBlock(c, modelCanUseTools, t));
   const ready = blocks.filter((b) => b === null).length;
@@ -67,7 +69,7 @@ export function MentionPicker({ id, matches, activeIndex, modelCanUseTools, quer
       <ul id={id} role="listbox" aria-label={t('chat.picker.aria')} className={s.picker}>
         {matches.length === 0 && (
           <li className={s.pickerEmpty} role="presentation" data-testid="picker-empty">
-            {total === 0 || query.trim() === '' ? t('chat.picker.noApps') : t('chat.picker.noMatch', { query: query.trim() })}{' '}
+            {(total ?? matches.length) === 0 || query.trim() === '' ? t('chat.picker.noApps') : t('chat.picker.noMatch', { query: query.trim() })}{' '}
             <Link href="/dashboard/connect">{t('chat.openConnect')}</Link>
           </li>
         )}
