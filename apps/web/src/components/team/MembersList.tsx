@@ -76,7 +76,7 @@ export function MembersList({ members, viewerId, viewerRole = null, organization
               </div>
               <p id={ids.hint} className={s.muted}>{t('team.search.hint')}</p>
             </div>
-            <p className={s.searchStatus} role="status" aria-live="polite" aria-atomic="true" data-testid="member-search-status">{announced}</p>
+            <p className={searching && shown.length === 0 ? s.sr : s.searchStatus} role="status" aria-live="polite" aria-atomic="true" data-testid="member-search-status">{announced}</p>
             <div id={ids.results} data-testid="member-search-results">
             {shown.length === 0
               ? (

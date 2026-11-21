@@ -70,6 +70,8 @@ describe('MembersList search', () => {
     expect(empty.textContent).toMatch(/Check the spelling/);
     expect(empty.textContent).toMatch(/listed under Invitations/);
     expect(status().textContent).toBe('No one matches “zzqx”.');
+    // still announced, but not shown twice: the notice above already says it visibly
+    expect(status().className).toMatch(/sr/);
     fireEvent.click(within(empty).getByRole('button', { name: 'Clear search' }));
     expect(box().value).toBe('');
     expect(document.activeElement).toBe(box());

@@ -163,5 +163,7 @@ button.secondary{border:1px solid #d7d7cf}
 .searchBox:focus-within{outline:3px solid #8c4bce;outline-offset:3px}
 .searchBox svg{flex:none;color:#686963}
 .searchBox input{border:0;outline:0;min-width:0;width:100%;background:transparent;font:inherit;font-size:16px;padding:10px 0;color:#171715}
+/* the box draws the one focus ring (:focus-within); stop the layout-wide input ring from drawing a second one inside it */
+.memberSearch .searchBox input:focus-visible{outline:none}
 .searchStatus{font-size:13px;color:#3e3f3a;margin:6px 0 0;min-height:1.45em}
 @media (max-width:720px){.memberSearch{max-width:none}}
