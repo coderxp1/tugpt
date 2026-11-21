@@ -98,10 +98,18 @@ export const RESULT_WITHOUT_SUMMARY_ANSWER =
 async function* streamClean(source: AsyncIterable<string>): AsyncGenerator<TurnEvent, string> {
   const f = new TurnBoundaryFilter();
   let answer = '';
-  for await (const chunk of source) {
-    const out = f.push(chunk);
-    if (out) { answer += out; yield { type: 'delta', text: out }; }
-    if (f.ended) break;
+  try {
+    for await (const chunk of source) {
+      const out = f.push(chunk);
+      if (out) { answer += out; yield { type: 'delta', text: out }; }
+      if (f.ended) break;
+    }
+  } catch (e) {
+    // TIMEOUT-1: the model failed mid-answer (timeout, dropped stream). Release the held-back
+    // tail (still header-checked by flush) so the partial answer is shown and stored whole.
+    const tail = f.flush();
+    if (tail) { answer += tail; yield { type: 'delta', text: tail }; }
+    throw e;
   }
   const rest = f.flush();
   if (rest) { answer += rest; yield { type: 'delta', text: rest }; }
