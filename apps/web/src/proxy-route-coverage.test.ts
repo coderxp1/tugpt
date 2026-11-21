@@ -437,6 +437,43 @@ const ROUTES: RouteExpectation[] = [
       'behind it. Asserted in assignment-routes.test.ts.',
   },
   {
+    path: '/api/v1/organizations/me',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates (401 without a user) and reads/writes only the caller\'s own ' +
+      'profile row through the own-row RLS policy and column grant; email is not writable.',
+  },
+  {
+    path: '/api/v1/organizations/current',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates and resolves tenant (403 on a foreign x-tenant-id); writes go ' +
+      'only through update_organization_settings, which enforces owner/admin and audits. ' +
+      'Asserted in dashboard-team-routes.test.ts.',
+  },
+  {
+    path: '/api/v1/organizations/current/transfer-ownership',
+    kind: 'api',
+    type: 'public',
+    why: 'Handler authenticates and resolves tenant; transfer_organization_ownership requires owner and audits.',
+  },
+  {
+    path: '/api/v1/organizations/current/members',
+    kind: 'api',
+    type: 'public',
+    why: 'Handler authenticates and resolves tenant; member and profile visibility is RLS on the caller\'s client.',
+  },
+  {
+    path: '/api/v1/organizations/current/members/[userId]',
+    kind: 'api',
+    type: 'public',
+    why:
+      'Handler authenticates and resolves tenant; manage_organization_member owns role, rank, ' +
+      'last-owner and cross-tenant rules and audits every change.',
+  },
+  {
     path: '/api/v1/invitations',
     kind: 'api',
     type: 'public',

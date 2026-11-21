@@ -519,6 +519,11 @@ export const es = {
   'knowledge.previewButton': 'Probar',
   'knowledge.previewNone': 'Ninguna respuesta registrada coincide. El asistente redactaría sin datos del negocio y no inventaría la respuesta.',
   'knowledge.previewMatch': 'El asistente usaría estas respuestas:',
+  'errors.ORGANIZATION_NOT_FOUND': 'No se encontró la organización',
+  'errors.INVALID_MEMBERSHIP_CHANGE': 'Ese cambio no es válido',
+  'errors.LAST_OWNER': 'Una organización debe tener al menos un propietario. Transfiera la propiedad primero.',
+  'errors.MEMBER_NOT_FOUND': 'No se encontró el miembro',
+  'errors.MEMBER_RANK_FORBIDDEN': 'Solo puede gestionar miembros con un rol inferior al suyo',
   'errors.INVITATION_NOT_FOUND': 'No se encontró la invitación',
   'errors.INVITATION_ALREADY_PENDING': 'Esa dirección ya tiene una invitación pendiente. Cancélela antes de enviar otra.',
   'errors.INVITATION_NOT_PENDING': 'Esta invitación ya fue usada o retirada',
@@ -530,6 +535,8 @@ export const es = {
   'errors.VERIFIED_EMAIL_REQUIRED': 'Verifica el correo de tu cuenta antes de aceptar una invitación.',
   'errors.INVALID_QUERY': 'Los parámetros de la consulta no son válidos',
   'errors.QUERY_WINDOW_TOO_LARGE': 'El período solicitado es demasiado grande',
+  'errors.INVALID_USAGE_RECORD': 'Ese registro de uso no es válido',
+  'errors.USAGE_TARGET_NOT_FOUND': 'No se encontró la conversación de este uso',
   'errors.INTERNAL_ERROR': 'Ocurrió un error inesperado',
   // Media API (media-api/error-mapper.ts). Spanish is the source of truth;
   // the server sends the English sentence as the fallback.
