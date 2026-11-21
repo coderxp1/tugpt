@@ -18,7 +18,7 @@ const document = (status: LibraryDocument['status'] = 'pending'): LibraryDocumen
   indexedAt: status === 'ready' ? iso() : null, createdAt: iso(), processingAttempts: 0, nextAttemptAt: null,
 });
 async function open() {
-  const { container } = render(<Collections uploadScope="test-owner" role="agent" />);
+  const { container } = render(<Collections uploadScope="test-owner" role="admin" />);
   fireEvent.click(await screen.findByRole('button', { name: /^Open\s*: Policies$/ }));
   // Loading must settle before a mutation can update the collection state.
   await screen.findByRole('heading', { name: 'Policies' });

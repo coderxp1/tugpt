@@ -149,6 +149,7 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
   const [form, setForm] = useState<AgentInput>(start ? { ...start, starters: start.starters.length ? [...start.starters] : [''] } : EMPTY);
   const [saving, setSaving] = useState(false);
   const saveLock = useRef(false);
+  const [knowledgeQuery, setKnowledgeQuery] = useState('');
   const [waitSeconds, setWaitSeconds] = useState(() => Math.max(0, Math.ceil((agentsApi().retryAt() - Date.now()) / 1000)));
   useEffect(() => { const timer = setInterval(() => setWaitSeconds(Math.max(0, Math.ceil((agentsApi().retryAt() - Date.now()) / 1000))), 1000); return () => clearInterval(timer); }, []);
   const capabilityUnavailable = !!form.modelKey && !models.some(m => m.key === form.modelKey && m.available !== false);
@@ -209,10 +210,13 @@ function AgentBuilder({ editing, models, canSave, canShare, onClose, onSaved }: 
 
         <fieldset className={u.choices}>
           <legend>{t('workspace.agents.f.knowledge')}</legend>
+          <label className={u.field}>{t.locale === 'es' ? 'Filtrar colecciones de conocimiento' : 'Filter knowledge collections'}<input type="search" value={knowledgeQuery} onChange={e => setKnowledgeQuery(e.target.value)} /></label>
+          <p className={u.help}>{t.locale === 'es' ? `${form.collectionIds.length} seleccionadas. Filtrar no cambia la selección.` : `${form.collectionIds.length} selected. Filtering does not change your selection.`}</p>
+          {cols.state === 'ready' && !cols.value.collections.some(col => `${col.name} ${col.description ?? ''}`.toLocaleLowerCase().includes(knowledgeQuery.toLocaleLowerCase())) && <p>{t.locale === 'es' ? 'No hay colecciones coincidentes.' : 'No matching collections.'}</p>}
           {cols.state === 'loading' && <p className={u.help}>{t('workspace.lib.loading')}…</p>}
           {cols.state === 'error' && <p className={u.help}>{t('workspace.agents.f.knowledgeUnavailable')}</p>}
           {cols.state === 'ready' && cols.value.collections.length === 0 && <p className={u.help}>{t('workspace.agents.f.knowledgeNone')}</p>}
-          {cols.state === 'ready' && cols.value.collections.map((col) => {
+          {cols.state === 'ready' && cols.value.collections.filter(col => `${col.name} ${col.description ?? ''}`.toLocaleLowerCase().includes(knowledgeQuery.toLocaleLowerCase())).map((col) => {
             const on = form.collectionIds.includes(col.id);
             return (
               <label key={col.id} className={u.choice}>

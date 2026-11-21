@@ -407,13 +407,23 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
       if (!Array.isArray(d.messages) || d.thread.id !== id) throw new Error('Invalid conversation');
       setMessages(d.messages.map((m) => ({ ...m, citations: parseAgentCitations(m.citations), knowledgeUnavailable: m.knowledgeUnavailable === true })));
       if (!hasRecoveredAnswer(recovery, d.messages)) { fail(t('workspace.chat.stillUnresolved')); return; }
-      if (!clearChatRecovery(uploadScope, id)) { fail(t('workspace.chat.stillUnresolved')); return; }
+      if (!clearChatRecovery(uploadScope, id, recovery.attemptId)) { fail(t('workspace.chat.stillUnresolved')); return; }
       setRecovery(null); setError(null);
     } catch { if (activeRef.current === id) fail(t('workspace.chat.recoveryFailed')); }
     finally { setReconciling(false); }
   }
 
   async function send() {
+    if (uploadScope && activeId && typeof navigator.locks !== 'undefined') {
+      await navigator.locks.request(`tugpt-chat:${uploadScope}:${activeId}`, { ifAvailable: true }, async lock => {
+        if (!lock) { fail(t('workspace.chat.otherTab')); return; }
+        await sendUnlocked();
+      });
+    } else await sendUnlocked();
+  }
+  async function sendUnlocked() {
+    if (activeId) { const unresolved = loadChatRecovery(uploadScope, activeId); if (unresolved) { setRecovery(unresolved); return; } }
+
     const content = composeContent(draft, files);
     if (!content || sending.current || recovery || agentBlocked || busy || !model || content.length > MESSAGE_LIMIT || uploads.some((u) => u.status === 'uploading')) return;
     sending.current = true;
@@ -433,8 +443,8 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
         window.history.replaceState(null, '', threadHref(id));
       }
     } catch { sending.current = false; fail('A new chat could not be started.'); return; }
-    pending = { threadId: id, original: content, partial: '' };
-    if (!saveChatRecovery(uploadScope, pending)) { sending.current = false; fail(t('workspace.chat.storageUnavailable')); return; }
+    pending = { threadId: id, original: content, partial: '', attemptId: crypto.randomUUID() };
+    if (!saveChatRecovery(uploadScope, pending)) { clearChatRecovery(uploadScope, id, pending.attemptId); sending.current = false; fail(t('workspace.chat.storageUnavailable')); return; }
     void attachPending(id);
     const controller = begin();
     setDraft(''); setFiles([]); setFileNotice(null); setUploads((x) => x.filter((u) => u.status === 'failed'));
@@ -448,7 +458,7 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
         const body = await res.json().catch(() => ({})) as { error?: string };
         setError(requestProblem(body.error));
         if (res.status >= 500 || res.status === 404 || res.status === 409 || res.ok) { remember(); if (res.status === 409) setDraft(typed); }
-        else { clearChatRecovery(uploadScope, id); setDraft(typed); setFiles(sentFiles); }
+        else { clearChatRecovery(uploadScope, id, pending?.attemptId); setDraft(typed); setFiles(sentFiles); }
         return;
       }
       const summary = await readTurnStream(res.body, (ev) => { if (!controller.signal.aborted) { if (ev.type === 'delta') partial += ev.text ?? '';
@@ -457,7 +467,7 @@ export function useChatSession(configured: PublicModel[], uploadScope?: string) 
         handleEvent(ev); } });
       // A stream that ends without done/error was cut off; never present it as a finished answer.
       if (summary.terminal === null || controller.signal.aborted) { remember(); fail(turnProblem('INTERRUPTED')); }
-      else clearChatRecovery(uploadScope, id);
+      else clearChatRecovery(uploadScope, id, pending?.attemptId);
       setAttached([]);
       touch(id, typed.trim() || sentFiles[0]?.name || content);
     } catch {

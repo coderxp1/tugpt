@@ -2,7 +2,7 @@
 import { beforeEach, afterEach, expect, it, vi } from 'vitest';
 import { saveChatRecovery, loadChatRecovery, clearChatRecovery, hasRecoveredAnswer } from './chat-recovery';
 const r={threadId:'t1',original:'Question',partial:'Partial',userMessageId:'u1'};
-beforeEach(()=>sessionStorage.clear());afterEach(()=>vi.restoreAllMocks());
+beforeEach(()=>{sessionStorage.clear();localStorage.clear();});afterEach(()=>vi.restoreAllMocks());
 it('restores a scoped record after reload and clears only that record',()=>{saveChatRecovery('org:user',r);expect(loadChatRecovery('org:user','t1')).toEqual(r);expect(loadChatRecovery('other:user','t1')).toBeNull();expect(loadChatRecovery('org:other','t1')).toBeNull();expect(loadChatRecovery('org:user','t2')).toBeNull();clearChatRecovery('org:user','t1');expect(loadChatRecovery('org:user','t1')).toBeNull();});
 it('limits partial text size',()=>{saveChatRecovery('s',{...r,partial:'x'.repeat(70000)});expect(loadChatRecovery('s','t1')?.partial.length).toBe(65536);});
 it('does not silently succeed when storage is denied',()=>{vi.spyOn(Storage.prototype,'setItem').mockImplementation(()=>{throw Error('denied');});expect(saveChatRecovery('s',r)).toBe(false);});
@@ -10,3 +10,6 @@ it.each(['error','stopped','pending'])('does not settle a %s answer',status=>{ex
 it('requires matching observed server user id and content before complete answer',()=>{const m=[{id:'u1',role:'user',content:'Question',status:'complete'},{id:'a1',role:'assistant',content:'Answer',status:'complete'}];expect(hasRecoveredAnswer(r,m)).toBe(true);expect(hasRecoveredAnswer({...r,userMessageId:undefined},m)).toBe(false);expect(hasRecoveredAnswer({...r,userMessageId:'other'},m)).toBe(false);expect(hasRecoveredAnswer({...r,original:'Other'},m)).toBe(false);});
 it('cannot settle from an answer belonging to the next user message',()=>{expect(hasRecoveredAnswer(r,[{id:'u1',role:'user',content:'Question',status:'complete'},{id:'u2',role:'user',content:'Other',status:'complete'},{id:'a2',role:'assistant',content:'Answer',status:'complete'}])).toBe(false);});
 it('retains unresolved state for corrupt storage',()=>{sessionStorage.setItem('tugpt:chat-recovery:v1:s:t1','invalid');expect(loadChatRecovery('s','t1')).toEqual({threadId:'t1',original:'',partial:''});});
+
+it('recovers in a new tab using only non-content metadata',()=>{saveChatRecovery('s',{...r,attemptId:'a1'});const persisted=localStorage.getItem('tugpt:chat-recovery:v1:s:t1')!;expect(persisted).not.toContain('Question');expect(persisted).not.toContain('Partial');sessionStorage.clear();const restored=loadChatRecovery('s','t1')!;expect(restored.metadataOnly).toBe(true);expect(restored.userMessageId).toBe('u1');expect(hasRecoveredAnswer(restored,[{id:'u1',role:'user',content:'Question',status:'complete'},{id:'a',role:'assistant',content:'Answer',status:'complete'}])).toBe(true);});
+it('an old tab cannot clear a newer request marker',()=>{saveChatRecovery('s',{...r,attemptId:'new'});expect(clearChatRecovery('s','t1','old')).toBe(false);expect(loadChatRecovery('s','t1')?.attemptId).toBe('new');});

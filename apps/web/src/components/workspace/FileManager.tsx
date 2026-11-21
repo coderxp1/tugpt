@@ -27,6 +27,9 @@ export function FileManager({ role, uploadScope }: { role?: string; uploadScope?
   const [scope, setScope] = useState<'mine' | 'organization'>('mine');
   const [cursor, setCursor] = useState<string | undefined>();
   const [query, setQuery] = useState('');
+  const [kind, setKind] = useState('all');
+  const matches = (file: WorkspaceFile) => file.filename.toLocaleLowerCase().includes(query.toLocaleLowerCase()) && (kind === 'all' || (kind === 'image' ? file.mediaType.startsWith('image/') : kind === 'pdf' ? file.mediaType === 'application/pdf' : kind === 'text' ? previewKind(file) === 'text' : /\.(docx|xlsx|pptx)$/i.test(file.filename)));
+  const canWriteCollection = (c: { ownedByMe: boolean; visibility: string }) => c.ownedByMe && (c.visibility === 'private' || ['owner', 'admin'].includes(role ?? ''));
   const [action, setAction] = useState<Action>(null);
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false); const lock = useRef(false);
@@ -38,6 +41,7 @@ export function FileManager({ role, uploadScope }: { role?: string; uploadScope?
   function open(file: WorkspaceFile, kind: NonNullable<Action>['kind']) { setError(''); setName(file.filename); setCollectionId(''); setAction({ file, kind }); }
   async function mutate() {
     if (!action || lock.current || !writable) return;
+    if (action.kind === 'link' && (collections.load.state !== 'ready' || !collections.load.value.collections.some(c => c.id === collectionId && canWriteCollection(c)))) return;
     lock.current = true; setBusy(true); setError('');
     try {
       const r = action.kind === 'delete' ? await api.deleteFile(action.file.id)
@@ -53,6 +57,7 @@ export function FileManager({ role, uploadScope }: { role?: string; uploadScope?
     <div className={f.controls}>
       <label className={u.field}>{text.scope}<select value={scope} disabled={busy} onChange={(e) => { setScope(e.target.value as typeof scope); setCursor(undefined); }}><option value="mine">{text.mine}</option><option value="organization">{text.org}</option></select></label>
       <label className={u.field}>{text.filter}<input type="search" value={query} onChange={(e) => setQuery(e.target.value)} /></label>
+      <label className={u.field}>{t.locale === 'es' ? 'Tipo de archivo en esta página' : 'File type on this page'}<select value={kind} onChange={e => setKind(e.target.value)}>{[['all', t.locale === 'es' ? 'Todos los tipos' : 'All types'], ['image', t.locale === 'es' ? 'Imágenes' : 'Images'], ['pdf', 'PDF'], ['office', t.locale === 'es' ? 'Documentos de Office' : 'Office documents'], ['text', t.locale === 'es' ? 'Texto y datos' : 'Text and data']].map(([value,label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <button className={u.button} disabled={busy} onClick={reload}>{text.refresh}</button>
       {writable && <FileUpload recoveryScope={uploadScope} onStored={() => { setScope('mine'); setCursor(undefined); reload(); }} />}
     </div>
@@ -61,7 +66,7 @@ export function FileManager({ role, uploadScope }: { role?: string; uploadScope?
     {load.state === 'loading' && <LoadingRows label={text.title} rows={2} />}
     {load.state === 'error' && <ServiceNotice problem={load.problem} failure={load.failure} feature={text.title} onRetry={reload} />}
     {load.state === 'ready' && <>
-      <ul className={f.list}>{load.value.files.filter((file) => file.filename.toLocaleLowerCase().includes(query.toLocaleLowerCase())).map((file) => <li key={file.id}>
+      <ul className={f.list}>{load.value.files.filter(matches).map((file) => <li key={file.id}>
         <strong>{file.filename}</strong><p>{formatBytes(file.sizeBytes, t.locale)} · {file.visibility === 'private' ? t('workspace.lib.visPrivate') : t('workspace.lib.visOrg')} · {file.status === 'ready' ? text.ready : file.status === 'failed' ? text.failed : text.uploading}</p>
         <div className={f.controls}>
           {file.status === 'ready' && <a className={u.button} href={api.fileContentUrl(file.id)} download>{text.download}</a>}
@@ -70,7 +75,7 @@ export function FileManager({ role, uploadScope }: { role?: string; uploadScope?
           {writable && (file.ownedByMe || (file.visibility === 'organization' && ['owner', 'admin'].includes(role ?? ''))) && <button className={u.button} disabled={busy} onClick={() => open(file, 'delete')}>{text.remove}</button>}
         </div>
       </li>)}</ul>
-      {!load.value.files.some((file) => file.filename.toLocaleLowerCase().includes(query.toLocaleLowerCase())) && <p>{text.empty}</p>}
+      {!load.value.files.some(matches) && <p>{text.empty}</p>}
       <div className={f.controls}>{cursor && <button className={u.button} onClick={() => setCursor(undefined)}>{text.first}</button>}{load.value.nextCursor && <button className={u.button} onClick={() => setCursor(load.value.nextCursor ?? undefined)}>{text.next}</button>}</div>
     </>}
     {action && <Dialog preview={action.kind === 'preview'} title={action.kind === 'delete' ? text.confirm : action.kind === 'rename' ? text.rename : action.kind === 'link' ? text.linking : previewKind(action.file) === 'image' ? (t.locale === 'es' ? 'Vista previa de imagen' : 'Preview image') : previewKind(action.file) === 'text' ? text.preview : (t.locale === 'es' ? 'Vista previa del archivo' : 'Preview file')} tone={action.kind === 'delete' ? 'alert' : 'default'} onClose={() => { if (!busy) { setAction(null); setError(''); } }} footer={action.kind !== 'preview' && <><button className={u.button} disabled={busy} onClick={() => setAction(null)}>{text.cancel}</button><button className={action.kind === 'delete' ? u.buttonDanger : u.buttonPrimary} disabled={busy || (action.kind === 'rename' && !name.trim()) || (action.kind === 'link' && !collectionId)} onClick={() => void mutate()}>{action.kind === 'delete' ? text.remove : text.save}</button></>}>
@@ -78,7 +83,7 @@ export function FileManager({ role, uploadScope }: { role?: string; uploadScope?
       {action.kind === 'delete' && <p>{text.warning}</p>}
       {action.kind === 'rename' && <label className={u.field}>{text.name}<input maxLength={240} value={name} onChange={(e) => setName(e.target.value)} /></label>}
       {action.kind === 'preview' && <FilePreview key={action.file.id} file={action.file} url={api.fileContentUrl(action.file.id)} />}
-      {action.kind === 'link' && <>{collections.load.state === 'error' && <ServiceNotice problem={collections.load.problem} failure={collections.load.failure} feature={text.collection} onRetry={collections.reload} />}<label className={u.field}>{text.collection}<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">{text.collection}</option>{collections.load.state === 'ready' && collections.load.value.collections.filter((c) => c.ownedByMe).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label></>}
+      {action.kind === 'link' && <>{collections.load.state === 'error' && <ServiceNotice problem={collections.load.problem} failure={collections.load.failure} feature={text.collection} onRetry={collections.reload} />}<label className={u.field}>{text.collection}<select value={collectionId} onChange={(e) => setCollectionId(e.target.value)}><option value="">{text.collection}</option>{collections.load.state === 'ready' && collections.load.value.collections.filter(canWriteCollection).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></label></>}
       {error && <p className={u.error} role="alert">{error}</p>}
     </Dialog>}
   </section>;

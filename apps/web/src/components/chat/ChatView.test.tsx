@@ -23,7 +23,7 @@ function renderChat(props: { models: PublicModel[]; canApprove?: boolean; firstN
 
 let fetchMock: ReturnType<typeof vi.fn>;
 beforeEach(() => {
-  nav.path = '/workspace'; nav.search = ''; sessionStorage.clear();
+  nav.path = '/workspace'; nav.search = ''; sessionStorage.clear(); localStorage.clear();
   Element.prototype.scrollTo = vi.fn() as unknown as typeof Element.prototype.scrollTo;
   fetchMock = vi.fn((url: string) => (String(url).endsWith('/capabilities') ? ok({ capabilities: [] }) : ok({ threads: [thread] })));
   vi.stubGlobal('fetch', fetchMock);

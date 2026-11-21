@@ -86,7 +86,7 @@ export function Collections({ uploadScope, role }: { uploadScope?: string; role?
         </>
       )}
       {current && (
-        <CollectionPanel writable={writable} uploadScope={uploadScope} collection={current} onBack={() => setOpen(null)} onEdit={() => setEditing({ mode: 'edit', collection: current })}
+        <CollectionPanel canShare={['owner', 'admin'].includes(role ?? '')} writable={writable} uploadScope={uploadScope} collection={current} onBack={() => setOpen(null)} onEdit={() => setEditing({ mode: 'edit', collection: current })}
           onDeleted={() => { update((v) => ({ collections: v.collections.filter((x) => x.id !== current.id) })); setOpen(null); setNotice(t('workspace.lib.deleted', { name: current.name })); }} />
       )}
       {editing && (
@@ -152,9 +152,9 @@ function LibrarySearch({ collections }: { collections: readonly Collection[] }) 
 
 type Upload = { id: string; name: string; size: number; state: 'uploading' | 'failed'; percent?: number | null; message?: string };
 
-function CollectionPanel({ collection: col, uploadScope, writable, onBack, onEdit, onDeleted }: { writable: boolean; uploadScope?: string; collection: Collection; onBack(): void; onEdit(): void; onDeleted(): void }) {
+function CollectionPanel({ collection: col, uploadScope, writable, canShare, onBack, onEdit, onDeleted }: { canShare: boolean; writable: boolean; uploadScope?: string; collection: Collection; onBack(): void; onEdit(): void; onDeleted(): void }) {
   const t = useT();
-  const canMutate = writable && col.ownedByMe;
+  const canMutate = writable && col.ownedByMe && (col.visibility === 'private' || canShare);
   const [moving, setMoving] = useState<LibraryDocument | null>(null);
   const { load, reload, update } = useLoad<CollectionDetail>(`col:${col.id}`, () => workspaceApi().getCollection(col.id), (v) => hasArray(v, 'documents'));
   const [uploads, setUploads] = useState<Upload[]>([]);
@@ -226,6 +226,7 @@ function CollectionPanel({ collection: col, uploadScope, writable, onBack, onEdi
 
   return (
     <div className={c.panel}>
+      {!canMutate && <p>{t.locale === 'es' ? 'Solo lectura. Su rol o la propiedad de esta colección no permite cambios.' : 'Read-only. Your role or ownership of this collection does not allow changes.'}</p>}
       {moving && <MoveDocument source={col} document={moving} onClose={() => setMoving(null)} onMoved={() => { setMoving(null); reload(); }} />}
       <div className={c.panelHead}>
         <button type="button" className={u.buttonGhost} onClick={reload}>{t('workspace.refresh')}</button>
