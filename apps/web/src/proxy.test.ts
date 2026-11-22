@@ -1,6 +1,7 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { NextRequest } from 'next/server';
 import { classifyRoute, proxy } from './proxy';
+import { CONTROL_CENTER_COOKIE, cookieValueFor } from './lib/control-center/access';
 
 // Use vi.hoisted so the mock fn is available when the hoisted vi.mock factory runs
 const { mockGetClaims } = vi.hoisted(() => ({
@@ -72,6 +73,75 @@ describe('Next.js 16 Proxy Route Classifier', () => {
     expect(classifyRoute('/api/v1/draftsomething')).toBe('protected');
     expect(classifyRoute('/api/v1/organizations-export')).toBe('protected');
     expect(classifyRoute('/api/v1/webhooksomething')).toBe('protected');
+  });
+
+  /**
+   * The Product Control Center is neither public nor tenant-protected: it has
+   * its own gate (CONTROL_CENTER_TOKEN). Only the page and its two APIs get
+   * that class; anything that merely shares the prefix stays protected.
+   */
+  it('classifies the Control Center routes as operator, and nothing else', () => {
+    expect(classifyRoute('/control-center')).toBe('operator');
+    expect(classifyRoute('/api/v1/control-center/health')).toBe('operator');
+    expect(classifyRoute('/api/v1/control-center/lab')).toBe('operator');
+    expect(classifyRoute('/control-centerx')).toBe('protected');
+    expect(classifyRoute('/control-center/anything')).toBe('protected');
+    expect(classifyRoute('/api/v1/control-centerx')).toBe('protected');
+  });
+});
+
+describe('Control Center operator gate', () => {
+  const TOKEN = 'test-owner-secret-0123456789abcdef';
+  beforeEach(() => { mockGetClaims.mockReset(); delete process.env.CONTROL_CENTER_TOKEN; });
+  afterEach(() => { vi.unstubAllEnvs(); delete process.env.CONTROL_CENTER_TOKEN; });
+  it.each(['development', 'production'])('returns 404 without configuration in %s', async (env) => {
+    vi.stubEnv('NODE_ENV', env);
+    for (const path of ['/control-center', '/api/v1/control-center/health', '/api/v1/control-center/lab']) {
+      expect((await proxy(new NextRequest('http://localhost' + path))).status).toBe(404);
+    }
+    expect(mockGetClaims).not.toHaveBeenCalled();
+  });
+  it('provides an owner unlock screen, not a tenant login redirect', async () => {
+    process.env.CONTROL_CENTER_TOKEN = TOKEN;
+    const page = await proxy(new NextRequest('http://localhost/control-center'));
+    expect(page.status).toBe(401);
+    expect(page.headers.get('location')).toBeNull();
+    expect(await page.text()).toContain('Owner access key');
+    const api = await proxy(new NextRequest('http://localhost/api/v1/control-center/health'));
+    expect(api.status).toBe(401);
+    expect(await api.json()).toMatchObject({ error: 'Unauthenticated' });
+  });
+  it('never accepts URL credentials or raw keys in cookies', async () => {
+    process.env.CONTROL_CENTER_TOKEN = TOKEN;
+    expect((await proxy(new NextRequest(`http://localhost/control-center?key=${TOKEN}`))).status).toBe(401);
+    expect((await proxy(new NextRequest('http://localhost/control-center', { headers: { cookie: `${CONTROL_CENTER_COOKIE}=${TOKEN}` } }))).status).toBe(401);
+  });
+  it('unlocks by header and sets a secure httpOnly session on HTTPS', async () => {
+    process.env.CONTROL_CENTER_TOKEN = TOKEN;
+    const res = await proxy(new NextRequest('https://example.test/api/v1/control-center/health', { headers: { 'x-control-center-key': TOKEN } }));
+    expect(res.status).toBe(200);
+    const cookie = res.cookies.get(CONTROL_CENTER_COOKIE)!;
+    expect(cookie.value).toMatch(/^\d{10}\.[a-f0-9]{64}$/);
+    expect(cookie).toMatchObject({ httpOnly: true, secure: true, sameSite: 'lax', maxAge: 43200 });
+    expect(res.headers.get('cache-control')).toBe('no-store');
+    const follow = await proxy(new NextRequest('https://example.test/control-center', { headers: { cookie: `${CONTROL_CENTER_COOKIE}=${cookie.value}` } }));
+    expect(follow.status).toBe(200);
+    expect(follow.headers.get('cache-control')).toBe('no-store');
+    expect(follow.headers.get('referrer-policy')).toBe('same-origin');
+    expect(mockGetClaims).not.toHaveBeenCalled();
+  });
+  it('rejects expired sessions and cross-origin requests', async () => {
+    process.env.CONTROL_CENTER_TOKEN = TOKEN;
+    const expired = await cookieValueFor(TOKEN, Date.now() - 43201000);
+    expect((await proxy(new NextRequest('http://localhost/control-center', { headers: { cookie: `${CONTROL_CENTER_COOKIE}=${expired}` } }))).status).toBe(401);
+    expect((await proxy(new NextRequest('http://localhost/api/v1/control-center/lab', { method: 'POST', headers: { origin: 'https://evil.test', 'x-control-center-key': TOKEN } }))).status).toBe(403);
+  });
+  it('locks the workspace by clearing the browser session', async () => {
+    process.env.CONTROL_CENTER_TOKEN = TOKEN;
+    const res = await proxy(new NextRequest('http://localhost/control-center?logout=1', { method: 'POST', headers: { origin: 'http://localhost', cookie: `${CONTROL_CENTER_COOKIE}=${await cookieValueFor(TOKEN)}` } }));
+    expect(res.status).toBe(303);
+    expect(res.cookies.get(CONTROL_CENTER_COOKIE)?.maxAge).toBe(0);
+    expect(res.headers.get('location')).toBe('http://localhost/control-center');
   });
 });
 

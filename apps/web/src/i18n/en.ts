@@ -30,6 +30,7 @@ export const en: Dictionary = {
   'nav.drafts': 'Drafts',
   'nav.inbox': 'Conversations',
   'nav.media': 'Media',
+  'nav.controlCenter': 'Control Center',
   'nav.integrations': 'Integrations',
 
   'integrations.title': 'Integrations',

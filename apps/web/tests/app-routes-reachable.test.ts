@@ -65,6 +65,10 @@ const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
     path: '/dashboard/media/[jobId]',
     by: 'Every row of the media job list links to one (MediaJobList.test.tsx). A dynamic route has no single URL to navigate to.',
   },
+  {
+    path: '/control-center',
+    by: 'The operator opens it by URL (docs/control-center-owner.md). It is an operator tool gated by CONTROL_CENTER_TOKEN in proxy.ts, not a tenant feature, so it is deliberately absent from the tenant navigation: a nav link would 404 (no token) or 401 (no unlock) for every reviewer in production.',
+  },
 ];
 
 const pageRoutes = discoverRoutes(APP_DIR)
