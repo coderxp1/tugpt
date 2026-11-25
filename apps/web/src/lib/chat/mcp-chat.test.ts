@@ -180,6 +180,81 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     });
   });
 
+  describe('authenticated endpoints (B3: org-owned mcp_custom static bearer via broker caller executor)', () => {
+    // FAKE: the broker (a StaticSecretSource double) and the DB mirror of 20261120000014. REAL: runtime, proxy, TLS MCP server.
+    const CONN = 'f0000000-0000-4000-8000-0000000000b3';
+    const CANARY = 'tugpt-canary-b3-chat-0000000000';
+    type Read = { organizationId: string; connectionId: string };
+    function secrets(result: { ok: true; value: { secret: string; credentialVersion: number } } | { ok: false; code: string }) {
+      const reads: Read[] = [];
+      return { reads, source: { async getStaticSecret(scope: Read) { reads.push({ organizationId: scope.organizationId, connectionId: scope.connectionId }); return result as never; } } };
+    }
+    function credential(status = 'connected', provider = 'mcp_custom') {
+      state.connections = [{ id: CONN, organization_id: ORG_A, provider_key: provider, credential_kind: provider === 'mcp_custom' ? 'mcp_static_bearer' : 'oauth_token_set',
+        owner_type: 'organization', status, revoked_at: status === 'disconnected' ? '2026-11-20T00:00:00Z' : null }];
+      state.endpoints.find((e) => e.id === EP_A)!.auth_connection_id = CONN;
+    }
+
+    it('resolves a connected mcp_custom credential on the trusted path and returns only its id', async () => {
+      credential();
+      const resolved = await fakeTrustedDb(state).rpc('resolve_mcp_execution', { p_organization_id: ORG_A, p_endpoint_id: EP_A });
+      expect((resolved.data as { authConnectionId?: unknown }).authConnectionId).toBe(CONN);
+      const { registry, pick } = await session(OWNER_A, ORG_A, { ...deps, staticSecrets: secrets({ ok: false, code: 'UNAVAILABLE' }).source });
+      expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(true);
+    });
+
+    it('sends Authorization: Bearer <secret from broker> on every MCP message; the secret is read per call for the right org + connection', async () => {
+      credential();
+      const s = secrets({ ok: true, value: { secret: CANARY, credentialVersion: 1 } });
+      const d = { ...deps, staticSecrets: s.source };
+      const { pick, toolset } = await session(OWNER_A, ORG_A, d);
+      const before = server.calls.length;
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'vpn' }));
+      expect(r.ok).toBe(true);
+      const mine = server.calls.slice(before);
+      expect(mine.map((c) => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call']);
+      expect(mine.every((c) => c.authorization === `Bearer ${CANARY}`)).toBe(true);
+      expect(s.reads).toEqual([{ organizationId: ORG_A, connectionId: CONN }]);
+      expect(JSON.stringify(r)).not.toContain(CANARY);
+      expect(JSON.stringify(audits)).not.toContain(CANARY);
+    });
+
+    it.each(['NOT_CONNECTED', 'REQUIRES_AUTHORIZATION'])('broker %s -> REAUTHORIZATION_REQUIRED before any egress', async (code) => {
+      credential();
+      const d = { ...deps, staticSecrets: secrets({ ok: false, code }).source };
+      const { pick, toolset } = await session(OWNER_A, ORG_A, d);
+      const [calls, connects] = [server.calls.length, proxy.connects.length];
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }));
+      expect(r).toMatchObject({ ok: false, code: 'REAUTHORIZATION_REQUIRED' });
+      expect([server.calls.length, proxy.connects.length]).toEqual([calls, connects]);
+    });
+
+    it('no broker configured (default source, no executor key) -> refused before any egress', async () => {
+      credential();
+      const { pick, toolset } = await session(OWNER_A, ORG_A, { ...deps, env: { ...deps.env } });
+      const [calls, connects] = [server.calls.length, proxy.connects.length];
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }));
+      expect(r.ok).toBe(false);
+      expect([server.calls.length, proxy.connects.length]).toEqual([calls, connects]);
+    });
+
+    it('anonymous endpoints never read a secret and send no Authorization header', async () => {
+      const s = secrets({ ok: true, value: { secret: CANARY, credentialVersion: 1 } });
+      const { pick, toolset } = await session(OWNER_A, ORG_A, { ...deps, staticSecrets: s.source });
+      const before = server.calls.length;
+      expect((await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }))).ok).toBe(true);
+      expect(s.reads).toEqual([]);
+      expect(server.calls.slice(before).every((c) => c.authorization === null)).toBe(true);
+    });
+
+    it.each([['requires_authorization', 'mcp_custom'], ['disconnected', 'mcp_custom'], ['connected', 'google']])(
+      'a %s %s credential is not runnable', async (status, provider) => {
+        credential(status, provider);
+        const { registry, pick } = await session(OWNER_A, ORG_A, { ...deps, staticSecrets: secrets({ ok: true, value: { secret: CANARY, credentialVersion: 1 } }).source });
+        expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(false);
+      });
+  });
+
   describe('organization isolation', () => {
     it('never lists another organization\'s endpoints', async () => {
       const a = await session(OWNER_A);
