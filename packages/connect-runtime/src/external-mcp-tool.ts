@@ -43,6 +43,12 @@ export interface ExternalMcpEndpoint {
   readonly fetchFn?: ExternalMcpFetch;
   /** Injectable for tests; defaults to the system DNS resolver. */
   readonly resolveHostname?: HostnameResolver;
+  /**
+   * `'bearer'`: the endpoint needs a stored credential. execute() sends `Authorization: Bearer <deps.accessToken>`
+   * (resolved by the runtime's token step after authorization and approval, never stored on this object) and
+   * refuses REAUTHORIZATION_REQUIRED without any network call when the token is empty. Absent: anonymous.
+   */
+  readonly credential?: 'bearer';
 }
 
 export interface ExternalMcpToolDef {
@@ -197,6 +203,7 @@ export interface ExternalMcpToolListEntry {
 
 export type McpDiscoveryErrorCode =
   | 'DISCOVERY_HTTP_STATUS'   // non-2xx reply (incl. 3xx: redirects are never followed)
+  | 'DISCOVERY_UNAUTHORIZED'  // 401/403: the credential is missing, invalid, expired or revoked upstream
   | 'DISCOVERY_MALFORMED'     // not JSON / not JSON-RPC 2.0 / wrong id / missing result / bad tools shape
   | 'DISCOVERY_RPC_ERROR'     // JSON-RPC error object
   | 'DISCOVERY_INVALID_TOOL'  // a tool violates the snapshot contract (mirrors the DB CHECKs)
@@ -282,7 +289,16 @@ function parseRpcReply(text: string, id: number, contentType: string | null = nu
  * session is abandoned before any other message; the negotiated version is sent as the
  * `MCP-Protocol-Version` header on every later message (spec 2025-06-18, transports).
  */
+/** Visible ASCII without spaces: no CR/LF header injection, bounded length. */
+const BEARER_TOKEN_PATTERN = /^[\x21-\x7e]{1,4096}$/;
 const SESSION_ID_PATTERN = /^[\x21-\x7e]{1,256}$/; // visible ASCII, per spec
+
+/** The message carries only the status code; the reply body is untrusted and may echo the credential. */
+function httpStatusError(status: number, suffix: string): McpDiscoveryError {
+  return status === 401 || status === 403
+    ? new McpDiscoveryError('DISCOVERY_UNAUTHORIZED', `MCP endpoint returned HTTP ${status}${suffix}`)
+    : new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${status}${suffix}`);
+}
 
 async function openMcpSession(endpoint: ExternalMcpEndpoint, fetchFn: ExternalMcpFetch) {
   // Set once, after initialize; read by send() for every later message.
@@ -296,7 +312,7 @@ async function openMcpSession(endpoint: ExternalMcpEndpoint, fetchFn: ExternalMc
   }
   async function request(id: number, method: string, params: unknown, sessionId: string | undefined) {
     const res = await send({ id, method, params }, sessionId);
-    if (res.status !== 200) throw new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${res.status}`);
+    if (res.status !== 200) throw httpStatusError(res.status, '');
     return { result: parseRpcReply(await res.text(), id, res.headers?.get('content-type') ?? null), headers: res.headers };
   }
 
@@ -318,7 +334,7 @@ async function openMcpSession(endpoint: ExternalMcpEndpoint, fetchFn: ExternalMc
 
   const ack = await send({ method: 'notifications/initialized' }, sessionId);
   if (ack.status < 200 || ack.status > 299) {
-    throw new McpDiscoveryError('DISCOVERY_HTTP_STATUS', `MCP endpoint returned HTTP ${ack.status} to initialized`);
+    throw httpStatusError(ack.status, ' to initialized');
   }
 
   let nextId = 2;
@@ -435,12 +451,20 @@ export function createExternalMcpTool(
       if (!checked.ok) return { ok: false, detail: checked.detail };
       return { ok: true, value: decoded };
     },
-    async execute(args): Promise<ToolOutput> {
+    async execute(args, deps): Promise<ToolOutput> {
       const unavailable = { ok: false, code: 'PROVIDER_UNAVAILABLE' as ToolErrorCode } as const;
       const tooLarge = { ok: false, code: 'OUTPUT_TOO_LARGE' as ToolErrorCode } as const;
+      const reauth = { ok: false, code: 'REAUTHORIZATION_REQUIRED' as ToolErrorCode } as const;
+      let sessionEndpoint: ExternalMcpEndpoint = endpoint;
+      if (endpoint.credential === 'bearer') {
+        // Checked before DNS or any request: a missing or header-unsafe token never reaches the network.
+        const token = deps?.accessToken ?? '';
+        if (token === '' || !BEARER_TOKEN_PATTERN.test(token)) return reauth;
+        sessionEndpoint = { ...endpoint, authHeader: `Bearer ${token}` };
+      }
       try {
         await assertPublicEndpoint(endpoint.url, endpoint.resolveHostname);
-        const session = await openMcpSession(endpoint, fetchFn);
+        const session = await openMcpSession(sessionEndpoint, fetchFn);
         const result = await session.call('tools/call', { name: toolDef.name, arguments: args });
         // The server ran the tool and the tool refused or failed: the endpoint is reachable, so this is not
         // PROVIDER_UNAVAILABLE. The error text is untrusted and is never returned.
@@ -453,6 +477,7 @@ export function createExternalMcpTool(
         if (Buffer.byteLength(text, 'utf8') > MAX_MCP_RESULT_TEXT_BYTES) return tooLarge;
         return { ok: true, data: { content: text } };
       } catch (e) {
+        if (e instanceof McpDiscoveryError && e.code === 'DISCOVERY_UNAUTHORIZED') return reauth;
         return e instanceof McpTooLargeError ? tooLarge : unavailable;
       }
     },
