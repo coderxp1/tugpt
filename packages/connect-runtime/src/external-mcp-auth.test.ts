@@ -63,7 +63,7 @@ describe('B3 bearer credential from the runtime token step', () => {
 
   it('discovery with a per-call authHeader raises DISCOVERY_UNAUTHORIZED on 401 and its message holds no secret', async () => {
     const { fetchFn } = server({ status: 401 });
-    const err = await listExternalMcpTools({ url: 'https://customer.example.com/mcp', fetchFn, resolveHostname: PUBLIC, authHeader: `Bearer ${CANARY}` }).catch((e: unknown) => e);
+    const err = await listExternalMcpTools({ url: 'https://customer.example.com/mcp', fetchFn, resolveHostname: PUBLIC, authHeader: `Bearer ${CANARY}` }, fetchFn).catch((e: unknown) => e);
     expect((err as { code?: string }).code).toBe('DISCOVERY_UNAUTHORIZED');
     expect(String((err as Error).message)).not.toContain(CANARY);
   });
