@@ -52,6 +52,11 @@ export class EndpointNotFoundError extends Error {
   constructor() { super('MCP endpoint not found'); this.name = 'EndpointNotFoundError'; }
 }
 
+/** begin_mcp_static_credential refused: the endpoint already has a credential attached (SQLSTATE PT409). HTTP 409. */
+export class AuthAlreadyAttachedError extends Error {
+  constructor() { super('the endpoint already has a credential attached'); this.name = 'AuthAlreadyAttachedError'; }
+}
+
 /** SQLSTATE + message activate_mcp_endpoint raises when the snapshot gate refuses (20261120000008). */
 export const ACTIVATION_DENIED_SQLSTATE = 'PT409';
 export const ACTIVATION_DENIED_MESSAGE = 'SNAPSHOT_NOT_APPROVED';
@@ -81,6 +86,18 @@ export interface ExternalMcpRepository {
   activateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deactivateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deleteEndpoint(orgId: string, endpointId: string): Promise<void>;
+  /** Plan A1: create the mcp_custom account for a static broker credential and link it to the
+   * endpoint (status requires_authorization). Throws AuthAlreadyAttachedError (PT409),
+   * EndpointNotFoundError (P0002), RepoError('42501') or DatabaseTimeoutError. */
+  beginStaticCredential(orgId: string, endpointId: string): Promise<string>;
+  /** Mark the credential account connected after the broker stored the secret. False when no
+   * pending account matched (already completed, revoked, or foreign). */
+  completeStaticCredential(orgId: string, connectionId: string): Promise<boolean>;
+  /** Compensation for a failed broker store: unlink the endpoint and delete the pending account. */
+  failStaticCredential(orgId: string, endpointId: string, connectionId: string): Promise<boolean>;
+  /** Owner/admin read of the endpoint's auth connection for broker-resolved discovery; null when
+   * the endpoint is public (no credential attached). Same error contract as getEndpointUrl. */
+  getEndpointAuthConnection(orgId: string, endpointId: string): Promise<string | null>;
   recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number, threadId: string): Promise<RecordedApproval>;
   revokeApproval(orgId: string, approvalId: string): Promise<boolean>;
 }
@@ -351,6 +368,51 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
     async deleteEndpoint(orgId, endpointId) {
       const { error } = await u.rpc('delete_mcp_endpoint', { p_organization_id: orgId, p_endpoint_id: endpointId });
       if (error) throw new Error('failed to delete the MCP endpoint');
+    },
+
+    async beginStaticCredential(orgId, endpointId) {
+      const { data, error } = await u.rpc('begin_mcp_static_credential', {
+        p_organization_id: orgId, p_endpoint_id: endpointId,
+      });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === 'PT409') throw new AuthAlreadyAttachedError();
+        if (e?.code === 'P0002') throw new EndpointNotFoundError();
+        throw endpointLookupError(e);
+      }
+      if (typeof data !== 'string') throw new Error('invalid begin_mcp_static_credential result');
+      return data;
+    },
+
+    async completeStaticCredential(orgId, connectionId) {
+      const { data, error } = await u.rpc('complete_mcp_static_credential', {
+        p_organization_id: orgId, p_connection_id: connectionId,
+      });
+      if (error) throw endpointLookupError(error as PgError);
+      return data === true;
+    },
+
+    async failStaticCredential(orgId, endpointId, connectionId) {
+      const { data, error } = await u.rpc('fail_mcp_static_credential', {
+        p_organization_id: orgId, p_endpoint_id: endpointId, p_connection_id: connectionId,
+      });
+      if (error) throw endpointLookupError(error as PgError);
+      return data === true;
+    },
+
+    async getEndpointAuthConnection(orgId, endpointId) {
+      if (!isUuid(endpointId)) return null;
+      const { data, error } = await u.rpc('get_mcp_endpoint_auth_connection', {
+        p_organization_id: orgId, p_endpoint_id: endpointId,
+      });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === 'P0002') throw new EndpointNotFoundError();
+        throw endpointLookupError(e);
+      }
+      if (data === null || data === undefined) return null;
+      if (typeof data !== 'string') throw new Error('invalid get_mcp_endpoint_auth_connection result');
+      return data;
     },
 
     async recordApproval(orgId, connectionId, capability, argumentsSha256, ttlSeconds, threadId) {

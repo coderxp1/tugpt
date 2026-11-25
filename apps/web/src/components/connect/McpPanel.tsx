@@ -62,6 +62,8 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
   const [rows, setRows] = useState<Row[] | null>(null);
   const [loadIssue, setLoadIssue] = useState<McpIssue | null>(null);
   const [url, setUrl] = useState(''); const [name, setName] = useState('');
+  const [authKind, setAuthKind] = useState<'none' | 'bearer'>('none');
+  const [secret, setSecret] = useState('');
   const [formIssue, setFormIssue] = useState<McpIssue | null>(null);
   const [badField, setBadField] = useState<'name' | 'url' | null>(null);
   const nameRef = useRef<HTMLInputElement>(null); const urlRef = useRef<HTMLInputElement>(null);
@@ -124,11 +126,12 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
       return;
     }
     setBusy('register'); setFormIssue(null); setBadField(null); setNotice('');
-    const r = await mcpApi.register(url, name, fetcher);
+    const r = await mcpApi.register(url, name, fetcher,
+      authKind === 'bearer' ? { kind: 'static_bearer', secret } : { kind: 'none' });
     setBusy(null);
     if (!r.ok) { setFormIssue(mcpIssue(r, t)); return; }
     const added = name.trim();
-    setUrl(''); setName('');
+    setUrl(''); setName(''); setSecret(''); setAuthKind('none');
     await reload();
     setNotice(t('mcp.form.added', { name: added }));
   }
@@ -231,6 +234,19 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
               <label>{t('mcp.form.name')}<input ref={nameRef} value={name} onChange={(e) => { setName(e.target.value); if (badField === 'name') setBadField(null); }} autoComplete="off" maxLength={80} placeholder={t('mcp.form.namePh')} aria-invalid={badField === 'name' || undefined} aria-describedby={badField === 'name' ? 'mcp-form-issue' : undefined} /></label>
               <label>{t('mcp.form.url')}<input ref={urlRef} value={url} onChange={(e) => { setUrl(e.target.value); if (badField === 'url') setBadField(null); }} type="url" inputMode="url" autoComplete="off" placeholder="https://mcp.example.com/sse" aria-invalid={badField === 'url' || undefined} aria-describedby={badField === 'url' ? 'mcp-form-issue mcp-url-help' : 'mcp-url-help'} /></label>
               <small id="mcp-url-help">{t('mcp.form.urlHelp')}</small>
+              <label>{t('mcp.form.auth')}
+                <select value={authKind} onChange={(e) => setAuthKind(e.target.value as 'none' | 'bearer')} aria-describedby="mcp-auth-help">
+                  <option value="none">{t('mcp.form.authNone')}</option>
+                  <option value="bearer">{t('mcp.form.authBearer')}</option>
+                </select>
+              </label>
+              <small id="mcp-auth-help">{t('mcp.form.authHelp')}</small>
+              {authKind === 'bearer' && (
+                <label>{t('mcp.form.secret')}
+                  <input type="password" value={secret} onChange={(e) => setSecret(e.target.value)} autoComplete="new-password" aria-describedby="mcp-secret-help" />
+                </label>
+              )}
+              {authKind === 'bearer' && <small id="mcp-secret-help">{t('mcp.form.secretHelp')}</small>}
               <button type="submit" className={s.primary} disabled={!can.register || busy === 'register'}>{busy === 'register' ? t('mcp.form.adding') : t('mcp.form.add')}</button>
             </fieldset>
             {formIssue && <IssueBox issue={formIssue} t={t} id="mcp-form-issue" />}

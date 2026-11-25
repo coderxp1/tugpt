@@ -138,8 +138,10 @@ export const mcpApi = {
     const tools = parseTools(r.data);
     return tools ? { ok: true, data: tools } : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
   },
-  register: (url: string, displayName: string, f?: typeof fetch) =>
-    postJson<{ endpoint: McpEndpoint }>(`${base}/endpoints`, { url: url.trim(), displayName: displayName.trim() }, f),
+  register: (url: string, displayName: string, f?: typeof fetch,
+    auth?: { kind: 'none' } | { kind: 'static_bearer'; secret: string }) =>
+    postJson<{ endpoint: McpEndpoint }>(`${base}/endpoints`,
+      { url: url.trim(), displayName: displayName.trim(), ...(auth ? { auth } : {}) }, f),
   /** M9: every snapshot POST carries an Idempotency-Key. Pass the SAME key when retrying a failed or timed-out
    * attempt: the server then returns the original snapshot instead of creating a second one. */
   snapshot: (endpointId: string, f?: typeof fetch, idempotencyKey: string = newIdempotencyKey()) =>

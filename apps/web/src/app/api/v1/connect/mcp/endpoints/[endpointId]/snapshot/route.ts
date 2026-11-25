@@ -56,6 +56,7 @@ import {
   SnapshotStoreBusyError, type ExternalMcpRepository,
 } from '@/lib/connect/external-mcp-repo';
 import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
+import { brokerStaticSecretSource } from '@/lib/chat/connect';
 import { createHash } from 'node:crypto';
 import type { ApiError } from '@/lib/draft-api/types';
 
