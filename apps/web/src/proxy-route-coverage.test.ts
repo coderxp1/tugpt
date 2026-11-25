@@ -59,6 +59,8 @@ const ROUTES: RouteExpectation[] = [
   { path: '/api/v1/connect/mcp/endpoints', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/approvals', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/approvals/revoke', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/approvals/requests', kind: 'api', type: 'protected', why: 'A5 approval requests: session + tenant resolution; any member may file, listing is role-scoped by the RPC.' },
+  { path: '/api/v1/connect/mcp/approvals/requests/[requestId]/decide', kind: 'api', type: 'protected', why: 'A5 request decision: session + owner/admin role enforced in the handler and re-checked in the RPC.' },
   { path: '/api/v1/connect/mcp/endpoints/[endpointId]', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/endpoints/[endpointId]/snapshot', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/mcp/endpoints/[endpointId]/activate', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },

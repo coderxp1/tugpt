@@ -137,12 +137,55 @@ export function newIdempotencyKey(): string {
 /** Snapshot failures after which a retry must reuse the same Idempotency-Key (the outcome may be pending). */
 export const SNAPSHOT_RETRY_SAME_KEY = new Set(['DATABASE_TIMEOUT', 'IN_PROGRESS', 'ENDPOINT_BUSY', 'SNAPSHOT_STORE_BUSY', 'SNAPSHOT_DEADLINE_EXCEEDED', 'NETWORK']);
 
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+export interface McpApprovalRequest {
+  id: string; connectionId: string; capability: string; argumentsSha256: string;
+  threadId: string; requestedBy: string; status: 'pending' | 'approved' | 'denied';
+  decidedBy: string | null; decidedAt: string | null; approvalId: string | null; createdAt: string;
+}
+
+export function parseApprovalRequests(body: unknown): McpApprovalRequest[] | null {
+  const list = isRec(body) ? body.requests : null;
+  if (!Array.isArray(list)) return null;
+  const out: McpApprovalRequest[] = [];
+  for (const r of list) {
+    if (!isRec(r) || typeof r.id !== 'string' || typeof r.connectionId !== 'string' || typeof r.capability !== 'string'
+      || typeof r.argumentsSha256 !== 'string' || typeof r.threadId !== 'string' || typeof r.requestedBy !== 'string'
+      || typeof r.createdAt !== 'string') return null;
+    out.push({
+      id: r.id, connectionId: r.connectionId, capability: r.capability, argumentsSha256: r.argumentsSha256,
+      threadId: r.threadId, requestedBy: r.requestedBy,
+      status: r.status === 'approved' || r.status === 'denied' ? r.status : 'pending',
+      decidedBy: typeof r.decidedBy === 'string' ? r.decidedBy : null,
+      decidedAt: typeof r.decidedAt === 'string' ? r.decidedAt : null,
+      approvalId: typeof r.approvalId === 'string' ? r.approvalId : null,
+      createdAt: r.createdAt,
+    });
+  }
+  return out;
+}
+
 export const mcpApi = {
   list: async (f?: typeof fetch): Promise<ApiResult<McpEndpoint[]>> => {
     const r = await getJson<unknown>(`${base}/endpoints`, f);
     if (!r.ok) return r;
     const list = parseEndpoints(r.data);
     return list ? { ok: true, data: list } : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
+  },
+  approvalRequests: async (f?: typeof fetch): Promise<ApiResult<McpApprovalRequest[]>> => {
+    const r = await getJson<unknown>(`${base}/approvals/requests`, f);
+    if (!r.ok) return r;
+    const list = parseApprovalRequests(r.data);
+    return list ? { ok: true, data: list } : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
+  },
+  decideApprovalRequest: async (requestId: string, decision: 'approved' | 'denied', ttlSeconds: number, f?: typeof fetch): Promise<ApiResult<{ id: string; status: string; approvalId: string | null }>> => {
+    const r = await postJson<unknown>(`${base}/approvals/requests/${enc(requestId)}/decide`, { decision, ttlSeconds }, f);
+    if (!r.ok) return r;
+    const req = isRec(r.data) ? r.data.request : null;
+    return isRec(req) && typeof req.id === 'string' && typeof req.status === 'string'
+      ? { ok: true, data: { id: req.id, status: req.status, approvalId: typeof req.approvalId === 'string' ? req.approvalId : null } }
+      : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
   },
   tools: async (snapshotId: string, f?: typeof fetch): Promise<ApiResult<McpTool[]>> => {
     const r = await getJson<unknown>(`${base}/snapshots/${enc(snapshotId)}/tools`, f);

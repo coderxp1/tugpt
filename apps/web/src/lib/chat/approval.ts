@@ -143,6 +143,7 @@ type FetchFn = (input: string, init?: RequestInit) => Promise<Response>;
 
 const HEADERS = { 'content-type': 'application/json', 'x-tugpt-csrf': '1' } as const;
 export const APPROVALS_URL = '/api/v1/connect/mcp/approvals';
+export const APPROVAL_REQUESTS_URL = '/api/v1/connect/mcp/approvals/requests';
 export const REVOKE_URL = '/api/v1/connect/mcp/approvals/revoke';
 export const STATUS_URL = '/api/v1/chat/approvals/status';
 
@@ -186,6 +187,15 @@ export async function requestApproval(p: PendingApproval, ttlSeconds: number, fe
   return call(fetchFn, APPROVALS_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify({ ...target(p), threadId: p.threadId, ttlSeconds }) },
     (b) => (isPlainObject(b) && b.approved === true && typeof b.id === 'string' && typeof b.expiresAt === 'string'
       ? { approved: true as const, id: b.id, expiresAt: new Date(b.expiresAt).getTime() } : undefined));
+}
+
+/** A5 (R6): a member files an approval request for this exact blocked call. Idempotent per call + requester. */
+export async function createApprovalRequest(p: PendingApproval, fetchFn: FetchFn = fetch): Promise<ApprovalResult<{ id: string; status: string }>> {
+  return call(fetchFn, APPROVAL_REQUESTS_URL, { method: 'POST', headers: HEADERS, body: JSON.stringify({ ...target(p), threadId: p.threadId }) },
+    (b) => {
+      const r = isPlainObject(b) ? b.request : undefined;
+      return isPlainObject(r) && typeof r.id === 'string' && typeof r.status === 'string' ? { id: r.id, status: r.status } : undefined;
+    });
 }
 
 /** Agent 2's POST /api/v1/connect/mcp/approvals/revoke. {revoked:false} means nothing unused was left to revoke. */

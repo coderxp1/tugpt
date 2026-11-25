@@ -4,7 +4,7 @@ import { ToolState, type ToolRunState } from './ToolState';
 import { useEffect, useId, useReducer, useState } from 'react';
 import { useT } from '@/i18n/provider';
 import {
-  approvalReducer, checkApproval, displayArguments, failureText, INITIAL_APPROVAL, permissionText, requestApproval, revokeApproval, TTL_OPTIONS, ttlLabel,
+  approvalReducer, checkApproval, createApprovalRequest, displayArguments, failureText, INITIAL_APPROVAL, permissionText, requestApproval, revokeApproval, TTL_OPTIONS, ttlLabel,
   type PendingApproval,
 } from '@/lib/chat/approval';
 import { toolProblem } from '@/lib/connect-ui/chat-errors';
@@ -41,6 +41,7 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
   const [ttl, setTtl] = useState<number>(TTL_OPTIONS[0].seconds);
   const [checked, setChecked] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [requestState, setRequestState] = useState<'idle' | 'sending' | 'sent' | 'failed'>('idle');
   const [clock, setClock] = useState(() => now());
   const id = useId();
   const perm = permissionText(approval.permissionClass, t);
@@ -70,6 +71,15 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
     if (!v.ok || !v.value.approved) { dispatch({ type: 'approve_failed', reason: 'not_recorded' }); return; }
     setClock(now());
     dispatch({ type: 'approved', id: r.value.id, expiresAt: r.value.expiresAt });
+  }
+
+  async function sendRequest() {
+    setNotice(null);
+    setRequestState('sending');
+    const r = await createApprovalRequest(approval, fetchFn);
+    if (!r.ok) { setRequestState('failed'); setNotice(t('chat.ap.requestFailed')); return; }
+    setRequestState('sent');
+    setNotice(t('chat.ap.requestSent'));
   }
 
   async function checkAgain() {
@@ -183,6 +193,7 @@ export function ApprovalCard({ approval, canApprove, busy, onRun, fetchFn = (i, 
         <div className={s.approvalForm}>
           <p className={s.muted}>{t('chat.ap.onlyAdmins')}</p>
           <div className={s.approvalActions}>
+            <button type="button" className={s.approve} onClick={() => void sendRequest()} disabled={requestState === 'sending' || requestState === 'sent'}>{t('chat.ap.request')}</button>
             <button type="button" className={s.reject} onClick={() => void checkAgain()}>{t('chat.ap.checkAgain')}</button>
             <button type="button" className={s.reject} onClick={() => dispatch({ type: 'reject' })}>{t('chat.ap.dismiss')}</button>
           </div>

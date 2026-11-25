@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BACKEND_GAPS, present, type RouteAvailability } from '@/lib/connect-ui/contract';
-import { endpointStatusText, mcpApi, mcpIssue, mcpOAuthStartUrl, newIdempotencyKey, permissionText, PERMISSION_LEVELS, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, invalidEndpointField, type McpEndpoint, type McpIssue, type McpTool, type PermissionLevel } from '@/lib/connect-ui/mcp';
+import { endpointStatusText, mcpApi, mcpIssue, mcpOAuthStartUrl, newIdempotencyKey, permissionText, PERMISSION_LEVELS, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, type McpApprovalRequest, invalidEndpointField, type McpEndpoint, type McpIssue, type McpTool, type PermissionLevel } from '@/lib/connect-ui/mcp';
 import { createTranslator, formatDate, type Translator } from '@/i18n';
 import { useT } from '@/i18n/provider';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -64,6 +64,7 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
   const [url, setUrl] = useState(''); const [name, setName] = useState('');
   const [authKind, setAuthKind] = useState<'none' | 'bearer' | 'oauth'>('none');
   const [policyOn, setPolicyOn] = useState<boolean | null>(null);
+  const [requests, setRequests] = useState<McpApprovalRequest[] | null>(null);
   const [secret, setSecret] = useState('');
   const [formIssue, setFormIssue] = useState<McpIssue | null>(null);
   const [badField, setBadField] = useState<'name' | 'url' | null>(null);
@@ -122,6 +123,27 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
     void mcpApi.policy(fetcher).then((r) => { if (live && r.ok) setPolicyOn(r.data.allowExternalTools); });
     return () => { live = false; };
   }, [canList, fetcher]);
+
+  const reloadRequests = useCallback(async () => {
+    const r = await mcpApi.approvalRequests(fetcher);
+    if (r.ok) setRequests(r.data);
+  }, [fetcher]);
+
+  useEffect(() => {
+    if (!canList) return;
+    let live = true;
+    void mcpApi.approvalRequests(fetcher).then((r) => { if (live && r.ok) setRequests(r.data); });
+    return () => { live = false; };
+  }, [canList, fetcher]);
+
+  async function decideRequest(req: McpApprovalRequest, decision: 'approved' | 'denied') {
+    setBusy(`req-${req.id}`); setNotice('');
+    const r = await mcpApi.decideApprovalRequest(req.id, decision, 900, fetcher);
+    setBusy(null);
+    if (!r.ok) { setFormIssue(mcpIssue(r, t)); return; }
+    setNotice(t('mcp.requests.decided'));
+    await reloadRequests();
+  }
 
   async function togglePolicy(next: boolean) {
     setBusy('policy'); setNotice('');
@@ -255,6 +277,30 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
                 {t('mcp.policy.label')}
               </label>
               <small>{t('mcp.policy.help')}</small>
+            </div>
+          )}
+          {requests !== null && requests.length > 0 && (
+            <div data-testid="mcp-approval-requests">
+              <h3>{t('mcp.requests.title')}</h3>
+              <p className={s.muted}>{t('mcp.requests.lead')}</p>
+              <ul>
+                {requests.map((r) => (
+                  <li key={r.id}>
+                    <code>{r.capability}</code>{' '}
+                    <span>{rows?.find((e) => e.id === r.connectionId)?.displayName ?? `${r.connectionId.slice(0, 8)}…`}</span>{' '}
+                    <span className={s.muted}>{t('mcp.requests.requestedBy')} {r.requestedBy.slice(0, 8)}… · {r.argumentsSha256.slice(0, 12)}</span>{' '}
+                    <span>{t(({ pending: 'mcp.requests.pending', approved: 'mcp.requests.approved', denied: 'mcp.requests.denied' } as const)[r.status])}</span>
+                    {r.status === 'pending' && (
+                      <>
+                        {' '}
+                        <button type="button" disabled={busy !== null} onClick={() => void decideRequest(r, 'approved')}>{t('mcp.requests.approve')}</button>
+                        {' '}
+                        <button type="button" disabled={busy !== null} onClick={() => void decideRequest(r, 'denied')}>{t('mcp.requests.deny')}</button>
+                      </>
+                    )}
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
           <form className={s.form} onSubmit={(e) => void register(e)} noValidate>

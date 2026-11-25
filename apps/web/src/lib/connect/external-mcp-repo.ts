@@ -37,6 +37,21 @@ export interface RecordedApproval {
   readonly expiresAt: string;
 }
 
+/** A member's request for an owner/admin to approve one exact blocked call (A5 / R6). */
+export interface ApprovalRequest {
+  id: string;
+  connectionId: string;
+  capability: string;
+  argumentsSha256: string;
+  threadId: string;
+  requestedBy: string;
+  status: 'pending' | 'approved' | 'denied';
+  decidedBy: string | null;
+  decidedAt: string | null;
+  approvalId: string | null;
+  createdAt: string;
+}
+
 /** Thrown by repository methods on a PostgREST error; pgCode is the SQLSTATE. */
 export class RepoError extends Error {
   constructor(public readonly pgCode: string, message: string) { super(message); }
@@ -112,6 +127,12 @@ export interface ExternalMcpRepository {
   setExternalToolsPolicy(orgId: string, enabled: boolean): Promise<boolean>;
   recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number, threadId: string): Promise<RecordedApproval>;
   revokeApproval(orgId: string, approvalId: string): Promise<boolean>;
+  /** A5: file (or re-read) the caller's pending approval request for one exact call. */
+  createApprovalRequest(orgId: string, input: { connectionId: string; capability: string; argumentsSha256: string; threadId: string }): Promise<{ id: string; status: string; createdAt: string }>;
+  /** A5: the org approval queue (owner/admin) or the caller's own requests (member); the RPC scopes by role. */
+  listApprovalRequests(orgId: string): Promise<ApprovalRequest[]>;
+  /** A5: owner/admin decision; 'approved' records the single-use approval for the requester. */
+  decideApprovalRequest(orgId: string, requestId: string, decision: 'approved' | 'denied', ttlSeconds: number): Promise<{ id: string; status: string; approvalId: string | null }>;
 }
 
 /** SQLSTATE the snapshot RPCs raise when a lock other than the endpoint row is not available within
@@ -500,6 +521,39 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       const { data, error } = await u.rpc('revoke_tool_approval', { p_organization_id: orgId, p_approval_id: approvalId });
       if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to revoke the approval');
       return data === true;
+    },
+
+    async createApprovalRequest(orgId, input) {
+      const { data, error } = await u.rpc('request_mcp_approval', {
+        p_organization_id: orgId, p_connection_id: input.connectionId, p_capability: input.capability,
+        p_arguments_sha256: input.argumentsSha256, p_thread_id: input.threadId,
+      });
+      if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to file the approval request');
+      const row = (Array.isArray(data) ? data[0] : data) as { id: string; status: string; created_at: string };
+      return { id: row.id, status: row.status, createdAt: row.created_at };
+    },
+
+    async listApprovalRequests(orgId) {
+      const { data, error } = await u.rpc('list_mcp_approval_requests', { p_organization_id: orgId });
+      if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to list approval requests');
+      return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+        id: String(r.id), connectionId: String(r.connection_id), capability: String(r.capability),
+        argumentsSha256: String(r.arguments_sha256), threadId: String(r.thread_id), requestedBy: String(r.requested_by),
+        status: (r.status === 'approved' || r.status === 'denied' ? r.status : 'pending') as ApprovalRequest['status'],
+        decidedBy: typeof r.decided_by === 'string' ? r.decided_by : null,
+        decidedAt: typeof r.decided_at === 'string' ? r.decided_at : null,
+        approvalId: typeof r.approval_id === 'string' ? r.approval_id : null,
+        createdAt: String(r.created_at),
+      }));
+    },
+
+    async decideApprovalRequest(orgId, requestId, decision, ttlSeconds) {
+      const { data, error } = await u.rpc('decide_mcp_approval_request', {
+        p_organization_id: orgId, p_request_id: requestId, p_decision: decision, p_ttl_seconds: ttlSeconds,
+      });
+      if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to decide the approval request');
+      const row = (Array.isArray(data) ? data[0] : data) as { id: string; status: string; approval_id: string | null };
+      return { id: row.id, status: row.status, approvalId: row.approval_id ?? null };
     },
   };
 }
