@@ -38,7 +38,11 @@ export async function GET(request: Request) {
     const a = await authAdmin(request);
     if ('error' in a) return a.error;
     const endpoints = await a.repo.listEndpoints(a.tenant.organizationId);
-    return NextResponse.json({ endpoints });
+    const enriched = await Promise.all(endpoints.map(async (e) => ({
+      ...e,
+      auth: await a.repo.getEndpointAuth(a.tenant.organizationId, e.id).catch(() => null),
+    })));
+    return NextResponse.json({ endpoints: enriched });
   } catch {
     return errorResponse(500, 'INTERNAL', 'Failed to list MCP endpoints');
   }
@@ -70,6 +74,7 @@ export async function POST(request: Request) {
       return errorResponse(400, 'INVALID_REQUEST', 'url must be https');
     }
 
+    let oauthRequested = false;
     // Endpoint authentication (ADR-021 R2 + the authentication policy): 'none' is the
     // explicit public class; 'static_bearer' attaches a broker-held credential. Any
     // other kind or placement is an unsupported mechanism and is refused here — an
@@ -90,6 +95,8 @@ export async function POST(request: Request) {
           return errorResponse(400, 'UNSUPPORTED_AUTH_PLACEMENT', 'Only Authorization: Bearer placement is supported in this release');
         }
         staticSecret = secret;
+      } else if (kind === 'oauth') {
+        oauthRequested = true;
       } else if (kind !== 'none') {
         return errorResponse(400, 'UNSUPPORTED_AUTH_KIND', 'Unsupported authentication kind');
       }
@@ -102,6 +109,16 @@ export async function POST(request: Request) {
     }
 
     const endpoint = await a.repo.createEndpoint(a.tenant.organizationId, a.user.id, url, displayName);
+    if (oauthRequested) {
+      try {
+        const connectionId = await a.repo.beginOAuthConnection(a.tenant.organizationId, endpoint.id);
+        return NextResponse.json({ endpoint, authKind: 'oauth', connectionId }, { status: 201 });
+      } catch {
+        // No half-registered state: the endpoint goes away with the failed attach.
+        await a.repo.deleteEndpoint(a.tenant.organizationId, endpoint.id).catch(() => undefined);
+        return errorResponse(502, 'OAUTH_ATTACH_FAILED', 'The OAuth connection could not be created; the endpoint was not registered');
+      }
+    }
     if (staticSecret && broker) {
       const attached = await attachStaticCredential({
         repo: a.repo, broker, organizationId: a.tenant.organizationId, endpointId: endpoint.id, secret: staticSecret,

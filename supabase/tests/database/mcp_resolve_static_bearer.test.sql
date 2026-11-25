@@ -5,7 +5,7 @@
 -- Any other stored credential (e.g. google) stays unresolvable (parity with
 -- mcp_resolve_requires_no_credential R8). ACL unchanged. Real Postgres, SET ROLE.
 BEGIN;
-SELECT plan(12);
+SELECT plan(13);
 
 INSERT INTO auth.users (id, email) VALUES ('b3000000-0000-4000-8000-0000000000a1', 'b3-owner@example.test');
 INSERT INTO public.profiles (id, email) VALUES ('b3000000-0000-4000-8000-0000000000a1', 'b3-owner@example.test') ON CONFLICT (id) DO NOTHING;
@@ -56,8 +56,10 @@ RESET ROLE;
 
 SELECT is(nullif(current_setting('b3.bearer'), '<null>')::jsonb->>'authConnectionId', 'b3000000-0000-4000-8000-0000000ca001',
   'S5: connected mcp_custom credential resolves and returns its connection id');
+SELECT is(nullif(current_setting('b3.bearer'), '<null>')::jsonb->>'authKind', 'static_bearer',
+  'S5b: a static bearer credential reports authKind static_bearer (20261125000004)');
 SELECT is((SELECT array_agg(k ORDER BY k) FROM jsonb_object_keys(nullif(current_setting('b3.bearer'), '<null>')::jsonb) k),
-  ARRAY['authConnectionId', 'endpointId', 'tools', 'url'], 'S6: result carries only endpointId/url/tools/authConnectionId (no secret material)');
+  ARRAY['authConnectionId', 'authKind', 'endpointId', 'tools', 'url'], 'S6: result carries only endpointId/url/tools/authConnectionId/authKind (no secret material)');
 SELECT is(current_setting('b3.reauth'),  '<null>', 'S7: mcp_custom requiring re-authorization does not resolve');
 SELECT is(current_setting('b3.google'),  '<null>', 'S8: a non-mcp_custom credential (google) still does not resolve');
 SELECT is(current_setting('b3.revoked'), '<null>', 'S9: revoked mcp_custom credential does not resolve');

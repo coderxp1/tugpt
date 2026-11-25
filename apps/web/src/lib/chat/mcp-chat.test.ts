@@ -295,6 +295,62 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
     });
   });
 
+  describe('OAuth endpoints (A2: org-owned mcp_custom OAuth token set)', () => {
+    // FAKE: the broker executor token source (a double) and the DB mirror of
+    // 20261125000004 in the harness. REAL: runtime, proxy, TLS MCP server.
+    const CONN_OAUTH = 'f0000000-0000-4000-8000-0000000000c2';
+    const TOKEN = 'tugpt-canary-oauth-token-0000';
+    type Read = { organizationId: string; connectionId: string };
+    function oauthCredential() {
+      state.connections = [{ id: CONN_OAUTH, organization_id: ORG_A, provider_key: 'mcp_custom', credential_kind: 'oauth_token_set',
+        owner_type: 'organization', status: 'connected', revoked_at: null }];
+      state.endpoints.find((e) => e.id === EP_A)!.auth_connection_id = CONN_OAUTH;
+    }
+    function tokenSource(result: { ok: true; value: { accessToken: string; expiresAt: string; credentialVersion: number } } | { ok: false; code: string }) {
+      const reads: Read[] = [];
+      return { reads, source: { async getAccessToken(scope: Read) { reads.push({ organizationId: scope.organizationId, connectionId: scope.connectionId }); return result as never; } } };
+    }
+    async function oauthToolset(tokens: ReturnType<typeof tokenSource>['source'], statics: ReturnType<typeof secrets>['source']) {
+      const db = fakeDb(state, OWNER_A);
+      const registry = await loadChatToolRegistry(db, ORG_A, { ...deps, serviceDb: fakeTrustedDb(state) as never, staticSecrets: statics });
+      const rows = await listCapabilities(db, ORG_A);
+      const row = rows.find((r) => r.connectionId === EP_A && r.capabilityKey === 'external.search_docs') as CapabilityRow;
+      return buildChatToolset(db, { organizationId: ORG_A, userId: OWNER_A, threadId: THREAD }, [row], { registry, mcp: deps, tokens });
+    }
+    function secrets(result: { ok: true; value: { secret: string; credentialVersion: number } } | { ok: false; code: string }) {
+      const reads: Read[] = [];
+      return { reads, source: { async getStaticSecret(scope: Read) { reads.push({ organizationId: scope.organizationId, connectionId: scope.connectionId }); return result as never; } } };
+    }
+
+    it('sends the broker OAuth access token on every MCP message; the static secret source is never read', async () => {
+      oauthCredential();
+      const tk = tokenSource({ ok: true, value: { accessToken: TOKEN, expiresAt: new Date(Date.now() + 3600e3).toISOString(), credentialVersion: 2 } });
+      const st = secrets({ ok: true, value: { secret: 'must-not-be-read', credentialVersion: 1 } });
+      const ts = await oauthToolset(tk.source, st.source);
+      const before = server.calls.length;
+      const r = await ts.execute(call('search_docs', { q: 'vpn' }));
+      expect(r.ok).toBe(true);
+      const mine = server.calls.slice(before);
+      expect(mine.map((c) => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call']);
+      expect(mine.every((c) => c.authorization === `Bearer ${TOKEN}`)).toBe(true);
+      expect(tk.reads).toEqual([{ organizationId: ORG_A, connectionId: CONN_OAUTH }]);
+      expect(st.reads).toEqual([]);
+      expect(JSON.stringify(r)).not.toContain(TOKEN);
+    });
+
+    it('broker REQUIRES_AUTHORIZATION for the OAuth connection -> REAUTHORIZATION_REQUIRED before any egress', async () => {
+      oauthCredential();
+      const tk = tokenSource({ ok: false, code: 'REQUIRES_AUTHORIZATION' });
+      const st = secrets({ ok: true, value: { secret: 'must-not-be-read', credentialVersion: 1 } });
+      const ts = await oauthToolset(tk.source, st.source);
+      const [calls, connects] = [server.calls.length, proxy.connects.length];
+      const r = await ts.execute(call('search_docs', { q: 'x' }));
+      expect(r).toMatchObject({ ok: false, code: 'REAUTHORIZATION_REQUIRED' });
+      expect([server.calls.length, proxy.connects.length]).toEqual([calls, connects]);
+      expect(st.reads).toEqual([]);
+    });
+  });
+
   describe('organization isolation', () => {
     it('never lists another organization\'s endpoints', async () => {
       const a = await session(OWNER_A);

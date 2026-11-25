@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { BACKEND_GAPS, present, type RouteAvailability } from '@/lib/connect-ui/contract';
-import { endpointStatusText, mcpApi, mcpIssue, newIdempotencyKey, permissionText, PERMISSION_LEVELS, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, invalidEndpointField, type McpEndpoint, type McpIssue, type McpTool, type PermissionLevel } from '@/lib/connect-ui/mcp';
+import { endpointStatusText, mcpApi, mcpIssue, mcpOAuthStartUrl, newIdempotencyKey, permissionText, PERMISSION_LEVELS, SNAPSHOT_RETRY_SAME_KEY, validateEndpointInput, invalidEndpointField, type McpEndpoint, type McpIssue, type McpTool, type PermissionLevel } from '@/lib/connect-ui/mcp';
 import { createTranslator, formatDate, type Translator } from '@/i18n';
 import { useT } from '@/i18n/provider';
 import { ConfirmDialog } from './ConfirmDialog';
@@ -62,7 +62,7 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
   const [rows, setRows] = useState<Row[] | null>(null);
   const [loadIssue, setLoadIssue] = useState<McpIssue | null>(null);
   const [url, setUrl] = useState(''); const [name, setName] = useState('');
-  const [authKind, setAuthKind] = useState<'none' | 'bearer'>('none');
+  const [authKind, setAuthKind] = useState<'none' | 'bearer' | 'oauth'>('none');
   const [policyOn, setPolicyOn] = useState<boolean | null>(null);
   const [secret, setSecret] = useState('');
   const [formIssue, setFormIssue] = useState<McpIssue | null>(null);
@@ -144,7 +144,9 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
     }
     setBusy('register'); setFormIssue(null); setBadField(null); setNotice('');
     const r = await mcpApi.register(url, name, fetcher,
-      authKind === 'bearer' ? { kind: 'static_bearer', secret } : { kind: 'none' });
+      authKind === 'bearer' ? { kind: 'static_bearer', secret }
+        : authKind === 'oauth' ? { kind: 'oauth' }
+        : { kind: 'none' });
     setBusy(null);
     if (!r.ok) { setFormIssue(mcpIssue(r, t)); return; }
     const added = name.trim();
@@ -262,9 +264,10 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
               <label>{t('mcp.form.url')}<input ref={urlRef} value={url} onChange={(e) => { setUrl(e.target.value); if (badField === 'url') setBadField(null); }} type="url" inputMode="url" autoComplete="off" placeholder="https://mcp.example.com/sse" aria-invalid={badField === 'url' || undefined} aria-describedby={badField === 'url' ? 'mcp-form-issue mcp-url-help' : 'mcp-url-help'} /></label>
               <small id="mcp-url-help">{t('mcp.form.urlHelp')}</small>
               <label>{t('mcp.form.auth')}
-                <select value={authKind} onChange={(e) => setAuthKind(e.target.value as 'none' | 'bearer')} aria-describedby="mcp-auth-help">
+                <select value={authKind} onChange={(e) => setAuthKind(e.target.value as 'none' | 'bearer' | 'oauth')} aria-describedby="mcp-auth-help">
                   <option value="none">{t('mcp.form.authNone')}</option>
                   <option value="bearer">{t('mcp.form.authBearer')}</option>
+                  <option value="oauth">{t('mcp.form.authOAuth')}</option>
                 </select>
               </label>
               <small id="mcp-auth-help">{t('mcp.form.authHelp')}</small>
@@ -324,6 +327,9 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
                       ? <button type="button" className={s.secondary} disabled={!can.deactivate || busy !== null} onClick={() => void toggle(e, 'deactivate')}>{busy === `deactivate:${e.id}` ? t('mcp.btn.turningOff') : t('mcp.btn.off')}</button>
                       : <button type="button" className={s.secondary} disabled={!can.activate || !e.snapshot?.approved || busy !== null} onClick={() => void toggle(e, 'activate')}>{busy === `activate:${e.id}` ? t('mcp.btn.turningOn') : t('mcp.btn.on')}</button>}
                     <button type="button" className={s.secondary} disabled={!can.remove || busy !== null} onClick={(ev) => { deleteTrigger.current = ev.currentTarget; setDeleting(e); }}>{t('mcp.btn.remove')}</button>
+                    {e.auth?.kind === 'oauth_token_set' && (e.auth.status === 'connected'
+                      ? <span className={s.badge}>{t('mcp.oauth.connected')}</span>
+                      : <a className={s.secondary} href={mcpOAuthStartUrl(e.id)}>{e.auth.status === 'requires_authorization' ? t('mcp.oauth.authorize') : t('mcp.oauth.reauthorize')}</a>)}
                   </div>
                   {e.issue && <IssueBox issue={e.issue} t={t} />}
                   {e.snapshot && e.tools && (e.snapshot.approved ? (

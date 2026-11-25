@@ -272,11 +272,22 @@ export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: rea
 
   const inner = deps.tokens ?? brokerTokenSource();
   const authConnectionFor = (endpointId: string) => mcpEntries.find((c) => c.row.connectionId === endpointId)?.mcp?.authConnectionId ?? null;
+  const authKindFor = (endpointId: string) => mcpEntries.find((c) => c.row.connectionId === endpointId)?.mcp?.authKind ?? null;
   const tokens: AccessTokenSource = {
     async getAccessToken(scope) {
       if (!isMcp(scope.connectionId)) return inner.getAccessToken(scope);
       const auth = authConnectionFor(scope.connectionId);
       if (auth === null) return MCP_NO_CREDENTIAL.getAccessToken(scope);
+      if (authKindFor(scope.connectionId) === 'oauth') {
+        // OAuth endpoint (A2): the broker executor returns the connection's
+        // current access token (refreshing broker-side when it can). Its
+        // typed failures (REQUIRES_AUTHORIZATION, REFRESH_FAILED, ...) pass
+        // through unchanged — never a fallback to a static read or to an
+        // unauthenticated call.
+        if (scope.organizationId !== ctx.organizationId) return { ok: false, code: 'NOT_FOUND' };
+        try { return await inner.getAccessToken({ organizationId: ctx.organizationId, connectionId: auth }); }
+        catch { return { ok: false, code: 'UNAVAILABLE' }; }
+      }
       // Authenticated endpoint: read the bearer now (after authorization + approval, before egress), for the
       // endpoint's own connection in THIS organization. Held in memory for this call only.
       if (scope.organizationId !== ctx.organizationId) return { ok: false, code: 'NOT_FOUND' };

@@ -435,10 +435,12 @@ export function fakeDb(state: FakeState, userId: string, identity: FakeIdentity 
         return { data: out, error: null };
       }
       if (fn === 'resolve_mcp_execution') {
-        // Mirrors 20261120000014: anonymous, or credentialed only by an org-owned, connected, unrevoked
-        // mcp_custom / mcp_static_bearer connection of the same organization.
+        // Mirrors 20261125000004: anonymous, or credentialed only by an org-owned, connected, unrevoked
+        // mcp_custom connection (static bearer OR OAuth token set) of the same organization;
+        // the result reports authKind alongside the connection id.
         const credentialOk = (x: Row) => x.auth_connection_id == null || state.connections.some((c) => c.id === x.auth_connection_id
-          && c.organization_id === org && c.provider_key === 'mcp_custom' && c.credential_kind === 'mcp_static_bearer'
+          && c.organization_id === org && c.provider_key === 'mcp_custom'
+          && (c.credential_kind === 'mcp_static_bearer' || c.credential_kind === 'oauth_token_set')
           && c.owner_type === 'organization' && c.status === 'connected' && c.revoked_at == null);
         const e = state.endpoints.find((x) => x.id === args.p_endpoint_id && x.organization_id === org && x.status === 'active' && credentialOk(x));
         if (!e) return { data: null, error: null }; // the SQL function returns NULL (no row), not an error
@@ -446,7 +448,9 @@ export function fakeDb(state: FakeState, userId: string, identity: FakeIdentity 
         const newest = snaps[0];
         if (!newest || newest.approved_at == null || newest.revoked_at != null) return { data: null, error: null };
         const tools = state.tools.filter((t) => t.snapshot_id === newest.id && t.organization_id === org).map((t) => ({ name: t.name, description: t.description, inputSchema: t.input_schema, permissionClass: t.permission_class }));
-        return { data: { endpointId: e.id, url: e.url, authConnectionId: e.auth_connection_id ?? null, tools }, error: null };
+        const conn = e.auth_connection_id == null ? null : state.connections.find((c) => c.id === e.auth_connection_id);
+        const authKind = e.auth_connection_id == null ? null : conn?.credential_kind === 'oauth_token_set' ? 'oauth' : 'static_bearer';
+        return { data: { endpointId: e.id, url: e.url, authConnectionId: e.auth_connection_id ?? null, authKind, tools }, error: null };
       }
             if (fn === 'record_mcp_tool_call') {
         // Mirrors 20261115000013+ (trusted caller supplies the actor): the ACTOR must be a member of the organization.

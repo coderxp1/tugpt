@@ -48,6 +48,8 @@ const ROUTES: RouteExpectation[] = [
   { path: '/api/v1/control-center/health', kind: 'api', type: 'operator', why: 'Control Center health probe: reports environment presence/reachability; operator-token gated by the proxy, no tenant session.' },
   { path: '/api/v1/control-center/lab', kind: 'api', type: 'operator', why: 'Control Center lab: executes product code on demand; operator-token gated by the proxy, no tenant session.' },
   { path: '/api/v1/connect/mcp/policy', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/mcp/oauth/start', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
+  { path: '/api/v1/connect/oauth/callback/mcp', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/google/start', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/google/disconnect', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/microsoft/start', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },

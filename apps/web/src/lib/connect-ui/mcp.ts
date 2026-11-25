@@ -24,7 +24,13 @@ export const ENDPOINT_STATUS_TEXT: Record<EndpointStatus, string> = { pending: e
 /** The latest tool list of an endpoint, as GET /mcp/endpoints reports it (list_endpoints_admin). */
 export interface SnapshotState { id: string; toolCount: number; approved: boolean }
 
-export interface McpEndpoint { id: string; url: string; displayName: string; status: EndpointStatus; createdAt?: string; snapshot: SnapshotState | null }
+export interface McpEndpointAuth { kind: string; status: string }
+
+export interface McpEndpoint { id: string; url: string; displayName: string; status: EndpointStatus; createdAt?: string; snapshot: SnapshotState | null; auth?: McpEndpointAuth | null }
+
+/** Browser entry into the MCP OAuth flow (A2); the start route redirects to the authorization server. */
+export const mcpOAuthStartUrl = (endpointId: string): string =>
+  `/api/v1/connect/mcp/oauth/start?endpointId=${encodeURIComponent(endpointId)}`;
 
 /** A discovered tool as stored by the backend; permissionClass is the stored class (backend default: write). */
 export interface McpTool { name: string; description: string; permissionClass: PermissionLevel }
@@ -47,10 +53,16 @@ export function parseEndpoints(data: unknown): McpEndpoint[] | null {
   return list.flatMap((e) => {
     const r = e as Record<string, unknown>;
     if (typeof r?.id !== 'string' || typeof r.url !== 'string' || typeof r.displayName !== 'string' || !STATUSES.includes(r.status as string)) return [];
+    const auth = (r.auth && typeof r.auth === 'object'
+      && typeof (r.auth as { kind?: unknown }).kind === 'string'
+      && typeof (r.auth as { status?: unknown }).status === 'string')
+      ? { kind: (r.auth as { kind: string }).kind, status: (r.auth as { status: string }).status }
+      : null;
     return [{
       id: r.id, url: r.url, displayName: r.displayName, status: r.status as EndpointStatus,
       ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
       snapshot: parseSnapshot(r.snapshot),
+      ...('auth' in r ? { auth } : {}),
     }];
   });
 }
@@ -149,7 +161,7 @@ export const mcpApi = {
   setPolicy: (enabled: boolean, f?: typeof fetch) =>
     postJson<{ allowExternalTools: boolean }>(`${base}/policy`, { enabled }, f),
   register: (url: string, displayName: string, f?: typeof fetch,
-    auth?: { kind: 'none' } | { kind: 'static_bearer'; secret: string }) =>
+    auth?: { kind: 'none' } | { kind: 'static_bearer'; secret: string } | { kind: 'oauth' }) =>
     postJson<{ endpoint: McpEndpoint }>(`${base}/endpoints`,
       { url: url.trim(), displayName: displayName.trim(), ...(auth ? { auth } : {}) }, f),
   /** M9: every snapshot POST carries an Idempotency-Key. Pass the SAME key when retrying a failed or timed-out

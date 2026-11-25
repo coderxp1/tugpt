@@ -98,6 +98,14 @@ export interface ExternalMcpRepository {
   /** Owner/admin read of the endpoint's auth connection for broker-resolved discovery; null when
    * the endpoint is public (no credential attached). Same error contract as getEndpointUrl. */
   getEndpointAuthConnection(orgId: string, endpointId: string): Promise<string | null>;
+  /** Plan A2: create the mcp_custom OAuth account and link it to the endpoint (status
+   * requires_authorization). Same error contract as beginStaticCredential. */
+  beginOAuthConnection(orgId: string, endpointId: string): Promise<string>;
+  /** Plan A2: detach and delete an mcp_custom OAuth account (disconnect / compensation). */
+  removeOAuthConnection(orgId: string, connectionId: string): Promise<boolean>;
+  /** Plan A2: kind-aware auth read for broker-resolved discovery and the panel:
+   * { connectionId, kind, status } or null when the endpoint is public. */
+  getEndpointAuth(orgId: string, endpointId: string): Promise<{ connectionId: string; kind: string; status: string } | null>;
   /** Plan A3: the org's external-tools lever. False when no policy row exists (fail closed). */
   getExternalToolsPolicy(orgId: string): Promise<boolean>;
   /** Owner/admin write of the lever via RPC; resolves to the resulting state. */
@@ -417,6 +425,46 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       if (data === null || data === undefined) return null;
       if (typeof data !== 'string') throw new Error('invalid get_mcp_endpoint_auth_connection result');
       return data;
+    },
+
+    async beginOAuthConnection(orgId, endpointId) {
+      const { data, error } = await u.rpc('begin_mcp_oauth_connection', {
+        p_organization_id: orgId, p_endpoint_id: endpointId,
+      });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === 'PT409') throw new AuthAlreadyAttachedError();
+        if (e?.code === 'P0002') throw new EndpointNotFoundError();
+        throw endpointLookupError(e);
+      }
+      if (typeof data !== 'string') throw new Error('invalid begin_mcp_oauth_connection result');
+      return data;
+    },
+
+    async removeOAuthConnection(orgId, connectionId) {
+      const { data, error } = await u.rpc('remove_mcp_oauth_connection', {
+        p_organization_id: orgId, p_connection_id: connectionId,
+      });
+      if (error) throw endpointLookupError(error as PgError);
+      return data === true;
+    },
+
+    async getEndpointAuth(orgId, endpointId) {
+      if (!isUuid(endpointId)) return null;
+      const { data, error } = await u.rpc('get_mcp_endpoint_auth', {
+        p_organization_id: orgId, p_endpoint_id: endpointId,
+      });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === 'P0002') throw new EndpointNotFoundError();
+        throw endpointLookupError(e);
+      }
+      if (data === null || data === undefined) return null;
+      const d = data as { connectionId?: unknown; kind?: unknown; status?: unknown };
+      if (typeof d.connectionId !== 'string' || typeof d.kind !== 'string' || typeof d.status !== 'string') {
+        throw new Error('invalid get_mcp_endpoint_auth result');
+      }
+      return { connectionId: d.connectionId, kind: d.kind, status: d.status };
     },
 
     async getExternalToolsPolicy(orgId) {

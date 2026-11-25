@@ -86,6 +86,8 @@ export interface McpToolEntry {
   readonly endpointHost: string;
   /** The endpoint's mcp_custom connection id (trusted path only), or null when anonymous. */
   readonly authConnectionId: string | null;
+  /** How the broker resolves that connection at call time (A2); null when anonymous. */
+  readonly authKind: 'oauth' | 'static_bearer' | null;
   readonly tool: ConnectTool<never>;
 }
 
@@ -222,18 +224,18 @@ export async function loadChatToolRegistry(db: ChatDb, orgId: string, deps: McpD
   } catch { return makeRegistry(builtins, [], gate, audit); }
 
   const serviceDb = deps.serviceDb;
-  const urls = new Map<string, { url: string; authConnectionId: string | null }>();
+  const urls = new Map<string, { url: string; authConnectionId: string | null; authKind: 'oauth' | 'static_bearer' | null }>();
   if (serviceDb) {
     for (const id of new Set(tools.map((t) => t.endpointId))) {
       const r = await resolveMcpExecution(serviceDb, orgId, id);
-      if (r?.url) urls.set(id, { url: r.url, authConnectionId: r.authConnectionId });
+      if (r?.url) urls.set(id, { url: r.url, authConnectionId: r.authConnectionId, authKind: r.authKind });
     }
   }
   const entries: McpToolEntry[] = [];
   for (const t of tools) {
     const resolved = urls.get(t.endpointId);
     if (!resolved || !validTool(t) || !runnable.has(t.endpointId)) continue;
-    const { url, authConnectionId } = resolved;
+    const { url, authConnectionId, authKind } = resolved;
     const capability = `external.${t.name}`;
     if (entries.some((e) => e.endpointId === t.endpointId && e.capability === capability)) continue;
     const tool = createExternalMcpTool(
@@ -243,7 +245,7 @@ export async function loadChatToolRegistry(db: ChatDb, orgId: string, deps: McpD
     ) as unknown as ConnectTool<never>;
     const endpointHost = hostOf(url);
     if (!endpointHost) continue;
-    entries.push({ endpointId: t.endpointId, capability, permissionClass: t.permissionClass, endpointHost, authConnectionId, tool });
+    entries.push({ endpointId: t.endpointId, capability, permissionClass: t.permissionClass, endpointHost, authConnectionId, authKind, tool });
   }
   return makeRegistry(builtins, entries, gate, audit);
 }
