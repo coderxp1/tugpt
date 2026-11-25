@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolAuditEvent } from '@tugpt/connect-runtime';
-import { buildChatToolset, conflictingAttachments, toolAvailable } from './connect';
+import { autoOfferedReadTools, buildChatToolset, conflictingAttachments, toolAvailable } from './connect';
 import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch } from './mcp-egress';
 import { loadChatToolRegistry, mcpUnavailableReason, runnableEndpoints, type McpAuditSink, type McpDeps } from './mcp';
@@ -177,6 +177,177 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
       const { registry, pick } = await session(OWNER_A);
       expect(conflictingAttachments([pick(EP_A, 'search_docs'), pick(EP_A_SECOND, 'search_docs')], registry))
         .toEqual({ providers: ['Acme Docs MCP', 'Second MCP'], toolName: 'search_docs' });
+    });
+  });
+
+  describe('authenticated endpoints (B3: org-owned mcp_custom static bearer via broker caller executor)', () => {
+    // FAKE: the broker (a StaticSecretSource double) and the DB mirror of 20261120000014. REAL: runtime, proxy, TLS MCP server.
+    const CONN = 'f0000000-0000-4000-8000-0000000000b3';
+    const CANARY = 'tugpt-canary-b3-chat-0000000000';
+    type Read = { organizationId: string; connectionId: string };
+    function secrets(result: { ok: true; value: { secret: string; credentialVersion: number } } | { ok: false; code: string }) {
+      const reads: Read[] = [];
+      return { reads, source: { async getStaticSecret(scope: Read) { reads.push({ organizationId: scope.organizationId, connectionId: scope.connectionId }); return result as never; } } };
+    }
+    function credential(status = 'connected', provider = 'mcp_custom') {
+      state.connections = [{ id: CONN, organization_id: ORG_A, provider_key: provider, credential_kind: provider === 'mcp_custom' ? 'mcp_static_bearer' : 'oauth_token_set',
+        owner_type: 'organization', status, revoked_at: status === 'disconnected' ? '2026-11-20T00:00:00Z' : null }];
+      state.endpoints.find((e) => e.id === EP_A)!.auth_connection_id = CONN;
+    }
+
+    it('resolves a connected mcp_custom credential on the trusted path and returns only its id', async () => {
+      credential();
+      const resolved = await fakeTrustedDb(state).rpc('resolve_mcp_execution', { p_organization_id: ORG_A, p_endpoint_id: EP_A });
+      expect((resolved.data as { authConnectionId?: unknown }).authConnectionId).toBe(CONN);
+      const { registry, pick } = await session(OWNER_A, ORG_A, { ...deps, staticSecrets: secrets({ ok: false, code: 'UNAVAILABLE' }).source });
+      expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(true);
+    });
+
+    it('sends Authorization: Bearer <secret from broker> on every MCP message; the secret is read per call for the right org + connection', async () => {
+      credential();
+      const s = secrets({ ok: true, value: { secret: CANARY, credentialVersion: 1 } });
+      const d = { ...deps, staticSecrets: s.source };
+      const { pick, toolset } = await session(OWNER_A, ORG_A, d);
+      const before = server.calls.length;
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'vpn' }));
+      expect(r.ok).toBe(true);
+      const mine = server.calls.slice(before);
+      expect(mine.map((c) => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call']);
+      expect(mine.every((c) => c.authorization === `Bearer ${CANARY}`)).toBe(true);
+      expect(s.reads).toEqual([{ organizationId: ORG_A, connectionId: CONN }]);
+      expect(JSON.stringify(r)).not.toContain(CANARY);
+      expect(JSON.stringify(audits)).not.toContain(CANARY);
+    });
+
+    it.each(['NOT_CONNECTED', 'REQUIRES_AUTHORIZATION'])('broker %s -> REAUTHORIZATION_REQUIRED before any egress', async (code) => {
+      credential();
+      const d = { ...deps, staticSecrets: secrets({ ok: false, code }).source };
+      const { pick, toolset } = await session(OWNER_A, ORG_A, d);
+      const [calls, connects] = [server.calls.length, proxy.connects.length];
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }));
+      expect(r).toMatchObject({ ok: false, code: 'REAUTHORIZATION_REQUIRED' });
+      expect([server.calls.length, proxy.connects.length]).toEqual([calls, connects]);
+    });
+
+    it('no broker configured (default source, no executor key) -> refused before any egress', async () => {
+      credential();
+      const { pick, toolset } = await session(OWNER_A, ORG_A, { ...deps, env: { ...deps.env } });
+      const [calls, connects] = [server.calls.length, proxy.connects.length];
+      const r = await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }));
+      expect(r.ok).toBe(false);
+      expect([server.calls.length, proxy.connects.length]).toEqual([calls, connects]);
+    });
+
+    it('anonymous endpoints never read a secret and send no Authorization header', async () => {
+      const s = secrets({ ok: true, value: { secret: CANARY, credentialVersion: 1 } });
+      const { pick, toolset } = await session(OWNER_A, ORG_A, { ...deps, staticSecrets: s.source });
+      const before = server.calls.length;
+      expect((await toolset([pick(EP_A, 'search_docs')]).execute(call('search_docs', { q: 'x' }))).ok).toBe(true);
+      expect(s.reads).toEqual([]);
+      expect(server.calls.slice(before).every((c) => c.authorization === null)).toBe(true);
+    });
+
+    it.each([['requires_authorization', 'mcp_custom'], ['disconnected', 'mcp_custom'], ['connected', 'google']])(
+      'a %s %s credential is not runnable', async (status, provider) => {
+        credential(status, provider);
+        const { registry, pick } = await session(OWNER_A, ORG_A, { ...deps, staticSecrets: secrets({ ok: true, value: { secret: CANARY, credentialVersion: 1 } }).source });
+        expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(false);
+      });
+  });
+
+  describe('automatic offering (A4 / decision D3)', () => {
+    it('offers approved read tools with no @-attachment and runs them without an approval claim', async () => {
+      const { registry, rows, toolset } = await session(OWNER_A);
+      const auto = autoOfferedReadTools(rows, [], registry);
+      // EP_A search_docs (read) only: create_ticket (write) and delete_project
+      // (irreversible) are never auto-offered; EP_A_SECOND's search_docs loses
+      // the tool-name conflict deterministically; the pending endpoint is not
+      // connected; org B is another tenant.
+      expect(auto.map((r) => [r.connectionId, r.capabilityKey])).toEqual([[EP_A, 'external.search_docs']]);
+      const ts = toolset(auto);
+      expect(ts.specs.map((s) => s.name)).toEqual(['search_docs']);
+      const r = await ts.execute(call('search_docs', { q: 'vpn' }, 'c-auto'));
+      expect(r.ok).toBe(true);
+      expect(state.rpcLog.some((x) => x.fn.startsWith('claim_tool_approval'))).toBe(false);
+      expect(audits.map((a) => [a.capability, a.outcome])).toEqual([['external.search_docs', 'ok']]);
+    });
+
+    it('never duplicates or displaces an @-attachment', async () => {
+      const { registry, rows, pick, toolset } = await session(OWNER_A);
+      const attached = [pick(EP_A, 'create_ticket')];
+      const auto = autoOfferedReadTools(rows, attached, registry);
+      expect(auto.map((r) => r.capabilityKey)).toEqual(['external.search_docs']);
+      const ts = toolset([...attached, ...auto]);
+      expect(ts.specs.map((s) => s.name).sort()).toEqual(['create_ticket', 'search_docs']);
+      // Attaching the read tool itself leaves nothing to auto-offer.
+      expect(autoOfferedReadTools(rows, [pick(EP_A, 'search_docs')], registry)).toEqual([]);
+    });
+
+    it('offers nothing when the MCP gate is closed', async () => {
+      const closed: McpDeps = { ...deps, env: { TUGPT_CUSTOMER_MCP_ENABLED: 'false', TUGPT_CHAT_MCP_EXECUTION_ENABLED: 'false', CONNECT_EGRESS_PROXY: proxy.url } };
+      const { registry, rows } = await session(OWNER_A, ORG_A, closed);
+      expect(autoOfferedReadTools(rows, [], registry)).toEqual([]);
+    });
+
+    it('offers nothing to a plain member (the registry is owner/admin scoped)', async () => {
+      const { registry, rows } = await session(MEMBER_A);
+      expect(autoOfferedReadTools(rows, [], registry)).toEqual([]);
+    });
+  });
+
+  describe('OAuth endpoints (A2: org-owned mcp_custom OAuth token set)', () => {
+    // FAKE: the broker executor token source (a double) and the DB mirror of
+    // 20261125000004 in the harness. REAL: runtime, proxy, TLS MCP server.
+    const CONN_OAUTH = 'f0000000-0000-4000-8000-0000000000c2';
+    const TOKEN = 'tugpt-canary-oauth-token-0000';
+    type Read = { organizationId: string; connectionId: string };
+    function oauthCredential() {
+      state.connections = [{ id: CONN_OAUTH, organization_id: ORG_A, provider_key: 'mcp_custom', credential_kind: 'oauth_token_set',
+        owner_type: 'organization', status: 'connected', revoked_at: null }];
+      state.endpoints.find((e) => e.id === EP_A)!.auth_connection_id = CONN_OAUTH;
+    }
+    function tokenSource(result: { ok: true; value: { accessToken: string; expiresAt: string; credentialVersion: number } } | { ok: false; code: string }) {
+      const reads: Read[] = [];
+      return { reads, source: { async getAccessToken(scope: Read) { reads.push({ organizationId: scope.organizationId, connectionId: scope.connectionId }); return result as never; } } };
+    }
+    async function oauthToolset(tokens: ReturnType<typeof tokenSource>['source'], statics: ReturnType<typeof secrets>['source']) {
+      const db = fakeDb(state, OWNER_A);
+      const registry = await loadChatToolRegistry(db, ORG_A, { ...deps, serviceDb: fakeTrustedDb(state) as never, staticSecrets: statics });
+      const rows = await listCapabilities(db, ORG_A);
+      const row = rows.find((r) => r.connectionId === EP_A && r.capabilityKey === 'external.search_docs') as CapabilityRow;
+      return buildChatToolset(db, { organizationId: ORG_A, userId: OWNER_A, threadId: THREAD }, [row], { registry, mcp: deps, tokens });
+    }
+    function secrets(result: { ok: true; value: { secret: string; credentialVersion: number } } | { ok: false; code: string }) {
+      const reads: Read[] = [];
+      return { reads, source: { async getStaticSecret(scope: Read) { reads.push({ organizationId: scope.organizationId, connectionId: scope.connectionId }); return result as never; } } };
+    }
+
+    it('sends the broker OAuth access token on every MCP message; the static secret source is never read', async () => {
+      oauthCredential();
+      const tk = tokenSource({ ok: true, value: { accessToken: TOKEN, expiresAt: new Date(Date.now() + 3600e3).toISOString(), credentialVersion: 2 } });
+      const st = secrets({ ok: true, value: { secret: 'must-not-be-read', credentialVersion: 1 } });
+      const ts = await oauthToolset(tk.source, st.source);
+      const before = server.calls.length;
+      const r = await ts.execute(call('search_docs', { q: 'vpn' }));
+      expect(r.ok).toBe(true);
+      const mine = server.calls.slice(before);
+      expect(mine.map((c) => c.method)).toEqual(['initialize', 'notifications/initialized', 'tools/call']);
+      expect(mine.every((c) => c.authorization === `Bearer ${TOKEN}`)).toBe(true);
+      expect(tk.reads).toEqual([{ organizationId: ORG_A, connectionId: CONN_OAUTH }]);
+      expect(st.reads).toEqual([]);
+      expect(JSON.stringify(r)).not.toContain(TOKEN);
+    });
+
+    it('broker REQUIRES_AUTHORIZATION for the OAuth connection -> REAUTHORIZATION_REQUIRED before any egress', async () => {
+      oauthCredential();
+      const tk = tokenSource({ ok: false, code: 'REQUIRES_AUTHORIZATION' });
+      const st = secrets({ ok: true, value: { secret: 'must-not-be-read', credentialVersion: 1 } });
+      const ts = await oauthToolset(tk.source, st.source);
+      const [calls, connects] = [server.calls.length, proxy.connects.length];
+      const r = await ts.execute(call('search_docs', { q: 'x' }));
+      expect(r).toMatchObject({ ok: false, code: 'REAUTHORIZATION_REQUIRED' });
+      expect([server.calls.length, proxy.connects.length]).toEqual([calls, connects]);
+      expect(st.reads).toEqual([]);
     });
   });
 

@@ -21,6 +21,13 @@ export interface ActiveMcpTool {
 export interface McpExecutionResolution {
   readonly endpointId: string;
   readonly url: string;
+  /**
+   * Id of the endpoint's org-owned, connected mcp_custom static-bearer connection, or null when the endpoint is
+   * anonymous (20261120000014). Only the id: the secret is read per call from the credential broker.
+   */
+  readonly authConnectionId: string | null;
+  /** Credential kind of the resolved connection (20261125000004); null when anonymous. */
+  readonly authKind: 'oauth' | 'static_bearer' | null;
   readonly tools: readonly ActiveMcpTool[];
 }
 
@@ -35,7 +42,16 @@ export async function listActiveMcpTools(db: SupabaseClient, orgId: string): Pro
 export async function resolveMcpExecution(db: SupabaseClient, orgId: string, endpointId: string): Promise<McpExecutionResolution | null> {
   const { data, error } = await db.rpc('resolve_mcp_execution', { p_organization_id: orgId, p_endpoint_id: endpointId });
   if (error || !data || typeof data !== 'object') return null;
-  return data as McpExecutionResolution;
+  const d = data as Record<string, unknown>;
+  const auth = d.authConnectionId;
+  if (auth !== undefined && auth !== null && typeof auth !== 'string') return null;
+  const kind = d.authKind;
+  if (kind !== undefined && kind !== null && kind !== 'oauth' && kind !== 'static_bearer') return null;
+  return {
+    ...(d as unknown as McpExecutionResolution),
+    authConnectionId: typeof auth === 'string' ? auth : null,
+    authKind: kind === 'oauth' || kind === 'static_bearer' ? kind : null,
+  };
 }
 
 export function mcpConnectionDirectory(db: SupabaseClient, orgId: string): ConnectionDirectory {

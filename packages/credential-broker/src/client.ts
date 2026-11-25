@@ -8,7 +8,7 @@
  * logged and never part of a result.
  */
 import { signRequest, type Caller } from './signing.js';
-import type { AccessTokenGrant, TokenSet } from './service.js';
+import type { AccessTokenGrant, StaticSecretGrant, TokenSet } from './service.js';
 import type { ConnectionStatus } from './store.js';
 
 export type BrokerClientFailure =
@@ -98,8 +98,55 @@ export class BrokerClient {
     return this.post('/v1/oauth-result', { ...scope, tokenSet }, (v) => v ?? {});
   }
 
+  /** web: store/rotate a customer MCP static secret. The result never contains the secret. */
+  storeStaticSecret(scope: ConnectionScope, secret: string): Promise<BrokerResult<{ credentialVersion: number }>> {
+    return this.post('/v1/static-secret', { ...scope, secret }, (v) => {
+      const n = (v as { credentialVersion?: unknown }).credentialVersion;
+      return typeof n === 'number' && Number.isInteger(n) && n > 0 ? { credentialVersion: n } : null;
+    });
+  }
+
+  /** worker: obtain the static secret for one call. Hold it in memory only; never log it. */
+  getStaticSecret(scope: ConnectionScope): Promise<BrokerResult<StaticSecretGrant>> {
+    return this.post('/v1/static-secret/read', scope, (v) => {
+      const g = v as { secret?: unknown; credentialVersion?: unknown };
+      return typeof g.secret === 'string' && g.secret !== '' && typeof g.credentialVersion === 'number'
+        ? { secret: g.secret, credentialVersion: g.credentialVersion }
+        : null;
+    });
+  }
+
   revoke(scope: ConnectionScope): Promise<BrokerResult<{ revoked: true }>> {
     return this.post('/v1/revoke', scope, () => ({ revoked: true as const }));
+  }
+
+  // ---- Platform namespace (ADR-022 D2). Only a client configured with the
+  // 'platform' caller can use these; bodies carry no organization id. ----
+
+  getPlatformAccessToken(connectionId: string): Promise<BrokerResult<AccessTokenGrant>> {
+    return this.post('/v1/platform/access-token', { connectionId }, (v) => {
+      const g = v as Partial<AccessTokenGrant>;
+      return typeof g.accessToken === 'string' && g.accessToken !== '' && typeof g.expiresAt === 'string'
+        ? { accessToken: g.accessToken, expiresAt: g.expiresAt, credentialVersion: Number(g.credentialVersion) || 0 }
+        : null;
+    });
+  }
+
+  platformConnectionStatus(connectionId: string): Promise<BrokerResult<{ status: ConnectionStatus; expiresAt: string | null }>> {
+    return this.post('/v1/platform/status', { connectionId }, (v) => {
+      const s = v as { status?: unknown; expiresAt?: unknown };
+      return typeof s.status === 'string'
+        ? { status: s.status as ConnectionStatus, expiresAt: typeof s.expiresAt === 'string' ? s.expiresAt : null }
+        : null;
+    });
+  }
+
+  storePlatformOAuthResult(connectionId: string, tokenSet: TokenSet): Promise<BrokerResult<unknown>> {
+    return this.post('/v1/platform/oauth-result', { connectionId, tokenSet }, (v) => v ?? {});
+  }
+
+  revokePlatformConnection(connectionId: string): Promise<BrokerResult<{ revoked: true }>> {
+    return this.post('/v1/platform/revoke', { connectionId }, () => ({ revoked: true as const }));
   }
 
   private async post<T>(path: string, payload: object, parse: (v: unknown) => T | null): Promise<BrokerResult<T>> {

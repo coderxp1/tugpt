@@ -30,6 +30,8 @@ const GUARDS = [
 /** Not browser-session endpoints: authenticated by signature, not cookies. */
 const EXEMPT_PREFIXES: Record<string, string> = {
   'v1/webhooks/': 'Inbound provider webhooks are authenticated by HMAC signature, not a browser session.',
+  'v1/control-center/lab': 'Operator surface, not a browser-session endpoint: the proxy gates it with CONTROL_CENTER_TOKEN and rejects cross-origin requests before the handler runs; no tenant session cookie authenticates it.',
+  'v1/control-center/platform/': 'Operator surface (B3 platform admin), not a browser-session endpoint: the proxy gates it with CONTROL_CENTER_TOKEN and rejects cross-origin requests before the handler runs; no tenant session cookie authenticates it.',
 };
 /** SSO/auth handlers enforce origin through lib/sso (origin(request, ...) + x-tugpt-csrf). */
 const SSO_GUARD = /\borigin\(request\b|assertSsoMutation\(|sso\/routes/;

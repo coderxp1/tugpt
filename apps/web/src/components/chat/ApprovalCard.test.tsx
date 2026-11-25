@@ -14,10 +14,11 @@ const approval: PendingApproval = {
 
 const json = (status: number, body: unknown) => Promise.resolve(new Response(JSON.stringify(body), { status, headers: { 'content-type': 'application/json' } }));
 type Route = (url: string, init?: RequestInit) => Promise<Response>;
-function fetcher(routes: { approve?: Route; status?: Route; revoke?: Route }) {
+function fetcher(routes: { approve?: Route; status?: Route; revoke?: Route; request?: Route }) {
   return vi.fn((url: string, init?: RequestInit) => {
     if (url.startsWith('/api/v1/chat/approvals/status')) return (routes.status ?? (() => json(200, { approved: true })))(url, init);
     if (url === '/api/v1/connect/mcp/approvals/revoke') return (routes.revoke ?? (() => json(200, { revoked: true })))(url, init);
+    if (url === '/api/v1/connect/mcp/approvals/requests') return (routes.request ?? (() => json(200, { request: { id: 'req-1', status: 'pending' } })))(url, init);
     if (url === '/api/v1/connect/mcp/approvals') return (routes.approve ?? (() => json(200, { approved: true, id: 'id-1', expiresAt: new Date(Date.now() + 900000).toISOString() })))(url, init);
     return json(404, {});
   });
@@ -32,6 +33,30 @@ const confirmAndApprove = () => {
 };
 
 describe('ApprovalCard', () => {
+  it('a member can send an approval request for the exact blocked call (A5/R6)', async () => {
+    const f = fetcher({});
+    render(<ApprovalCard approval={approval} canApprove={false} busy={false} onRun={vi.fn()} fetchFn={f} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Request approval' }));
+    await waitFor(() => expect(document.body.textContent).toContain('Request sent'));
+    const call = f.mock.calls.find(([u]) => u === '/api/v1/connect/mcp/approvals/requests');
+    expect(call).toBeTruthy();
+    const body = JSON.parse(String(call![1]?.body)) as Record<string, unknown>;
+    expect(body).toEqual({
+      connectionId: approval.endpointId, capability: approval.capability,
+      argumentsSha256: approval.argumentsSha256, threadId: approval.threadId,
+    });
+    // The member is never offered the self-approve path.
+    expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+
+  it('a failed request send is reported and can be retried', async () => {
+    const f = fetcher({ request: () => json(500, {}) });
+    render(<ApprovalCard approval={approval} canApprove={false} busy={false} onRun={vi.fn()} fetchFn={f} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Request approval' }));
+    await waitFor(() => expect(document.body.textContent).toContain('could not be sent'));
+    expect((screen.getByRole('button', { name: 'Request approval' }) as HTMLButtonElement).disabled).toBe(false);
+  });
+
   it('explains the action, shows endpoint, host and tool, and hides secret values from the DOM', () => {
     const { container } = render(<ApprovalCard approval={approval} canApprove busy={false} onRun={vi.fn()} fetchFn={fetcher({})} />);
     expect(screen.getByRole('heading', { name: 'Approve this action?' })).toBeTruthy();

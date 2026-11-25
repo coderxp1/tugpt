@@ -48,7 +48,7 @@ export type ProductState =
   /** The signal could not be read. */
   | 'unknown';
 
-export type ProductGlyph = 'chat' | 'draft' | 'book' | 'film' | 'calendar' | 'phone' | 'chart' | 'spark';
+export type ProductGlyph = 'chat' | 'draft' | 'book' | 'film' | 'calendar' | 'phone' | 'chart' | 'spark' | 'plug';
 
 export interface ProductDefinition {
   readonly id: ProductId;

@@ -46,6 +46,17 @@ export type BrokerErrorCode =
   | 'PERSIST_FAILED'
   | 'BAD_REQUEST';
 
+/** Static bearer / API-key credential for a customer MCP endpoint (migration 20261120000013). */
+export const STATIC_BEARER_KIND = 'mcp_static_bearer';
+export const STATIC_BEARER_PROVIDER = 'mcp_custom';
+/** Visible ASCII only (no space, CR, LF or control characters): safe as an HTTP header value. */
+const STATIC_SECRET_RE = /^[\x21-\x7e]{8,4096}$/;
+
+export interface StaticSecretGrant {
+  readonly secret: string;
+  readonly credentialVersion: number;
+}
+
 export class BrokerError extends Error {
   constructor(readonly code: BrokerErrorCode, readonly status?: ConnectionStatus) {
     super(code);
@@ -113,7 +124,9 @@ export class BrokerService {
     }
     return this.opts.store.withConnectionLock(organizationId, connectionId, async (tx) => {
       const row = await tx.load(organizationId, connectionId);
-      if (!row) throw new BrokerError('NOT_FOUND');
+      // A revoked connection is terminal (Postgres hides it entirely); reconnecting uses a new id.
+      if (!row || (row.status === 'disconnected' && row.encrypted === null)) throw new BrokerError('NOT_FOUND');
+      if (row.kind === STATIC_BEARER_KIND) throw new BrokerError('BAD_REQUEST');
       const version = row.credentialVersion + 1;
       const encrypted = encryptCredential(JSON.stringify(tokenSet), identityOf(row, version), this.opts.writeKeyId, this.opts.keyRing);
       const ok = await tx
@@ -127,6 +140,7 @@ export class BrokerService {
   async getAccessToken(organizationId: string, connectionId: string): Promise<AccessTokenGrant> {
     const row = await this.opts.store.load(organizationId, connectionId);
     if (!row) throw new BrokerError('NOT_FOUND');
+    if (row.kind === STATIC_BEARER_KIND) throw new BrokerError('BAD_REQUEST');
     if (row.status !== 'connected') throw new BrokerError('NOT_CONNECTED', row.status);
     const current = this.decrypt(row);
     if (this.fresh(current)) {
@@ -174,6 +188,43 @@ export class BrokerService {
       if (!ok) throw new BrokerError('PERSIST_FAILED');
       return { accessToken: next.access_token, expiresAt: next.expires_at, credentialVersion: version };
     });
+  }
+
+  /**
+   * Store (or rotate) the static secret of an MCP connection. The secret is
+   * encrypted with AAD = (org, connection, provider, kind, version), so it is
+   * bound to exactly this connection. The result carries no secret.
+   */
+  async storeStaticSecret(organizationId: string, connectionId: string, secret: string): Promise<{ credentialVersion: number }> {
+    if (typeof secret !== 'string' || !STATIC_SECRET_RE.test(secret)) throw new BrokerError('BAD_REQUEST');
+    return this.opts.store.withConnectionLock(organizationId, connectionId, async (tx) => {
+      const row = await tx.load(organizationId, connectionId);
+      if (!row || (row.status === 'disconnected' && row.encrypted === null)) throw new BrokerError('NOT_FOUND');
+      if (row.kind !== STATIC_BEARER_KIND) throw new BrokerError('BAD_REQUEST');
+      const version = row.credentialVersion + 1;
+      const encrypted = encryptCredential(JSON.stringify({ v: 1, secret }), identityOf(row, version), this.opts.writeKeyId, this.opts.keyRing);
+      const ok = await tx
+        .compareAndSwap(organizationId, connectionId, row.credentialVersion, { credentialVersion: version, encrypted, expiresAt: null, status: 'connected' })
+        .catch(() => false);
+      if (!ok) throw new BrokerError('PERSIST_FAILED');
+      return { credentialVersion: version };
+    });
+  }
+
+  /** The static secret of a connected MCP connection. Never refreshes; any decrypt/shape failure is NOT_CONNECTED. */
+  async getStaticSecret(organizationId: string, connectionId: string): Promise<StaticSecretGrant> {
+    const row = await this.opts.store.load(organizationId, connectionId);
+    if (!row) throw new BrokerError('NOT_FOUND');
+    if (row.kind !== STATIC_BEARER_KIND) throw new BrokerError('BAD_REQUEST');
+    if (row.status !== 'connected' || !row.encrypted) throw new BrokerError('NOT_CONNECTED', row.status);
+    let secret: unknown;
+    try {
+      secret = (JSON.parse(decryptCredential(row.encrypted, identityOf(row, row.credentialVersion), this.opts.keyRing)) as { secret?: unknown }).secret;
+    } catch {
+      throw new BrokerError('NOT_CONNECTED', 'error');
+    }
+    if (typeof secret !== 'string' || !STATIC_SECRET_RE.test(secret)) throw new BrokerError('NOT_CONNECTED', 'error');
+    return { secret, credentialVersion: row.credentialVersion };
   }
 
   async revoke(organizationId: string, connectionId: string): Promise<void> {

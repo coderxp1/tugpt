@@ -56,6 +56,7 @@ import {
   SnapshotStoreBusyError, type ExternalMcpRepository,
 } from '@/lib/connect/external-mcp-repo';
 import { customerMcpEnabled } from '@/lib/connect-ui/flags.server';
+import { brokerStaticSecretSource, brokerTokenSource } from '@/lib/chat/connect';
 import { createHash } from 'node:crypto';
 import type { ApiError } from '@/lib/draft-api/types';
 
@@ -203,11 +204,32 @@ export async function POST(request: Request, { params }: { params: Promise<{ end
     }
     const egressFetch = createEgressMcpFetch({ proxyUrl });
 
-    // TODO(connect): resolve the endpoint's auth via the credential broker
-    // (auth_connection_id) and pass it as `authHeader` (a Bearer token).
+    // Authenticated endpoints (A1 static / A2 OAuth): resolve the credential
+    // through the broker and discover WITH it. A credential that cannot be
+    // resolved fails the snapshot (409 CREDENTIAL_UNAVAILABLE) — discovery
+    // NEVER falls back to unauthenticated for an endpoint that has a
+    // credential attached (authentication policy: no silent downgrade).
+    let authHeader: string | undefined;
+    const endpointAuth = await repo.getEndpointAuth(organizationId, endpointId);
+    if (endpointAuth) {
+      if (endpointAuth.status !== 'connected') {
+        return errorResponse(409, 'CREDENTIAL_UNAVAILABLE', 'The endpoint credential is not connected yet');
+      }
+      if (endpointAuth.kind === 'mcp_static_bearer') {
+        const r = await brokerStaticSecretSource().getStaticSecret({ organizationId, connectionId: endpointAuth.connectionId });
+        if (!r.ok) return errorResponse(409, 'CREDENTIAL_UNAVAILABLE', 'The endpoint credential could not be resolved');
+        authHeader = `Bearer ${r.value.secret}`;
+      } else if (endpointAuth.kind === 'oauth_token_set') {
+        const r = await brokerTokenSource().getAccessToken({ organizationId, connectionId: endpointAuth.connectionId });
+        if (!r.ok) return errorResponse(409, 'CREDENTIAL_UNAVAILABLE', 'The endpoint credential could not be resolved');
+        authHeader = `Bearer ${r.value.accessToken}`;
+      } else {
+        return errorResponse(409, 'CREDENTIAL_UNAVAILABLE', 'The endpoint credential kind is not supported');
+      }
+    }
     let tools;
     try {
-      tools = await listExternalMcpTools({ url: endpoint }, egressFetch);
+      tools = await listExternalMcpTools({ url: endpoint, ...(authHeader ? { authHeader } : {}) }, egressFetch);
     } catch (err) {
       return discoveryFailure(err);
     }

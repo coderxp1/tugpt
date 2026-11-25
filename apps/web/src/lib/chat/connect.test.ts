@@ -19,8 +19,8 @@ describe('brokerTokenSource (backend contract: TUGPT_BROKER_URL + hex TUGPT_BROK
     expect(await unavailable({ TUGPT_BROKER_URL: url, TUGPT_BROKER_CALLER_KEY: 'ab'.repeat(31) })).toEqual({ ok: false, code: 'UNAVAILABLE' });
     expect(await unavailable({ TUGPT_BROKER_URL: url, TUGPT_BROKER_CALLER_KEY: 'abc' })).toEqual({ ok: false, code: 'UNAVAILABLE' });
   });
-  it('builds a broker client for a valid hex key', () => {
-    const src = brokerTokenSource({ TUGPT_BROKER_URL: 'http://127.0.0.1:9', TUGPT_BROKER_CALLER_KEY: HEX32 });
+  it('builds a broker client for a valid hex executor key (decision A: reads use TUGPT_BROKER_EXECUTOR_KEY)', () => {
+    const src = brokerTokenSource({ TUGPT_BROKER_URL: 'http://127.0.0.1:9', TUGPT_BROKER_EXECUTOR_KEY: HEX32 });
     expect(src.getAccessToken.toString()).not.toContain('UNAVAILABLE');
   });
 });

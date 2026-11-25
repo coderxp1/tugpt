@@ -34,7 +34,7 @@ import type { ApprovalTarget } from './approval.server';
 import { listCapabilities, type CapabilityRow, type ChatDb } from './store';
 import {
   builtinRegistry, MCP_NO_CREDENTIAL, MCP_PROVIDER, mcpDirectory, verifyMcpTool,
-  type ChatToolRegistry, type McpDeps, type McpToolEntry,
+  type ChatToolRegistry, type McpDeps, type McpToolEntry, type StaticSecretSource,
 } from './mcp';
 
 export interface ChatToolContext {
@@ -116,18 +116,38 @@ type Env = Readonly<Record<string, string | undefined>>;
 const HEX_KEY = /^(?:[0-9a-f]{2}){32,}$/i;
 
 /**
- * Broker contract (packages/connect-server): TUGPT_BROKER_URL and
- * TUGPT_BROKER_CALLER_KEY, the key hex-encoded and at least 32 bytes.
- * Anything missing or malformed yields no token (fail closed).
+ * Chat reads credentials as broker caller `executor` (decision A,
+ * docs/connect/finding-chat-broker-caller.md): TUGPT_BROKER_URL and
+ * TUGPT_BROKER_EXECUTOR_KEY, hex-encoded, at least 32 bytes. The web key
+ * (TUGPT_BROKER_CALLER_KEY) is write-only and is never used here. Anything
+ * missing or malformed yields no client and no request (fail closed).
  */
+function executorClient(env: Env): BrokerClient | null {
+  const baseUrl = env.TUGPT_BROKER_URL; const key = env.TUGPT_BROKER_EXECUTOR_KEY?.trim();
+  if (!baseUrl || !key || !HEX_KEY.test(key)) return null;
+  try { return new BrokerClient({ baseUrl, caller: 'executor', key: Buffer.from(key, 'hex') }); } catch { return null; }
+}
+
 export function brokerTokenSource(env: Env = process.env): AccessTokenSource {
-  const unavailable: AccessTokenSource = { async getAccessToken() { return { ok: false, code: 'UNAVAILABLE' }; } };
-  const baseUrl = env.TUGPT_BROKER_URL; const key = env.TUGPT_BROKER_CALLER_KEY?.trim();
-  if (!baseUrl || !key || !HEX_KEY.test(key)) return unavailable;
-  let client: BrokerClient;
-  try { client = new BrokerClient({ baseUrl, caller: 'web', key: Buffer.from(key, 'hex') }); } catch { return unavailable; }
+  const client = executorClient(env);
+  if (!client) return { async getAccessToken() { return { ok: false, code: 'UNAVAILABLE' }; } };
   return { getAccessToken: (scope) => client.getAccessToken(scope) };
 }
+
+/** Static bearer of an authenticated customer MCP endpoint (broker get_static_secret, caller executor). */
+export function brokerStaticSecretSource(env: Env = process.env): StaticSecretSource {
+  const client = executorClient(env);
+  if (!client) return { async getStaticSecret() { return { ok: false, code: 'UNAVAILABLE' }; } };
+  return {
+    async getStaticSecret(scope) {
+      const r = await client.getStaticSecret({ organizationId: scope.organizationId, connectionId: scope.connectionId });
+      return r.ok ? { ok: true, value: { secret: r.value.secret, credentialVersion: r.value.credentialVersion } } : { ok: false, code: r.code };
+    },
+  };
+}
+
+/** Broker failure codes the runtime maps precisely; anything else is UNAVAILABLE (PROVIDER_UNAVAILABLE). */
+const PASS_THROUGH_SECRET_CODES = new Set(['NOT_FOUND', 'NOT_CONNECTED', 'REQUIRES_AUTHORIZATION']);
 
 export function auditOutcome(outcome: ToolAuditEvent['outcome']): { outcome: string; errorCode: string | null } {
   if (outcome === 'ok') return { outcome: 'succeeded', errorCode: null };
@@ -139,6 +159,48 @@ export function auditOutcome(outcome: ToolAuditEvent['outcome']): { outcome: str
 }
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+
+/**
+ * A4 (decision D3): the tools chat offers WITHOUT an @-attachment — approved
+ * READ tools of connected customer MCP endpoints. Input is the same
+ * capability list the picker uses: its SQL already scopes rows to org
+ * connections and the acting user's OWN user connections (ADR-021 R3), and
+ * reports `disabled_by_policy` when the org lever is off (A3), so neither
+ * another member's personal endpoint nor a policy-disabled tool can appear
+ * here. Write / irreversible / financial tools are never auto-offered: they
+ * still need an explicit @-attachment, and the per-call approval claim at
+ * execution time is unchanged. A row is offered only when the registry can
+ * actually run it, so a closed MCP gate (the registry then holds no MCP
+ * entries) offers nothing — fail closed by construction. Model-name
+ * conflicts resolve deterministically (provider name, then capability): an
+ * @-attached tool always wins over an auto-offered one, and the first
+ * auto-offered tool wins over later same-name ones.
+ */
+export function autoOfferedReadTools(
+  caps: readonly CapabilityRow[],
+  attached: readonly CapabilityRow[],
+  registry: ChatToolRegistry,
+): CapabilityRow[] {
+  const key = (r: CapabilityRow) => `${r.providerKey}${r.capabilityKey}${r.connectionId ?? ''}`;
+  const attachedKeys = new Set(attached.map(key));
+  const usedNames = new Set<string>();
+  for (const row of attached) {
+    const t = registry.toolFor(row);
+    if (t) usedNames.add(t.modelName);
+  }
+  const candidates = caps
+    .filter((r) => r.providerKey === MCP_PROVIDER && r.state === 'connected' && r.connectionId !== null
+      && r.permissionClass === 'read' && !attachedKeys.has(key(r)))
+    .sort((a, b) => a.providerName.localeCompare(b.providerName) || a.capabilityKey.localeCompare(b.capabilityKey));
+  const out: CapabilityRow[] = [];
+  for (const row of candidates) {
+    const tool = registry.toolFor(row);
+    if (!tool || usedNames.has(tool.modelName)) continue;
+    usedNames.add(tool.modelName);
+    out.push(row);
+  }
+  return out;
+}
 
 /** Model-safe tool message for a call whose audit record could not be written. */
 const AUDIT_FAILED_CONTENT = JSON.stringify({ ok: false, error: 'INTERNAL', message: 'The tool call could not be recorded, so its result was withheld.' });
@@ -159,9 +221,11 @@ export interface ChatToolset {
 interface Chosen { readonly tool: ConnectTool<never>; readonly row: CapabilityRow; readonly mcp?: McpToolEntry }
 
 /**
- * `attached` are the user's @-selections, already checked against the
- * capability list by the caller. Only connected rows with a runnable tool in
- * the registry become tools.
+ * `attached` are the user's @-selections plus any auto-offered read tools
+ * (autoOfferedReadTools, A4), already checked against the capability list by
+ * the caller. The toolset does not distinguish the two: every port (policy,
+ * grants, per-call re-verification, approvals, audit) applies identically.
+ * Only connected rows with a runnable tool in the registry become tools.
  */
 export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: readonly CapabilityRow[], deps: {
   tokens?: AccessTokenSource; tools?: ConnectTool<never>[]; registry?: ChatToolRegistry; requestId?: string;
@@ -207,8 +271,33 @@ export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: rea
   };
 
   const inner = deps.tokens ?? brokerTokenSource();
+  const authConnectionFor = (endpointId: string) => mcpEntries.find((c) => c.row.connectionId === endpointId)?.mcp?.authConnectionId ?? null;
+  const authKindFor = (endpointId: string) => mcpEntries.find((c) => c.row.connectionId === endpointId)?.mcp?.authKind ?? null;
   const tokens: AccessTokenSource = {
-    getAccessToken: (scope) => (isMcp(scope.connectionId) ? MCP_NO_CREDENTIAL.getAccessToken(scope) : inner.getAccessToken(scope)),
+    async getAccessToken(scope) {
+      if (!isMcp(scope.connectionId)) return inner.getAccessToken(scope);
+      const auth = authConnectionFor(scope.connectionId);
+      if (auth === null) return MCP_NO_CREDENTIAL.getAccessToken(scope);
+      if (authKindFor(scope.connectionId) === 'oauth') {
+        // OAuth endpoint (A2): the broker executor returns the connection's
+        // current access token (refreshing broker-side when it can). Its
+        // typed failures (REQUIRES_AUTHORIZATION, REFRESH_FAILED, ...) pass
+        // through unchanged — never a fallback to a static read or to an
+        // unauthenticated call.
+        if (scope.organizationId !== ctx.organizationId) return { ok: false, code: 'NOT_FOUND' };
+        try { return await inner.getAccessToken({ organizationId: ctx.organizationId, connectionId: auth }); }
+        catch { return { ok: false, code: 'UNAVAILABLE' }; }
+      }
+      // Authenticated endpoint: read the bearer now (after authorization + approval, before egress), for the
+      // endpoint's own connection in THIS organization. Held in memory for this call only.
+      if (scope.organizationId !== ctx.organizationId) return { ok: false, code: 'NOT_FOUND' };
+      const secrets = deps.mcp?.staticSecrets ?? brokerStaticSecretSource(deps.mcp?.env ?? process.env);
+      try {
+        const r = await secrets.getStaticSecret({ organizationId: ctx.organizationId, connectionId: auth });
+        if (r.ok) return { ok: true, value: { accessToken: r.value.secret, expiresAt: new Date(8.64e15).toISOString(), credentialVersion: r.value.credentialVersion } };
+        return { ok: false, code: (PASS_THROUGH_SECRET_CODES.has(r.code) ? r.code : 'UNAVAILABLE') as never };
+      } catch { return { ok: false, code: 'UNAVAILABLE' }; }
+    },
   };
 
   const auditFailed = new Set<string>();

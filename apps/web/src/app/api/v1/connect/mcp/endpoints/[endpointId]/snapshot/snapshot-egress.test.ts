@@ -42,7 +42,10 @@ type CreateFail = null | 'busy' | 'endpoint-busy' | 'deadline' | 'timeout' | 'in
 const db = vi.hoisted(() => ({ snaps: [] as Snap[], writes: 0, latestReads: 0, createCalls: 0,
   requests: new Map<string, string>(), running: new Set<string>(), lastDeadline: '' as string,
   createFails: null as CreateFail, latestTimeout: false, failLatest: false,
-  endpointError: null as null | { code: string; message: string }, endpointLookups: 0 }));
+  endpointError: null as null | { code: string; message: string }, endpointLookups: 0,
+  auth: null as null | { connectionId: string; kind: string; status: string },
+  secretResult: { ok: false, code: 'UNAVAILABLE' } as { ok: boolean; code?: string; value?: { secret: string; credentialVersion: number } },
+  tokenResult: { ok: false, code: 'UNAVAILABLE' } as { ok: boolean; code?: string; value?: { accessToken: string; expiresAt: string; credentialVersion: number } } }));
 vi.mock('@/lib/connect/external-mcp-repo', async (orig) => {
   const real = await orig<typeof import('@/lib/connect/external-mcp-repo')>();
   return {
@@ -66,6 +69,7 @@ vi.mock('@/lib/connect/external-mcp-repo', async (orig) => {
         const snap = db.snaps.find((x) => x.id === id);
         return snap ? { state: 'committed' as const, snapshotId: snap.id, version: snap.version, toolCount: snap.tools.length } : { state: 'not_found' as const };
       },
+      getEndpointAuth: async () => db.auth,
       createSnapshotIdempotent: async (_o: string, _e: string, key: string, sha: string, tools: { name: string }[], deadline: string) => {
         db.createCalls++; db.lastDeadline = deadline;
         switch (db.createFails) {
@@ -100,6 +104,15 @@ vi.mock('@tugpt/auth', async (orig) => ({
   },
 }));
 vi.mock('@/lib/connect-ui/flags.server', () => ({ customerMcpEnabled: () => true }));
+// Broker credential sources (labelled): the route must resolve the endpoint's
+// credential through these and never fall back to unauthenticated discovery.
+vi.mock('@/lib/chat/connect', async (orig) => {
+  const real = await orig<typeof import('@/lib/chat/connect')>();
+  return { ...real,
+    brokerStaticSecretSource: () => ({ getStaticSecret: async () => db.secretResult }),
+    brokerTokenSource: () => ({ getAccessToken: async () => db.tokenResult }),
+  };
+});
 // Real egress fetch; only the trust anchor and the timeout are injected.
 vi.mock('@/lib/chat/mcp-egress', async (orig) => {
   const real = await orig<typeof import('@/lib/chat/mcp-egress')>();
@@ -119,6 +132,7 @@ const { POST, GET } = await import('./route');
 type Mode = 'ok' | 'malformed' | 'rpc-error' | 'hang' | 'redirect' | 'page2-500' | 'page2-invalid' | 'v2-tools';
 let mode: Mode = 'ok';
 let mcp: https.Server; let mcpPort = 0; let mcpConnections = 0; let mcpRequests = 0;
+let lastAuthorization: string | null = null;
 let proxy: http.Server; let proxyPort = 0; let proxyMode: 'allow' | 'refuse' = 'allow';
 const connects: string[] = []; let tunnels = 0;
 let deadPort = 0;
@@ -162,6 +176,7 @@ beforeAll(async () => {
 
   mcp = https.createServer({ key: readFileSync(join(dir, 'srv.key')), cert: readFileSync(join(dir, 'srv.pem')) }, (req, res) => {
     mcpRequests++;
+    lastAuthorization = typeof req.headers.authorization === 'string' ? req.headers.authorization : null;
     let raw = ''; req.on('data', (c) => (raw += c)); req.on('end', () => mcpReply(JSON.parse(raw || '{}'), res));
   });
   mcp.on('connection', (sk) => { mcpConnections++; track(sk); });
@@ -200,8 +215,10 @@ beforeEach(() => {
   vi.stubEnv('TUGPT_APP_ORIGIN', ORIGIN);
   vi.stubEnv('CONNECT_EGRESS_PROXY', `http://127.0.0.1:${proxyPort}`);
   Object.assign(db, { snaps: [], writes: 0, latestReads: 0, createCalls: 0, failLatest: false, createFails: null, latestTimeout: false,
-    endpointError: null, endpointLookups: 0,
+    endpointError: null, endpointLookups: 0, auth: null,
+    secretResult: { ok: false, code: 'UNAVAILABLE' }, tokenResult: { ok: false, code: 'UNAVAILABLE' },
     requests: new Map(), running: new Set(), lastDeadline: '' });
+  lastAuthorization = null;
   mode = 'ok'; proxyMode = 'allow'; T.injectCa = true; T.timeoutMs = 3000; T.dnsCalls = 0;
   connects.length = 0; tunnels = 0; mcpConnections = 0; mcpRequests = 0; redirectTargetHits = 0;
   globalFetch = vi.spyOn(globalThis, 'fetch');
@@ -492,7 +509,7 @@ describe('structural: no direct network fallback can be reintroduced', () => {
   const runtime = readFileSync(join(__dirname, '../../../../../../../../../../../packages/connect-runtime/src/external-mcp-tool.ts'), 'utf8');
   it('route discovers only via createEgressMcpFetch and never calls fetch/http directly', () => {
     expect(route).toMatch(/createEgressMcpFetch\(\{ proxyUrl \}\)/);
-    expect(route).toMatch(/listExternalMcpTools\(\{ url: endpoint \}, egressFetch\)/);
+    expect(route).toMatch(/listExternalMcpTools\(\{ url: endpoint, \.\.\.\(authHeader \? \{ authHeader \} : \{\}\) \}, egressFetch\)/);
     expect(route).not.toMatch(/(^|[^.\w])fetch\(|globalThis\.fetch|node:https?'|undici|node:net/m);
     expect(route).not.toMatch(/createSnapshot\(/); // M9: the version is assigned by the database, never by the route
     expect(route).toMatch(/createSnapshotIdempotent\(organizationId, endpointId, key, contentSha256, tools, deadline\)/);
@@ -501,5 +518,45 @@ describe('structural: no direct network fallback can be reintroduced', () => {
     const body = runtime.slice(runtime.indexOf('export async function listExternalMcpTools'), runtime.indexOf('function normalizeModelName'));
     expect(body).toMatch(/fetchFn: ExternalMcpFetch,\n\): /); // required parameter
     expect(body).not.toMatch(/endpoint\.fetchFn|defaultFetch|globalThis\.fetch|[^\w.]fetch\(/);
+  });
+});
+
+describe('authenticated discovery (A1 static / A2 OAuth): broker-resolved, never downgraded', () => {
+  it('a connected static credential is sent as Bearer <redacted> during discovery', async () => {
+    db.auth = { connectionId: 'c-static', kind: 'mcp_static_bearer', status: 'connected' };
+    db.secretResult = { ok: true, value: { secret: 'static-secret-1', credentialVersion: 3 } };
+    const r = await snapshot();
+    expect(r.status).toBe(201);
+    expect(lastAuthorization).toBe('Bearer static-secret-1');
+    expectProxyOnly();
+  });
+
+  it('an unresolvable static credential fails 409 CREDENTIAL_UNAVAILABLE before any discovery', async () => {
+    db.auth = { connectionId: 'c-static', kind: 'mcp_static_bearer', status: 'connected' };
+    db.secretResult = { ok: false, code: 'UNAVAILABLE' };
+    const r = await snapshot();
+    expect(r.status).toBe(409);
+    expect(r.body.error?.code).toBe('CREDENTIAL_UNAVAILABLE');
+    expect(mcpRequests).toBe(0);
+    expect(db.writes).toBe(0);
+  });
+
+  it('a connected OAuth credential is sent as the broker access token', async () => {
+    db.auth = { connectionId: 'c-oauth', kind: 'oauth_token_set', status: 'connected' };
+    db.tokenResult = { ok: true, value: { accessToken: 'oauth-token-1', expiresAt: new Date(Date.now() + 3600e3).toISOString(), credentialVersion: 1 } };
+    const r = await snapshot();
+    expect(r.status).toBe(201);
+    expect(lastAuthorization).toBe('Bearer oauth-token-1');
+    expectProxyOnly();
+  });
+
+  it('an OAuth connection that still requires authorization fails 409 before any discovery or broker read', async () => {
+    db.auth = { connectionId: 'c-oauth', kind: 'oauth_token_set', status: 'requires_authorization' };
+    db.tokenResult = { ok: true, value: { accessToken: 'must-not-be-used', expiresAt: new Date(Date.now() + 3600e3).toISOString(), credentialVersion: 1 } };
+    const r = await snapshot();
+    expect(r.status).toBe(409);
+    expect(r.body.error?.code).toBe('CREDENTIAL_UNAVAILABLE');
+    expect(mcpRequests).toBe(0);
+    expect(db.writes).toBe(0);
   });
 });

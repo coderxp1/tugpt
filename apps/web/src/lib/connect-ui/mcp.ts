@@ -24,7 +24,13 @@ export const ENDPOINT_STATUS_TEXT: Record<EndpointStatus, string> = { pending: e
 /** The latest tool list of an endpoint, as GET /mcp/endpoints reports it (list_endpoints_admin). */
 export interface SnapshotState { id: string; toolCount: number; approved: boolean }
 
-export interface McpEndpoint { id: string; url: string; displayName: string; status: EndpointStatus; createdAt?: string; snapshot: SnapshotState | null }
+export interface McpEndpointAuth { kind: string; status: string }
+
+export interface McpEndpoint { id: string; url: string; displayName: string; status: EndpointStatus; createdAt?: string; snapshot: SnapshotState | null; auth?: McpEndpointAuth | null }
+
+/** Browser entry into the MCP OAuth flow (A2); the start route redirects to the authorization server. */
+export const mcpOAuthStartUrl = (endpointId: string): string =>
+  `/api/v1/connect/mcp/oauth/start?endpointId=${encodeURIComponent(endpointId)}`;
 
 /** A discovered tool as stored by the backend; permissionClass is the stored class (backend default: write). */
 export interface McpTool { name: string; description: string; permissionClass: PermissionLevel }
@@ -47,10 +53,16 @@ export function parseEndpoints(data: unknown): McpEndpoint[] | null {
   return list.flatMap((e) => {
     const r = e as Record<string, unknown>;
     if (typeof r?.id !== 'string' || typeof r.url !== 'string' || typeof r.displayName !== 'string' || !STATUSES.includes(r.status as string)) return [];
+    const auth = (r.auth && typeof r.auth === 'object'
+      && typeof (r.auth as { kind?: unknown }).kind === 'string'
+      && typeof (r.auth as { status?: unknown }).status === 'string')
+      ? { kind: (r.auth as { kind: string }).kind, status: (r.auth as { status: string }).status }
+      : null;
     return [{
       id: r.id, url: r.url, displayName: r.displayName, status: r.status as EndpointStatus,
       ...(typeof r.createdAt === 'string' ? { createdAt: r.createdAt } : {}),
       snapshot: parseSnapshot(r.snapshot),
+      ...('auth' in r ? { auth } : {}),
     }];
   });
 }
@@ -125,6 +137,35 @@ export function newIdempotencyKey(): string {
 /** Snapshot failures after which a retry must reuse the same Idempotency-Key (the outcome may be pending). */
 export const SNAPSHOT_RETRY_SAME_KEY = new Set(['DATABASE_TIMEOUT', 'IN_PROGRESS', 'ENDPOINT_BUSY', 'SNAPSHOT_STORE_BUSY', 'SNAPSHOT_DEADLINE_EXCEEDED', 'NETWORK']);
 
+const isRec = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+
+export interface McpApprovalRequest {
+  id: string; connectionId: string; capability: string; argumentsSha256: string;
+  threadId: string; requestedBy: string; status: 'pending' | 'approved' | 'denied';
+  decidedBy: string | null; decidedAt: string | null; approvalId: string | null; createdAt: string;
+}
+
+export function parseApprovalRequests(body: unknown): McpApprovalRequest[] | null {
+  const list = isRec(body) ? body.requests : null;
+  if (!Array.isArray(list)) return null;
+  const out: McpApprovalRequest[] = [];
+  for (const r of list) {
+    if (!isRec(r) || typeof r.id !== 'string' || typeof r.connectionId !== 'string' || typeof r.capability !== 'string'
+      || typeof r.argumentsSha256 !== 'string' || typeof r.threadId !== 'string' || typeof r.requestedBy !== 'string'
+      || typeof r.createdAt !== 'string') return null;
+    out.push({
+      id: r.id, connectionId: r.connectionId, capability: r.capability, argumentsSha256: r.argumentsSha256,
+      threadId: r.threadId, requestedBy: r.requestedBy,
+      status: r.status === 'approved' || r.status === 'denied' ? r.status : 'pending',
+      decidedBy: typeof r.decidedBy === 'string' ? r.decidedBy : null,
+      decidedAt: typeof r.decidedAt === 'string' ? r.decidedAt : null,
+      approvalId: typeof r.approvalId === 'string' ? r.approvalId : null,
+      createdAt: r.createdAt,
+    });
+  }
+  return out;
+}
+
 export const mcpApi = {
   list: async (f?: typeof fetch): Promise<ApiResult<McpEndpoint[]>> => {
     const r = await getJson<unknown>(`${base}/endpoints`, f);
@@ -132,14 +173,40 @@ export const mcpApi = {
     const list = parseEndpoints(r.data);
     return list ? { ok: true, data: list } : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
   },
+  approvalRequests: async (f?: typeof fetch): Promise<ApiResult<McpApprovalRequest[]>> => {
+    const r = await getJson<unknown>(`${base}/approvals/requests`, f);
+    if (!r.ok) return r;
+    const list = parseApprovalRequests(r.data);
+    return list ? { ok: true, data: list } : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
+  },
+  decideApprovalRequest: async (requestId: string, decision: 'approved' | 'denied', ttlSeconds: number, f?: typeof fetch): Promise<ApiResult<{ id: string; status: string; approvalId: string | null }>> => {
+    const r = await postJson<unknown>(`${base}/approvals/requests/${enc(requestId)}/decide`, { decision, ttlSeconds }, f);
+    if (!r.ok) return r;
+    const req = isRec(r.data) ? r.data.request : null;
+    return isRec(req) && typeof req.id === 'string' && typeof req.status === 'string'
+      ? { ok: true, data: { id: req.id, status: req.status, approvalId: typeof req.approvalId === 'string' ? req.approvalId : null } }
+      : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
+  },
   tools: async (snapshotId: string, f?: typeof fetch): Promise<ApiResult<McpTool[]>> => {
     const r = await getJson<unknown>(`${base}/snapshots/${enc(snapshotId)}/tools`, f);
     if (!r.ok) return r;
     const tools = parseTools(r.data);
     return tools ? { ok: true, data: tools } : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
   },
-  register: (url: string, displayName: string, f?: typeof fetch) =>
-    postJson<{ endpoint: McpEndpoint }>(`${base}/endpoints`, { url: url.trim(), displayName: displayName.trim() }, f),
+  policy: async (f?: typeof fetch): Promise<ApiResult<{ allowExternalTools: boolean }>> => {
+    const r = await getJson<unknown>(`${base}/policy`, f);
+    if (!r.ok) return r;
+    const v = (r.data as { allowExternalTools?: unknown } | null)?.allowExternalTools;
+    return typeof v === 'boolean'
+      ? { ok: true, data: { allowExternalTools: v } }
+      : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
+  },
+  setPolicy: (enabled: boolean, f?: typeof fetch) =>
+    postJson<{ allowExternalTools: boolean }>(`${base}/policy`, { enabled }, f),
+  register: (url: string, displayName: string, f?: typeof fetch,
+    auth?: { kind: 'none' } | { kind: 'static_bearer'; secret: string } | { kind: 'oauth' }) =>
+    postJson<{ endpoint: McpEndpoint }>(`${base}/endpoints`,
+      { url: url.trim(), displayName: displayName.trim(), ...(auth ? { auth } : {}) }, f),
   /** M9: every snapshot POST carries an Idempotency-Key. Pass the SAME key when retrying a failed or timed-out
    * attempt: the server then returns the original snapshot instead of creating a second one. */
   snapshot: (endpointId: string, f?: typeof fetch, idempotencyKey: string = newIdempotencyKey()) =>

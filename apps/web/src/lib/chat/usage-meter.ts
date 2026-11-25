@@ -21,9 +21,9 @@
  * 'failed' for errors and TIMEOUT-1 timeouts. Usage comes from the provider's own
  * `usage` object only; without one the call is passed as `usage: null` and the event is
  * recorded with usage_basis = 'unavailable' (NULL cost). The event's usage_basis is the
- * authoritative marker: Agent 6's record_chat_usage currently writes 0-quantity token
- * components for such events, which must not be read as "0 tokens" (see
- * docs/backend-api.md "Unknown usage").
+ * authoritative marker. Since migration 20261125000003 (S0.4, gate defect U6),
+ * record_chat_usage writes NO token components for 'unavailable' events, so no
+ * reader can mistake unknown usage for a provider-reported 0.
  * Recording never throws and never delays the answer: calls are recorded when they
  * end, and flush() is awaited only after the answer was persisted and sent.
  * Provider and model are passed for the backend-only columns; nothing here reaches
@@ -90,6 +90,15 @@ export function createUsageMeter(scope: UsageMeterScope): UsageMeter {
 
   async function recordAt(i: number, outcome: Outcome, raw: unknown): Promise<void> {
     const usage = parseOpenAiUsage(raw);
+    // S0.4 (gate defect U1): a transient recording failure (RPC/transport error)
+    // is retried with the SAME idempotency key, bounded — the old code dropped
+    // the event permanently after a single failed attempt. A 'duplicate' that
+    // arrives after one of MY attempts failed means that attempt actually
+    // landed and only its response was lost: the record exists exactly once,
+    // so it must NOT trigger the crash-shift (that would double-count it at
+    // the next slot). A 'duplicate' on the first attempt still belongs to an
+    // earlier, crashed run and shifts as before.
+    let failures = 0;
     for (;;) {
       const index = ((scope.attempt as number) + shift) * ATTEMPT_SLOT + i;
       if (index > MAX_CALL_INDEX) {
@@ -100,8 +109,20 @@ export function createUsageMeter(scope: UsageMeterScope): UsageMeter {
         organizationId: scope.organizationId, userId: scope.userId, threadId: scope.threadId, turnId: scope.turnId as string,
         callIndex: index, feature: scope.feature, provider: scope.provider, model: scope.model, outcome, usage,
       }, logger);
-      if (result !== 'duplicate') return;
-      shift += 1;
+      if (result === 'duplicate') {
+        if (failures > 0) return;
+        shift += 1;
+        continue;
+      }
+      if (result === 'failed') {
+        failures += 1;
+        if (failures >= 3) {
+          logger.warn('Chat usage not recorded: recording failed after retries', { reason: 'recording_failed' });
+          return;
+        }
+        continue;
+      }
+      return;
     }
   }
 

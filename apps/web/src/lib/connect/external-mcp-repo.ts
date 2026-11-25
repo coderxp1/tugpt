@@ -37,6 +37,21 @@ export interface RecordedApproval {
   readonly expiresAt: string;
 }
 
+/** A member's request for an owner/admin to approve one exact blocked call (A5 / R6). */
+export interface ApprovalRequest {
+  id: string;
+  connectionId: string;
+  capability: string;
+  argumentsSha256: string;
+  threadId: string;
+  requestedBy: string;
+  status: 'pending' | 'approved' | 'denied';
+  decidedBy: string | null;
+  decidedAt: string | null;
+  approvalId: string | null;
+  createdAt: string;
+}
+
 /** Thrown by repository methods on a PostgREST error; pgCode is the SQLSTATE. */
 export class RepoError extends Error {
   constructor(public readonly pgCode: string, message: string) { super(message); }
@@ -50,6 +65,11 @@ export class ActivationDeniedError extends Error {
 /** The endpoint does not exist in this organization (the RPC returned false). HTTP 404. */
 export class EndpointNotFoundError extends Error {
   constructor() { super('MCP endpoint not found'); this.name = 'EndpointNotFoundError'; }
+}
+
+/** begin_mcp_static_credential refused: the endpoint already has a credential attached (SQLSTATE PT409). HTTP 409. */
+export class AuthAlreadyAttachedError extends Error {
+  constructor() { super('the endpoint already has a credential attached'); this.name = 'AuthAlreadyAttachedError'; }
 }
 
 /** SQLSTATE + message activate_mcp_endpoint raises when the snapshot gate refuses (20261120000008). */
@@ -81,8 +101,38 @@ export interface ExternalMcpRepository {
   activateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deactivateEndpoint(orgId: string, endpointId: string): Promise<void>;
   deleteEndpoint(orgId: string, endpointId: string): Promise<void>;
+  /** Plan A1: create the mcp_custom account for a static broker credential and link it to the
+   * endpoint (status requires_authorization). Throws AuthAlreadyAttachedError (PT409),
+   * EndpointNotFoundError (P0002), RepoError('42501') or DatabaseTimeoutError. */
+  beginStaticCredential(orgId: string, endpointId: string): Promise<string>;
+  /** Mark the credential account connected after the broker stored the secret. False when no
+   * pending account matched (already completed, revoked, or foreign). */
+  completeStaticCredential(orgId: string, connectionId: string): Promise<boolean>;
+  /** Compensation for a failed broker store: unlink the endpoint and delete the pending account. */
+  failStaticCredential(orgId: string, endpointId: string, connectionId: string): Promise<boolean>;
+  /** Owner/admin read of the endpoint's auth connection for broker-resolved discovery; null when
+   * the endpoint is public (no credential attached). Same error contract as getEndpointUrl. */
+  getEndpointAuthConnection(orgId: string, endpointId: string): Promise<string | null>;
+  /** Plan A2: create the mcp_custom OAuth account and link it to the endpoint (status
+   * requires_authorization). Same error contract as beginStaticCredential. */
+  beginOAuthConnection(orgId: string, endpointId: string): Promise<string>;
+  /** Plan A2: detach and delete an mcp_custom OAuth account (disconnect / compensation). */
+  removeOAuthConnection(orgId: string, connectionId: string): Promise<boolean>;
+  /** Plan A2: kind-aware auth read for broker-resolved discovery and the panel:
+   * { connectionId, kind, status } or null when the endpoint is public. */
+  getEndpointAuth(orgId: string, endpointId: string): Promise<{ connectionId: string; kind: string; status: string } | null>;
+  /** Plan A3: the org's external-tools lever. False when no policy row exists (fail closed). */
+  getExternalToolsPolicy(orgId: string): Promise<boolean>;
+  /** Owner/admin write of the lever via RPC; resolves to the resulting state. */
+  setExternalToolsPolicy(orgId: string, enabled: boolean): Promise<boolean>;
   recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number, threadId: string): Promise<RecordedApproval>;
   revokeApproval(orgId: string, approvalId: string): Promise<boolean>;
+  /** A5: file (or re-read) the caller's pending approval request for one exact call. */
+  createApprovalRequest(orgId: string, input: { connectionId: string; capability: string; argumentsSha256: string; threadId: string }): Promise<{ id: string; status: string; createdAt: string }>;
+  /** A5: the org approval queue (owner/admin) or the caller's own requests (member); the RPC scopes by role. */
+  listApprovalRequests(orgId: string): Promise<ApprovalRequest[]>;
+  /** A5: owner/admin decision; 'approved' records the single-use approval for the requester. */
+  decideApprovalRequest(orgId: string, requestId: string, decision: 'approved' | 'denied', ttlSeconds: number): Promise<{ id: string; status: string; approvalId: string | null }>;
 }
 
 /** SQLSTATE the snapshot RPCs raise when a lock other than the endpoint row is not available within
@@ -353,6 +403,110 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       if (error) throw new Error('failed to delete the MCP endpoint');
     },
 
+    async beginStaticCredential(orgId, endpointId) {
+      const { data, error } = await u.rpc('begin_mcp_static_credential', {
+        p_organization_id: orgId, p_endpoint_id: endpointId,
+      });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === 'PT409') throw new AuthAlreadyAttachedError();
+        if (e?.code === 'P0002') throw new EndpointNotFoundError();
+        throw endpointLookupError(e);
+      }
+      if (typeof data !== 'string') throw new Error('invalid begin_mcp_static_credential result');
+      return data;
+    },
+
+    async completeStaticCredential(orgId, connectionId) {
+      const { data, error } = await u.rpc('complete_mcp_static_credential', {
+        p_organization_id: orgId, p_connection_id: connectionId,
+      });
+      if (error) throw endpointLookupError(error as PgError);
+      return data === true;
+    },
+
+    async failStaticCredential(orgId, endpointId, connectionId) {
+      const { data, error } = await u.rpc('fail_mcp_static_credential', {
+        p_organization_id: orgId, p_endpoint_id: endpointId, p_connection_id: connectionId,
+      });
+      if (error) throw endpointLookupError(error as PgError);
+      return data === true;
+    },
+
+    async getEndpointAuthConnection(orgId, endpointId) {
+      if (!isUuid(endpointId)) return null;
+      const { data, error } = await u.rpc('get_mcp_endpoint_auth_connection', {
+        p_organization_id: orgId, p_endpoint_id: endpointId,
+      });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === 'P0002') throw new EndpointNotFoundError();
+        throw endpointLookupError(e);
+      }
+      if (data === null || data === undefined) return null;
+      if (typeof data !== 'string') throw new Error('invalid get_mcp_endpoint_auth_connection result');
+      return data;
+    },
+
+    async beginOAuthConnection(orgId, endpointId) {
+      const { data, error } = await u.rpc('begin_mcp_oauth_connection', {
+        p_organization_id: orgId, p_endpoint_id: endpointId,
+      });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === 'PT409') throw new AuthAlreadyAttachedError();
+        if (e?.code === 'P0002') throw new EndpointNotFoundError();
+        throw endpointLookupError(e);
+      }
+      if (typeof data !== 'string') throw new Error('invalid begin_mcp_oauth_connection result');
+      return data;
+    },
+
+    async removeOAuthConnection(orgId, connectionId) {
+      const { data, error } = await u.rpc('remove_mcp_oauth_connection', {
+        p_organization_id: orgId, p_connection_id: connectionId,
+      });
+      if (error) throw endpointLookupError(error as PgError);
+      return data === true;
+    },
+
+    async getEndpointAuth(orgId, endpointId) {
+      if (!isUuid(endpointId)) return null;
+      const { data, error } = await u.rpc('get_mcp_endpoint_auth', {
+        p_organization_id: orgId, p_endpoint_id: endpointId,
+      });
+      if (error) {
+        const e = error as PgError;
+        if (e?.code === 'P0002') throw new EndpointNotFoundError();
+        throw endpointLookupError(e);
+      }
+      if (data === null || data === undefined) return null;
+      const d = data as { connectionId?: unknown; kind?: unknown; status?: unknown };
+      if (typeof d.connectionId !== 'string' || typeof d.kind !== 'string' || typeof d.status !== 'string') {
+        throw new Error('invalid get_mcp_endpoint_auth result');
+      }
+      return { connectionId: d.connectionId, kind: d.kind, status: d.status };
+    },
+
+    async getExternalToolsPolicy(orgId) {
+      const { data, error } = await u
+        .from('organization_integration_policies')
+        .select('allow_external_tools')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+      if (error) throw endpointLookupError(error as PgError);
+      if (data === null || data === undefined) return false;
+      return (data as { allow_external_tools?: unknown }).allow_external_tools === true;
+    },
+
+    async setExternalToolsPolicy(orgId, enabled) {
+      const { data, error } = await u.rpc('set_external_tools_policy', {
+        p_organization_id: orgId, p_enabled: enabled,
+      });
+      if (error) throw endpointLookupError(error as PgError);
+      return data === true;
+    },
+
     async recordApproval(orgId, connectionId, capability, argumentsSha256, ttlSeconds, threadId) {
       const { data, error } = await u.rpc('record_tool_approval', {
         p_organization_id: orgId, p_connection_id: connectionId, p_capability: capability,
@@ -367,6 +521,39 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       const { data, error } = await u.rpc('revoke_tool_approval', { p_organization_id: orgId, p_approval_id: approvalId });
       if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to revoke the approval');
       return data === true;
+    },
+
+    async createApprovalRequest(orgId, input) {
+      const { data, error } = await u.rpc('request_mcp_approval', {
+        p_organization_id: orgId, p_connection_id: input.connectionId, p_capability: input.capability,
+        p_arguments_sha256: input.argumentsSha256, p_thread_id: input.threadId,
+      });
+      if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to file the approval request');
+      const row = (Array.isArray(data) ? data[0] : data) as { id: string; status: string; created_at: string };
+      return { id: row.id, status: row.status, createdAt: row.created_at };
+    },
+
+    async listApprovalRequests(orgId) {
+      const { data, error } = await u.rpc('list_mcp_approval_requests', { p_organization_id: orgId });
+      if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to list approval requests');
+      return ((data ?? []) as Record<string, unknown>[]).map((r) => ({
+        id: String(r.id), connectionId: String(r.connection_id), capability: String(r.capability),
+        argumentsSha256: String(r.arguments_sha256), threadId: String(r.thread_id), requestedBy: String(r.requested_by),
+        status: (r.status === 'approved' || r.status === 'denied' ? r.status : 'pending') as ApprovalRequest['status'],
+        decidedBy: typeof r.decided_by === 'string' ? r.decided_by : null,
+        decidedAt: typeof r.decided_at === 'string' ? r.decided_at : null,
+        approvalId: typeof r.approval_id === 'string' ? r.approval_id : null,
+        createdAt: String(r.created_at),
+      }));
+    },
+
+    async decideApprovalRequest(orgId, requestId, decision, ttlSeconds) {
+      const { data, error } = await u.rpc('decide_mcp_approval_request', {
+        p_organization_id: orgId, p_request_id: requestId, p_decision: decision, p_ttl_seconds: ttlSeconds,
+      });
+      if (error) throw new RepoError(error.code ?? 'INTERNAL', error.message ?? 'failed to decide the approval request');
+      const row = (Array.isArray(data) ? data[0] : data) as { id: string; status: string; approval_id: string | null };
+      return { id: row.id, status: row.status, approvalId: row.approval_id ?? null };
     },
   };
 }
