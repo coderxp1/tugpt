@@ -20,7 +20,9 @@
     "start:workspace-maintenance": "node dist/workspace-maintenance-index.js",
     "test": "vitest run",
     "typecheck": "tsc --noEmit",
-    "lint": "eslint ."
+    "lint": "eslint .",
+    "dev:platform-media": "tsx src/platform-media-index.ts",
+    "start:platform-media": "node dist/platform-media-index.js"
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.112.3",
@@ -32,7 +34,9 @@
     "@tugpt/jobs": "workspace:*",
     "@tugpt/observability": "workspace:*",
     "@tugpt/security": "workspace:*",
-    "@tugpt/workspace-core": "workspace:*"
+    "@tugpt/workspace-core": "workspace:*",
+    "@tugpt/connect-runtime": "workspace:*",
+    "@tugpt/credential-broker": "workspace:*"
   },
   "devDependencies": {
     "@types/node": "^20",

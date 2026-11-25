@@ -237,6 +237,46 @@ services:
     # is here to make that path rare, not to make it safe.
     stop_grace_period: 330s
 
+  platform-media-worker:
+    build:
+      context: .
+      dockerfile: apps/worker/Dockerfile
+    image: tugpt-worker:latest
+    restart: unless-stopped
+    # Compiled output, same reasoning as the workers above.
+    #
+    # A SEPARATE PROCESS, the platform media executor (ADR-022 D8). It is
+    # the only consumer that executes platform video.generate jobs from the
+    # shared `media_jobs` queue; the media worker on the GPU host owns the
+    # ComfyUI lanes. It pre-checks the job table before claiming so foreign
+    # jobs keep their deliveries, and it releases any foreign message it
+    # does claim untouched.
+    #
+    # Safe to run today with nothing configured. It polls for platform
+    # jobs that cannot exist until an organization is entitled AND an
+    # operator binding is enabled, and it needs no platform credentials at
+    # boot — the broker key (TUGPT_BROKER_PLATFORM_KEY) and the egress
+    # proxy (CONNECT_EGRESS_PROXY) are read per job from the same env
+    # file, so enabling the track is an operator configuration change,
+    # not a redeploy. Until CP-6/CP-7 approve a live platform connection,
+    # this service stays dark by configuration, not by code.
+    command: ["node", "dist/platform-media-index.js"]
+    env_file:
+      - /etc/tugpt/worker.env
+    networks:
+      - tugpt
+    # SIGTERM aborts the poll loop between jobs; it does not cancel an
+    # in-flight attempt. An attempt is bounded by the binding's poll
+    # ceiling (default 40 polls x 15s = 600s) plus the MP4 download, so
+    # 660s is that ceiling plus a margin.
+    #
+    # Being SIGKILLed mid-attempt is survivable and deliberately so: the
+    # provider's external id is persisted before any polling, so the
+    # redelivered job RESUMES the submission instead of paying for it
+    # twice. The grace period is here to make that path rare, not to
+    # make it safe.
+    stop_grace_period: 660s
+
 networks:
   tugpt:
     driver: bridge
