@@ -13,6 +13,11 @@ const MATRIX: Readonly<Record<Caller, ReadonlySet<Operation>>> = {
   // Server-side chat tool execution (docs/connect/finding-chat-broker-caller.md, option A): its own
   // key, read-only. It can obtain a credential for one call; it can never write, revoke or list.
   executor: new Set<Operation>(['get_access_token', 'get_static_secret']),
+  // Platform services (ADR-022 D2): operate ONLY platform connections, and
+  // only through the /v1/platform/* routes — the server enforces the route
+  // separation on top of this matrix, so this caller can never reach an
+  // org-scoped credential and no org caller can reach a platform one.
+  platform: new Set<Operation>(['store_oauth_result', 'connection_status', 'get_access_token', 'revoke']),
 };
 
 export function isAllowed(caller: Caller, op: Operation): boolean {

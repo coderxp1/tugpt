@@ -3,6 +3,7 @@ export * from './signing.js';
 export * from './authz.js';
 export * from './store.js';
 export * from './postgres-store.js';
+export * from './platform-store.js';
 export * from './audit.js';
 export * from './service.js';
 export * from './server.js';

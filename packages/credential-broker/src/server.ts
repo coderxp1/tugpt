@@ -9,6 +9,7 @@ import { randomUUID } from 'node:crypto';
 import { isAllowed, type Operation } from './authz.js';
 import type { AuditOutcome, AuditSink } from './audit.js';
 import { BrokerError, type BrokerService, type TokenSet } from './service.js';
+import { PLATFORM_SCOPE_ID } from './platform-store.js';
 import { NonceCache, verifyRequest, type Caller } from './signing.js';
 
 const ROUTES: Readonly<Record<string, Operation>> = {
@@ -19,11 +20,22 @@ const ROUTES: Readonly<Record<string, Operation>> = {
   '/v1/static-secret': 'store_static_secret',
   '/v1/static-secret/read': 'get_static_secret',
 };
+
+/** Platform namespace (ADR-022 D2): distinct routes, the 'platform' caller
+ * only, bodies carry a connection id and NO organization id. */
+const PLATFORM_ROUTES: Readonly<Record<string, Operation>> = {
+  '/v1/platform/oauth-result': 'store_oauth_result',
+  '/v1/platform/status': 'connection_status',
+  '/v1/platform/access-token': 'get_access_token',
+  '/v1/platform/revoke': 'revoke',
+};
 const MAX_BODY_BYTES = 16 * 1024;
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
 export interface BrokerServerOptions {
   readonly service: BrokerService;
+  /** Platform-scope service (platform store). Without it, platform routes 404. */
+  readonly platformService?: BrokerService;
   readonly callerKeys: ReadonlyMap<Caller, readonly Buffer[]>;
   readonly audit: AuditSink;
   readonly now?: () => number;
@@ -87,8 +99,10 @@ export function createBrokerServer(opts: BrokerServerOptions): Server {
 
     if (req.method === 'GET' && path === '/healthz') return send(res, 200, { ok: true });
 
-    const operation = ROUTES[path];
+    const platformPath = path.startsWith('/v1/platform/');
+    const operation = platformPath ? PLATFORM_ROUTES[path] : ROUTES[path];
     if (req.method !== 'POST' || !operation) return send(res, 404, { error: 'NOT_FOUND' });
+    if (platformPath && !opts.platformService) return send(res, 404, { error: 'NOT_FOUND' });
 
     const body = await readBody(req);
     if (body === null) {
@@ -102,6 +116,14 @@ export function createBrokerServer(opts: BrokerServerOptions): Server {
       return send(res, 401, { error: 'UNAUTHENTICATED' });
     }
     const caller = verified.caller;
+    // Route/caller separation for the platform namespace: the platform caller
+    // serves ONLY platform routes, and platform routes serve ONLY it — the
+    // capability matrix alone would let e.g. 'worker' ask for a platform
+    // access token, so the boundary is enforced here as well.
+    if (platformPath !== (caller === 'platform')) {
+      await audit('forbidden', { caller, operation });
+      return send(res, 403, { error: 'FORBIDDEN' });
+    }
     if (!isAllowed(caller, operation)) {
       await audit('forbidden', { caller, operation });
       return send(res, 403, { error: 'FORBIDDEN' });
@@ -114,34 +136,40 @@ export function createBrokerServer(opts: BrokerServerOptions): Server {
       await audit('bad_request', { caller, operation, detail: 'JSON' });
       return send(res, 400, { error: 'BAD_REQUEST' });
     }
-    const organizationId = typeof parsed.organizationId === 'string' && UUID_RE.test(parsed.organizationId) ? parsed.organizationId : null;
     const connectionId = typeof parsed.connectionId === 'string' && UUID_RE.test(parsed.connectionId) ? parsed.connectionId : null;
-    if (!organizationId || !connectionId) {
+    // Platform bodies carry no organization id; the service is addressed with
+    // the platform scope id and audit entries record organizationId = null.
+    const organizationId = platformPath
+      ? null
+      : typeof parsed.organizationId === 'string' && UUID_RE.test(parsed.organizationId) ? parsed.organizationId : null;
+    if (!connectionId || (!platformPath && !organizationId)) {
       await audit('bad_request', { caller, operation, detail: 'IDS' });
       return send(res, 400, { error: 'BAD_REQUEST' });
     }
+    const service = platformPath ? opts.platformService! : opts.service;
+    const orgArg = platformPath ? PLATFORM_SCOPE_ID : organizationId!;
     const scope = { caller, operation, organizationId, connectionId };
 
     try {
       let result: unknown;
       switch (operation) {
         case 'connection_status':
-          result = await opts.service.connectionStatus(organizationId, connectionId);
+          result = await service.connectionStatus(orgArg, connectionId);
           break;
         case 'get_access_token':
-          result = await opts.service.getAccessToken(organizationId, connectionId);
+          result = await service.getAccessToken(orgArg, connectionId);
           break;
         case 'store_oauth_result':
-          result = await opts.service.storeOAuthResult(organizationId, connectionId, parsed.tokenSet as TokenSet);
+          result = await service.storeOAuthResult(orgArg, connectionId, parsed.tokenSet as TokenSet);
           break;
         case 'store_static_secret':
-          result = await opts.service.storeStaticSecret(organizationId, connectionId, parsed.secret as string);
+          result = await service.storeStaticSecret(orgArg, connectionId, parsed.secret as string);
           break;
         case 'get_static_secret':
-          result = await opts.service.getStaticSecret(organizationId, connectionId);
+          result = await service.getStaticSecret(orgArg, connectionId);
           break;
         case 'revoke':
-          await opts.service.revoke(organizationId, connectionId);
+          await service.revoke(orgArg, connectionId);
           result = { revoked: true };
           break;
       }

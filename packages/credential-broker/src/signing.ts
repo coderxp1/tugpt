@@ -9,7 +9,7 @@
  */
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'node:crypto';
 
-export const CALLERS = ['web', 'worker', 'executor'] as const;
+export const CALLERS = ['web', 'worker', 'executor', 'platform'] as const;
 export type Caller = (typeof CALLERS)[number];
 
 export const HEADER_CALLER = 'x-tugpt-caller';
