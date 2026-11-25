@@ -57,7 +57,7 @@ describe('DashboardFrame navigation', () => {
   it('shows "Couldn\'t check" instead of nothing when a state is missing', () => {
     render(<DashboardFrame email="anna@example.test"><p>x</p></DashboardFrame>);
     expect(side().querySelector('nav a[href="/dashboard/inbox"]')!.textContent).toContain('Couldn’t check');
-    expect(side().querySelector('nav a[href="/dashboard/connect"]')!.textContent).toBe('Apps & tools');
+    expect(side().querySelector('nav a[href="/dashboard/connect"]')!.textContent).toBe('Integrations');
   });
 
   it('marks the current page and keeps the same person on every page', () => {

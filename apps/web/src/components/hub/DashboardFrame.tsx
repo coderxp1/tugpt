@@ -21,7 +21,7 @@ const workspaceNav: readonly NavItem[] = [
   { href: '/workspace/agents', title: 'shell.item.customAgents', icon: 'spark', feature: 'custom_agents' },
 ];
 const orgNav: readonly NavItem[] = [
-  { href: '/dashboard/connect', title: 'shell.item.apps', icon: 'calendar' },
+  { href: '/dashboard/connect', title: 'shell.item.integrations', icon: 'plug' },
   { href: '/dashboard/settings', title: 'shell.item.team', icon: 'book' },
   { href: '/dashboard/analytics', title: 'shell.item.analytics', icon: 'chart', feature: 'analytics' },
 ];

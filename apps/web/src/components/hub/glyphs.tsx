@@ -53,6 +53,13 @@ const PATHS: Record<ProductGlyph, React.ReactNode> = {
       <path d="M12 3.5l2 6.5 6.5 2-6.5 2-2 6.5-2-6.5-6.5-2 6.5-2z" />
     </>
   ),
+  plug: (
+    <>
+      <path d="M9 3.5v4M15 3.5v4" />
+      <path d="M6.5 7.5h11V12a5.5 5.5 0 0 1-11 0z" />
+      <path d="M12 17.5v3" />
+    </>
+  ),
 };
 
 export function Glyph({ name, size = 20 }: { name: ProductGlyph; size?: number }) {

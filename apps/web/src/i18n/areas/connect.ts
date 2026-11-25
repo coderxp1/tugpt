@@ -4,10 +4,10 @@
  */
 
 export const connectEs = {
-  'connect.meta.title': 'Conectar · TuGPT',
-  'connect.eyebrow': 'Conectar',
-  'connect.title': 'Sus aplicaciones y herramientas',
-  'connect.lead': 'Conecte una cuenta o su propio servidor de herramientas una sola vez. En el chat, escriba @ para que TuGPT lo use en ese mensaje. Solo se puede usar lo que aquí figura como disponible.',
+  'connect.meta.title': 'Integraciones · TuGPT',
+  'connect.eyebrow': 'Integraciones',
+  'connect.title': 'Integraciones',
+  'connect.lead': 'Conecte una cuenta o su propio servidor de herramientas una sola vez. En el chat, escriba @ para adjuntar una herramienta aprobada; las herramientas aprobadas de solo lectura también se ofrecen automáticamente. Solo se puede usar lo que aquí figura como disponible.',
   'connect.loadFailed': 'No se pudo cargar el estado de las conexiones. Nada se muestra como conectado hasta que se pueda comprobar.',
   'connect.summaryLabel': 'Sus servicios:',
   'connect.summaryNone': 'ninguno',
@@ -273,10 +273,10 @@ export const connectEs = {
 } as const;
 
 export const connectEn: Record<keyof typeof connectEs, string> = {
-  'connect.meta.title': 'Connect · TuGPT',
-  'connect.eyebrow': 'Connect',
-  'connect.title': 'Your apps and tools',
-  'connect.lead': 'Connect an account or your own tool server once. In Chat, type @ to let TuGPT use it for that message. Only what is listed here as available can be used.',
+  'connect.meta.title': 'Integrations · TuGPT',
+  'connect.eyebrow': 'Integrations',
+  'connect.title': 'Integrations',
+  'connect.lead': 'Connect an account or your own tool server once. In Chat, type @ to attach an approved tool; approved read-only tools are also offered automatically. Only what is listed here as available can be used.',
   'connect.loadFailed': 'Connection status could not be loaded. Nothing is shown as connected until it can be checked.',
   'connect.summaryLabel': 'Your services:',
   'connect.summaryNone': 'none listed',
