@@ -44,6 +44,10 @@ interface RouteExpectation {
 }
 
 const ROUTES: RouteExpectation[] = [
+  { path: '/control-center', kind: 'page', type: 'operator', why: 'Product Control Center (ported from the mainline in C2): not a tenant surface; the proxy gates it with CONTROL_CENTER_TOKEN, never a tenant session.' },
+  { path: '/api/v1/control-center/health', kind: 'api', type: 'operator', why: 'Control Center health probe: reports environment presence/reachability; operator-token gated by the proxy, no tenant session.' },
+  { path: '/api/v1/control-center/lab', kind: 'api', type: 'operator', why: 'Control Center lab: executes product code on demand; operator-token gated by the proxy, no tenant session.' },
+  { path: '/api/v1/connect/mcp/policy', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/google/start', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/google/disconnect', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },
   { path: '/api/v1/connect/microsoft/start', kind: 'api', type: 'protected', why: 'Connect v2 handler authenticates via the session and enforces owner/admin role plus organization scoping.' },

@@ -4,7 +4,7 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 const root = path.resolve(__dirname, '../../../../..');
 const frozen = {
-  'apps/web/src/proxy.ts': 'c9bf2e6fa1549fca3a85d2a366395d83f107cad223e7128f5d22e5e4d7f3789a',
+  'apps/web/src/proxy.ts': '096a1e729587d5229d9b7d33c8d431f6db73be37b241533126e4e918b0c3f987',
   'packages/database/src/client.ts': 'cfd67225ceb1f4bc60ce61326c9415ae35237b66b0e141ef1305ee5da0d455bc',
   'apps/web/src/lib/sso/core.ts': '1a3b29519edfbc787b522c11c8a809933d23c18adc1ee5609f424ebcbbe36669',
 };

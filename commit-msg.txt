@@ -1,6 +1,7 @@
-feat(web): per-org MCP policy lever surface (Plan A3)
+feat(web): port the Product Control Center to the RC line (C2)
 
-- Repo: getExternalToolsPolicy (missing row = off, fail closed) and setExternalToolsPolicy (owner/admin RPC 20261125000002)
-- New GET/POST /api/v1/connect/mcp/policy route (owner/admin, CSRF-guarded, flag-gated)
-- McpPanel: lever toggle with ES/EN copy; connect-ui policy/setPolicy client calls
-- Unit tests for the repo methods; connect/chat suites green (333 in scope), typecheck pass
+- app/control-center page, components/control-center, lib/control-center (access, catalog, labs, login, probes) and api/v1/control-center (health, lab) copied from the mainline candidate (tugpt/ @ e7ed08f); all existing dependencies (feature-flags KILL_SWITCHES, database selectKnowledgeEntries, appointments, draft-api) already exist on this line
+- proxy.ts: 'operator' route class for exactly /control-center + /api/v1/control-center/*, gated by CONTROL_CENTER_TOKEN (header proof -> httpOnly operator cookie, cross-origin rejection, logout clearing) integrated into this line's SSO proxy without touching its session stack; operator tests ported from the mainline proxy suite
+- proxy-route-coverage table: control-center routes classified 'operator'; the A3 /api/v1/connect/mcp/policy route registered as protected
+- Guards updated deliberately: proxy.ts byte-pin re-hashed in guard-integrity (deliberate proxy change), /control-center accounted for in app-routes-reachable REACHED_BY (operator opens the URL directly; never in tenant navigation), lab route exempted in mutation-origin-coverage (proxy operator gate rejects cross-origin before the handler; no session cookie auth)
+- Full web suite: 2122 passed, 0 failed; typecheck pass

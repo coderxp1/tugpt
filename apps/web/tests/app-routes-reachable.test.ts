@@ -41,6 +41,7 @@ const REACHED_BY: ReadonlyArray<{ path: string; by: string }> = [
   { path: '/dashboard/create', by: 'DashboardFrame sidebar "Create" link (components/hub/DashboardFrame.tsx), on every dashboard page.' },
   { path: '/dashboard/settings', by: 'DashboardFrame profile block in the sidebar footer and the account mark in the top bar both link here.' },
   { path: '/invite', by: 'One-time invitation link created in Dashboard > Settings > Team and shared by the inviter; it needs a token, so navigation never links to it.' },
+  { path: '/control-center', by: 'Operator-only Product Control Center (ported from the mainline, C2): the operator opens the URL directly and unlocks with CONTROL_CENTER_TOKEN; it is not a tenant surface, so tenant navigation deliberately never links to it.' },
   { path: '/auth/website/error', by: 'Historical error page retained for old bookmarks; start/callback are explicitly retired410 with no new OAuth redirects.' },
   {
     path: '/',
