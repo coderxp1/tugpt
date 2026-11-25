@@ -39,7 +39,7 @@ import { createUsageMeter } from '@/lib/chat/usage-meter';
 import { completeWithTools, ModelCallError, streamCompletion, type ParsedToolCall, type WireMessage, turnDeadline } from '@/lib/chat/openai-compatible';
 import { pendingApproval } from '@/lib/chat/approval.server';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
-import { buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
+import { autoOfferedReadTools, buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
   appendServerMessage, asChatDb, countTurnAnswers, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
@@ -90,6 +90,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   }
 
   let attached: CapabilityRow[];
+  let autoOffered: CapabilityRow[] = [];
   let registry: ChatToolRegistry = builtinRegistry();
   let history: Awaited<ReturnType<typeof listMessages>>;
   // Assistant/tool messages are server-authored through sso_control (Q-9c F-3); created before the stream starts.
@@ -97,14 +98,21 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
   try {
     await getThread(ctx.db, orgId, threadId);
     control = asChatDb(await createSsoControlClient());
-    const caps = requested.length ? await listCapabilities(ctx.db, orgId) : [];
+    // The capability list is also needed with no @-mentions when the model can
+    // call tools: A4 auto-offers approved read tools from it.
+    const caps = requested.length || model.toolCalling ? await listCapabilities(ctx.db, orgId) : [];
     attached = requested.map((m) => caps.find((c) => c.capabilityKey === m.capability && c.providerKey === m.provider))
       .filter((c): c is CapabilityRow => c !== undefined);
     if (attached.some((c) => c.state !== 'connected')) return jsonError(409, 'An attached integration is not connected');
     // Per organization: built-in tools plus runnable customer MCP tools (behind the MCP gate in lib/chat/mcp.ts).
-    if (attached.length) registry = await loadChatToolRegistry(ctx.db, orgId, { serviceDb: await createSsoControlClient() });
+    const hasAutoCandidates = model.toolCalling && caps.some((c) => c.providerKey === MCP_PROVIDER && c.state === 'connected' && c.permissionClass === 'read');
+    if (attached.length || hasAutoCandidates) registry = await loadChatToolRegistry(ctx.db, orgId, { serviceDb: await createSsoControlClient() });
     if (attached.some((c) => !toolAvailable(c, registry))) return jsonError(409, 'This integration is not available in chat yet');
     if (attached.length && !model.toolCalling) return jsonError(409, 'This model cannot use integrations');
+    // A4 (decision D3): approved read tools are offered without an @-attachment.
+    // Auto-offered rows never fail the turn: anything not runnable is skipped,
+    // and they are not recorded as the user's mentions (see openTurn below).
+    autoOffered = model.toolCalling ? autoOfferedReadTools(caps, attached, registry) : [];
     const conflict = conflictingAttachments(attached, registry);
     if (conflict) {
       return jsonError(409, conflict.toolName === 'calendar_find_availability'
@@ -156,7 +164,7 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     provider: model.provider, model: model.upstreamModel, signal: request.signal,
   });
 
-  const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, attached, { registry });
+  const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, [...attached, ...autoOffered], { registry });
   const wire: WireMessage[] = [
     { role: 'system', content: knowledgeSystemPrompt(systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(body.timeZone), attached: toolset.labels }), hits) },
     ...modelHistory(history, HISTORY),

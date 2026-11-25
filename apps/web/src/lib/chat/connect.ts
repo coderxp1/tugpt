@@ -160,6 +160,48 @@ export function auditOutcome(outcome: ToolAuditEvent['outcome']): { outcome: str
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-8][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
+/**
+ * A4 (decision D3): the tools chat offers WITHOUT an @-attachment — approved
+ * READ tools of connected customer MCP endpoints. Input is the same
+ * capability list the picker uses: its SQL already scopes rows to org
+ * connections and the acting user's OWN user connections (ADR-021 R3), and
+ * reports `disabled_by_policy` when the org lever is off (A3), so neither
+ * another member's personal endpoint nor a policy-disabled tool can appear
+ * here. Write / irreversible / financial tools are never auto-offered: they
+ * still need an explicit @-attachment, and the per-call approval claim at
+ * execution time is unchanged. A row is offered only when the registry can
+ * actually run it, so a closed MCP gate (the registry then holds no MCP
+ * entries) offers nothing — fail closed by construction. Model-name
+ * conflicts resolve deterministically (provider name, then capability): an
+ * @-attached tool always wins over an auto-offered one, and the first
+ * auto-offered tool wins over later same-name ones.
+ */
+export function autoOfferedReadTools(
+  caps: readonly CapabilityRow[],
+  attached: readonly CapabilityRow[],
+  registry: ChatToolRegistry,
+): CapabilityRow[] {
+  const key = (r: CapabilityRow) => `${r.providerKey}${r.capabilityKey}${r.connectionId ?? ''}`;
+  const attachedKeys = new Set(attached.map(key));
+  const usedNames = new Set<string>();
+  for (const row of attached) {
+    const t = registry.toolFor(row);
+    if (t) usedNames.add(t.modelName);
+  }
+  const candidates = caps
+    .filter((r) => r.providerKey === MCP_PROVIDER && r.state === 'connected' && r.connectionId !== null
+      && r.permissionClass === 'read' && !attachedKeys.has(key(r)))
+    .sort((a, b) => a.providerName.localeCompare(b.providerName) || a.capabilityKey.localeCompare(b.capabilityKey));
+  const out: CapabilityRow[] = [];
+  for (const row of candidates) {
+    const tool = registry.toolFor(row);
+    if (!tool || usedNames.has(tool.modelName)) continue;
+    usedNames.add(tool.modelName);
+    out.push(row);
+  }
+  return out;
+}
+
 /** Model-safe tool message for a call whose audit record could not be written. */
 const AUDIT_FAILED_CONTENT = JSON.stringify({ ok: false, error: 'INTERNAL', message: 'The tool call could not be recorded, so its result was withheld.' });
 
@@ -179,9 +221,11 @@ export interface ChatToolset {
 interface Chosen { readonly tool: ConnectTool<never>; readonly row: CapabilityRow; readonly mcp?: McpToolEntry }
 
 /**
- * `attached` are the user's @-selections, already checked against the
- * capability list by the caller. Only connected rows with a runnable tool in
- * the registry become tools.
+ * `attached` are the user's @-selections plus any auto-offered read tools
+ * (autoOfferedReadTools, A4), already checked against the capability list by
+ * the caller. The toolset does not distinguish the two: every port (policy,
+ * grants, per-call re-verification, approvals, audit) applies identically.
+ * Only connected rows with a runnable tool in the registry become tools.
  */
 export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: readonly CapabilityRow[], deps: {
   tokens?: AccessTokenSource; tools?: ConnectTool<never>[]; registry?: ChatToolRegistry; requestId?: string;

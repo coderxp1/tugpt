@@ -13,7 +13,7 @@
 import { createHash } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import type { ToolAuditEvent } from '@tugpt/connect-runtime';
-import { buildChatToolset, conflictingAttachments, toolAvailable } from './connect';
+import { autoOfferedReadTools, buildChatToolset, conflictingAttachments, toolAvailable } from './connect';
 import { listExternalMcpTools } from '@tugpt/connect-runtime';
 import { createEgressMcpFetch } from './mcp-egress';
 import { loadChatToolRegistry, mcpUnavailableReason, runnableEndpoints, type McpAuditSink, type McpDeps } from './mcp';
@@ -253,6 +253,46 @@ describe.skipIf(!opensslAvailable())('customer MCP in chat: real runtime, real p
         const { registry, pick } = await session(OWNER_A, ORG_A, { ...deps, staticSecrets: secrets({ ok: true, value: { secret: CANARY, credentialVersion: 1 } }).source });
         expect(toolAvailable(pick(EP_A, 'search_docs'), registry)).toBe(false);
       });
+  });
+
+  describe('automatic offering (A4 / decision D3)', () => {
+    it('offers approved read tools with no @-attachment and runs them without an approval claim', async () => {
+      const { registry, rows, toolset } = await session(OWNER_A);
+      const auto = autoOfferedReadTools(rows, [], registry);
+      // EP_A search_docs (read) only: create_ticket (write) and delete_project
+      // (irreversible) are never auto-offered; EP_A_SECOND's search_docs loses
+      // the tool-name conflict deterministically; the pending endpoint is not
+      // connected; org B is another tenant.
+      expect(auto.map((r) => [r.connectionId, r.capabilityKey])).toEqual([[EP_A, 'external.search_docs']]);
+      const ts = toolset(auto);
+      expect(ts.specs.map((s) => s.name)).toEqual(['search_docs']);
+      const r = await ts.execute(call('search_docs', { q: 'vpn' }, 'c-auto'));
+      expect(r.ok).toBe(true);
+      expect(state.rpcLog.some((x) => x.fn.startsWith('claim_tool_approval'))).toBe(false);
+      expect(audits.map((a) => [a.capability, a.outcome])).toEqual([['external.search_docs', 'ok']]);
+    });
+
+    it('never duplicates or displaces an @-attachment', async () => {
+      const { registry, rows, pick, toolset } = await session(OWNER_A);
+      const attached = [pick(EP_A, 'create_ticket')];
+      const auto = autoOfferedReadTools(rows, attached, registry);
+      expect(auto.map((r) => r.capabilityKey)).toEqual(['external.search_docs']);
+      const ts = toolset([...attached, ...auto]);
+      expect(ts.specs.map((s) => s.name).sort()).toEqual(['create_ticket', 'search_docs']);
+      // Attaching the read tool itself leaves nothing to auto-offer.
+      expect(autoOfferedReadTools(rows, [pick(EP_A, 'search_docs')], registry)).toEqual([]);
+    });
+
+    it('offers nothing when the MCP gate is closed', async () => {
+      const closed: McpDeps = { ...deps, env: { TUGPT_CUSTOMER_MCP_ENABLED: 'false', TUGPT_CHAT_MCP_EXECUTION_ENABLED: 'false', CONNECT_EGRESS_PROXY: proxy.url } };
+      const { registry, rows } = await session(OWNER_A, ORG_A, closed);
+      expect(autoOfferedReadTools(rows, [], registry)).toEqual([]);
+    });
+
+    it('offers nothing to a plain member (the registry is owner/admin scoped)', async () => {
+      const { registry, rows } = await session(MEMBER_A);
+      expect(autoOfferedReadTools(rows, [], registry)).toEqual([]);
+    });
   });
 
   describe('organization isolation', () => {
