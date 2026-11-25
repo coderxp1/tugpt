@@ -106,7 +106,7 @@ describe('usage meter: transient recording failure (S0.4, gate defect U1)', () =
 
   it('retries a transient RPC failure with the same key until the record lands', async () => {
     const c = flaky(2);
-    const m = createUsageMeter(scope(c));
+    const m = createUsageMeter(scope(c as never));
     await m.call(async (onUsage) => { onUsage({ prompt_tokens: 5, completion_tokens: 1 }); return 'x'; });
     await m.flush();
     expect(c.rpc).toHaveBeenCalledTimes(3);
@@ -124,7 +124,7 @@ describe('usage meter: transient recording failure (S0.4, gate defect U1)', () =
       return { data: { recorded: true }, error: null };
     });
     const c = { rpc, calls };
-    const m = createUsageMeter(scope(c));
+    const m = createUsageMeter(scope(c as never));
     await m.call(async () => 'a');
     await m.call(async () => 'b');
     await m.flush();
@@ -133,7 +133,7 @@ describe('usage meter: transient recording failure (S0.4, gate defect U1)', () =
 
   it('gives up after bounded retries when recording keeps failing (never throws)', async () => {
     const c = flaky(Number.MAX_SAFE_INTEGER);
-    const m = createUsageMeter(scope(c));
+    const m = createUsageMeter(scope(c as never));
     await m.call(async () => 'x');
     await m.flush();
     expect(c.rpc).toHaveBeenCalledTimes(3);

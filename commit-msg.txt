@@ -1,8 +1,5 @@
-fix(usage): S0.4 — unavailable usage carries no quantities (U6); meter retries transient recording failures (U1)
+test(usage): fix S0.4 meter-test mock typing (scope(c as never), as in the crash-suite)
 
-Gate evidence (2026-11-25, deployed f503169): 11 provider calls vs 10 usage events; 4 'unavailable' events all carrying zero-quantity token components; one completed pass-mode call (358/15) with no event at all.
-
-- Migration 20261125000003: record_chat_usage passes an empty quantities object for 'unavailable' events, so no token components exist for them (previously COALESCE(tokens,0) wrote input/output components of 0, indistinguishable from a reported 0 for basis-unaware readers); one-off cleanup deletes the zero-quantity token components written by the old code. pgTAP usage_unavailable_quantities (6 assertions).
-- usage-meter recordAt: a transient recording failure (RPC/transport) is retried with the same idempotency key (bounded, 3 attempts) instead of dropping the event after one attempt; a 'duplicate' returned after my own failed attempt is my own record whose response was lost — it no longer triggers the crash-shift, which would have double-counted it at the next slot. 3 new unit tests; usage suites 23 passed.
-- U5 reviewed, no app change: app outcomes match the documented contract for every fault mode in the window (reset/500/stall -> failed, slow -> failed by first-token deadline, client-closed -> succeeded with reported usage); the residual mismatch is the gate harness's failed-call definition, not app behaviour.
-- backend-api.md USAGE-1 note updated: the clean-up has landed.
+The previous commit's new tests passed vitest but failed tsc: the flaky-rpc
+mock's return union does not match scope()'s control() return type. Tests
+unchanged in behaviour; web typecheck passes again.
