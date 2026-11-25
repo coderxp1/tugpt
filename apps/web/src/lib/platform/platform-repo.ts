@@ -54,6 +54,19 @@ export interface PlatformToolRow {
   permissionClass: PlatformPermissionClass;
 }
 
+export interface PlatformToolDef extends PlatformToolRow {
+  inputSchema: Record<string, unknown>;
+}
+
+/** An operator's capability -> (endpoint, remote tool) binding (B6). */
+export interface PlatformCapabilityBinding {
+  capabilityKey: string;
+  endpointId: string;
+  toolName: string;
+  config: Record<string, unknown>;
+  enabled: boolean;
+}
+
 export interface DiscoveredTool {
   name: string;
   description: string;
@@ -164,6 +177,50 @@ export function createPlatformRepository(db: SupabaseClient) {
         }
       }
       return { id: str(snapshot.id), version, approved: false, revoked: false, toolCount: rows.length };
+    },
+
+    /** The newest snapshot's tools, only when it is approved and unrevoked. */
+    async getApprovedTools(endpointId: string): Promise<{ snapshotId: string; tools: PlatformToolDef[] } | null> {
+      const { data, error } = await t.from('platform_tool_snapshots')
+        .select('id, approved_at, revoked_at').eq('endpoint_id', endpointId)
+        .order('version', { ascending: false }).limit(1).maybeSingle();
+      if (error) return fail(error, 'failed to read the platform snapshot');
+      if (!data) return null;
+      const s = data as Row;
+      if (s.approved_at == null || s.revoked_at != null) return null;
+      const { data: toolRows, error: toolsError } = await t.from('platform_tools')
+        .select('name, description, input_schema, permission_class').eq('snapshot_id', str(s.id)).order('name', { ascending: true });
+      if (toolsError) return fail(toolsError, 'failed to list platform tools');
+      return {
+        snapshotId: str(s.id),
+        tools: ((toolRows ?? []) as Row[]).map((r) => ({
+          name: str(r.name), description: str(r.description),
+          inputSchema: (typeof r.input_schema === 'object' && r.input_schema !== null ? r.input_schema : {}) as Record<string, unknown>,
+          permissionClass: (PLATFORM_PERMISSION_CLASSES as readonly string[]).includes(str(r.permission_class))
+            ? (str(r.permission_class) as PlatformPermissionClass) : 'write',
+        })),
+      };
+    },
+
+    async getBinding(capabilityKey: string): Promise<PlatformCapabilityBinding | null> {
+      const { data, error } = await t.from('platform_capability_bindings')
+        .select('capability_key, endpoint_id, tool_name, config, enabled').eq('capability_key', capabilityKey).maybeSingle();
+      if (error) return fail(error, 'failed to read the capability binding');
+      if (!data) return null;
+      const r = data as Row;
+      return {
+        capabilityKey: str(r.capability_key), endpointId: str(r.endpoint_id), toolName: str(r.tool_name),
+        config: (typeof r.config === 'object' && r.config !== null ? r.config : {}) as Record<string, unknown>,
+        enabled: r.enabled === true,
+      };
+    },
+
+    async upsertBinding(binding: PlatformCapabilityBinding): Promise<void> {
+      const { error } = await t.from('platform_capability_bindings').upsert({
+        capability_key: binding.capabilityKey, endpoint_id: binding.endpointId, tool_name: binding.toolName,
+        config: binding.config, enabled: binding.enabled, updated_at: new Date().toISOString(),
+      }, { onConflict: 'capability_key' });
+      if (error) return fail(error, 'failed to store the capability binding');
     },
 
     async listSnapshotTools(snapshotId: string): Promise<PlatformToolRow[]> {
