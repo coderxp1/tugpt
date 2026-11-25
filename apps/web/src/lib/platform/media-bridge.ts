@@ -160,7 +160,7 @@ function configOf(raw: Record<string, unknown>): VideoBindingConfig {
 
 /** Enqueue a video.generate request. Entitlement + quota are the caller's gates (B6 + media quota). */
 export async function submitPlatformVideoRequest(
-  deps: MediaBridgeDeps,
+  deps: Pick<MediaBridgeDeps, 'repo' | 'jobs'>,
   input: { organizationId: string; userId: string; prompt: string; aspectRatio?: string; idempotencyKey?: string },
 ): Promise<{ jobId: string; alreadyExists: boolean }> {
   const binding = await deps.repo.getBinding(VIDEO_CAPABILITY_KEY);

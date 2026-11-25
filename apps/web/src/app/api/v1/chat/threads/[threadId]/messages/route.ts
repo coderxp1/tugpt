@@ -40,6 +40,7 @@ import { completeWithTools, ModelCallError, streamCompletion, type ParsedToolCal
 import { pendingApproval } from '@/lib/chat/approval.server';
 import { runTurn, systemPrompt, type TurnEvent } from '@/lib/chat/turn';
 import { autoOfferedReadTools, buildChatToolset, conflictingAttachments, toolAvailable } from '@/lib/chat/connect';
+import { platformToolsetForTurn, unionToolsets } from '@/lib/chat/platform-tools';
 import { builtinRegistry, loadChatToolRegistry, MCP_PROVIDER, type ChatToolRegistry } from '@/lib/chat/mcp';
 import {
   appendServerMessage, asChatDb, countTurnAnswers, getThread, listCapabilities, listMessages, parseMentions, titleFrom, touchThread, type CapabilityRow,
@@ -164,7 +165,11 @@ export async function POST(request: Request, { params }: { params: Promise<{ thr
     provider: model.provider, model: model.upstreamModel, signal: request.signal,
   });
 
-  const toolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, [...attached, ...autoOffered], { registry });
+  const connectToolset = buildChatToolset(ctx.db, { organizationId: orgId, userId: ctx.userId, threadId }, [...attached, ...autoOffered], { registry });
+  // Platform capabilities (ADR-022): offered only when the organization is
+  // entitled right now; any failure degrades to "no platform tools".
+  const platformToolset = await platformToolsetForTurn({ organizationId: orgId, userId: ctx.userId, threadId }).catch(() => null);
+  const toolset = platformToolset ? unionToolsets(connectToolset, platformToolset) : connectToolset;
   const wire: WireMessage[] = [
     { role: 'system', content: knowledgeSystemPrompt(systemPrompt({ organizationName: ctx.tenant.organizationName, now: new Date(), timeZone: validTimeZone(body.timeZone), attached: toolset.labels }), hits) },
     ...modelHistory(history, HISTORY),
