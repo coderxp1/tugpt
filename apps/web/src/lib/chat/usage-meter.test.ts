@@ -91,6 +91,55 @@ describe('usage meter (USAGE-1)', () => {
   });
 });
 
+describe('usage meter: transient recording failure (S0.4, gate defect U1)', () => {
+  function flaky(failuresBeforeSuccess: number) {
+    const calls: Record<string, unknown>[] = [];
+    let n = 0;
+    const rpc = vi.fn(async (_fn: string, args: Record<string, unknown>) => {
+      calls.push(args);
+      n += 1;
+      if (n <= failuresBeforeSuccess) return { data: null, error: { code: '08006', message: 'connection failure' } };
+      return { data: { recorded: true }, error: null };
+    });
+    return { rpc, calls };
+  }
+
+  it('retries a transient RPC failure with the same key until the record lands', async () => {
+    const c = flaky(2);
+    const m = createUsageMeter(scope(c));
+    await m.call(async (onUsage) => { onUsage({ prompt_tokens: 5, completion_tokens: 1 }); return 'x'; });
+    await m.flush();
+    expect(c.rpc).toHaveBeenCalledTimes(3);
+    expect(c.calls.map((a) => a.p_call_index)).toEqual([0, 0, 0]);
+  });
+
+  it('a duplicate after my own failed attempt is my own record (response lost): no slot shift, no double count', async () => {
+    const calls: Record<string, unknown>[] = [];
+    let n = 0;
+    const rpc = vi.fn(async (_fn: string, args: Record<string, unknown>) => {
+      calls.push(args);
+      n += 1;
+      if (n === 1) return { data: null, error: { code: '08006', message: 'response lost' } };
+      if (n === 2) return { data: { duplicate: true }, error: null };
+      return { data: { recorded: true }, error: null };
+    });
+    const c = { rpc, calls };
+    const m = createUsageMeter(scope(c));
+    await m.call(async () => 'a');
+    await m.call(async () => 'b');
+    await m.flush();
+    expect(calls.map((a) => a.p_call_index)).toEqual([0, 0, 1]);
+  });
+
+  it('gives up after bounded retries when recording keeps failing (never throws)', async () => {
+    const c = flaky(Number.MAX_SAFE_INTEGER);
+    const m = createUsageMeter(scope(c));
+    await m.call(async () => 'x');
+    await m.flush();
+    expect(c.rpc).toHaveBeenCalledTimes(3);
+  });
+});
+
 describe('usage meter: crash during recording (TIMEOUT-1 / USAGE-1 edge case)', () => {
   // A DB in which a crashed earlier run already recorded some indices of this turn.
   function dbWith(taken: number[]) {

@@ -304,11 +304,13 @@ cannot repeat a change: they need an approval, and an approval is claimed once
   (never 0) and the event is recorded with `usage_basis = 'unavailable'` and NULL cost. **The event's
   `usage_basis` is the authoritative marker.** Agent 6's `record_chat_usage` currently also writes
   `input_tokens` / `output_tokens` components with quantity 0 for such events (`COALESCE(..., 0)`),
-  while their contract says "tokens stored: NULL". Readers must therefore treat token quantities of an
+  while their contract said "tokens stored: NULL". Readers must therefore treat token quantities of an
   `unavailable` event as unknown, never as 0. The customer report `org_usage_report` already does this:
   it adds nothing to the token sums and counts the event in `unmetered_requests`. The service-role
-  `org_usage_summary` is basis-unaware. The clean-up (no components for `unavailable` events, or
-  documenting the zeros) is Agent 6's decision; see the USAGE-1 handoff. A provider-reported 0 is
+  `org_usage_summary` is basis-unaware. The clean-up landed in S0.4 (migration
+  `20261125000003_usage_unavailable_no_quantities`, gate defect U6): `record_chat_usage` now writes
+  NO token components for `unavailable` events, and the zero-quantity components written by the old
+  code were deleted. A provider-reported 0 is
   different: `usage_basis = 'reported'` with 0 tokens, not unmetered (E2E U6).
 - **Crash during recording.** A run that recorded calls but died before storing its answer leaves
   `attempt` unchanged, so the next run's first key collides (`duplicate`). A meter records each of its
