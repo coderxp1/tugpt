@@ -10,6 +10,9 @@ const MATRIX: Readonly<Record<Caller, ReadonlySet<Operation>>> = {
   web: new Set<Operation>(['store_oauth_result', 'connection_status', 'revoke', 'store_static_secret']),
   // Workers execute tools and need short-lived access tokens.
   worker: new Set<Operation>(['get_access_token', 'revoke', 'get_static_secret']),
+  // Server-side chat tool execution (docs/connect/finding-chat-broker-caller.md, option A): its own
+  // key, read-only. It can obtain a credential for one call; it can never write, revoke or list.
+  executor: new Set<Operation>(['get_access_token', 'get_static_secret']),
 };
 
 export function isAllowed(caller: Caller, op: Operation): boolean {
