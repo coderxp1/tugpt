@@ -138,6 +138,16 @@ export const mcpApi = {
     const tools = parseTools(r.data);
     return tools ? { ok: true, data: tools } : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
   },
+  policy: async (f?: typeof fetch): Promise<ApiResult<{ allowExternalTools: boolean }>> => {
+    const r = await getJson<unknown>(`${base}/policy`, f);
+    if (!r.ok) return r;
+    const v = (r.data as { allowExternalTools?: unknown } | null)?.allowExternalTools;
+    return typeof v === 'boolean'
+      ? { ok: true, data: { allowExternalTools: v } }
+      : { ok: false, status: 502, code: 'BAD_RESPONSE', message: '' };
+  },
+  setPolicy: (enabled: boolean, f?: typeof fetch) =>
+    postJson<{ allowExternalTools: boolean }>(`${base}/policy`, { enabled }, f),
   register: (url: string, displayName: string, f?: typeof fetch,
     auth?: { kind: 'none' } | { kind: 'static_bearer'; secret: string }) =>
     postJson<{ endpoint: McpEndpoint }>(`${base}/endpoints`,

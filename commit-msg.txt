@@ -1,0 +1,6 @@
+feat(web): per-org MCP policy lever surface (Plan A3)
+
+- Repo: getExternalToolsPolicy (missing row = off, fail closed) and setExternalToolsPolicy (owner/admin RPC 20261125000002)
+- New GET/POST /api/v1/connect/mcp/policy route (owner/admin, CSRF-guarded, flag-gated)
+- McpPanel: lever toggle with ES/EN copy; connect-ui policy/setPolicy client calls
+- Unit tests for the repo methods; connect/chat suites green (333 in scope), typecheck pass

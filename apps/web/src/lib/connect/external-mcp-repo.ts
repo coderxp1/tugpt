@@ -98,6 +98,10 @@ export interface ExternalMcpRepository {
   /** Owner/admin read of the endpoint's auth connection for broker-resolved discovery; null when
    * the endpoint is public (no credential attached). Same error contract as getEndpointUrl. */
   getEndpointAuthConnection(orgId: string, endpointId: string): Promise<string | null>;
+  /** Plan A3: the org's external-tools lever. False when no policy row exists (fail closed). */
+  getExternalToolsPolicy(orgId: string): Promise<boolean>;
+  /** Owner/admin write of the lever via RPC; resolves to the resulting state. */
+  setExternalToolsPolicy(orgId: string, enabled: boolean): Promise<boolean>;
   recordApproval(orgId: string, connectionId: string, capability: string, argumentsSha256: string, ttlSeconds: number, threadId: string): Promise<RecordedApproval>;
   revokeApproval(orgId: string, approvalId: string): Promise<boolean>;
 }
@@ -413,6 +417,25 @@ export function createExternalMcpRepository(db: SupabaseClient | TypedSupabaseCl
       if (data === null || data === undefined) return null;
       if (typeof data !== 'string') throw new Error('invalid get_mcp_endpoint_auth_connection result');
       return data;
+    },
+
+    async getExternalToolsPolicy(orgId) {
+      const { data, error } = await u
+        .from('organization_integration_policies')
+        .select('allow_external_tools')
+        .eq('organization_id', orgId)
+        .maybeSingle();
+      if (error) throw endpointLookupError(error as PgError);
+      if (data === null || data === undefined) return false;
+      return (data as { allow_external_tools?: unknown }).allow_external_tools === true;
+    },
+
+    async setExternalToolsPolicy(orgId, enabled) {
+      const { data, error } = await u.rpc('set_external_tools_policy', {
+        p_organization_id: orgId, p_enabled: enabled,
+      });
+      if (error) throw endpointLookupError(error as PgError);
+      return data === true;
     },
 
     async recordApproval(orgId, connectionId, capability, argumentsSha256, ttlSeconds, threadId) {

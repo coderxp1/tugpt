@@ -166,3 +166,6 @@ button.secondary{border:1px solid #d7d7cf}
 .memberSearch .searchBox input:focus-visible{outline:3px solid #8c4bce;outline-offset:3px;border-color:#171715}
 .searchStatus{font-size:13px;color:#3e3f3a;margin:6px 0 0;min-height:1.45em}
 @media (max-width:720px){.memberSearch{max-width:none}}
+.policyRow{display:grid;gap:6px;font-size:13px;font-weight:700;margin:0 0 14px}
+.policyRow small{font-weight:400;color:#686963}
+.policyRow input{width:auto;min-height:0;margin-right:8px}

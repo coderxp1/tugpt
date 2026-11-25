@@ -63,6 +63,7 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
   const [loadIssue, setLoadIssue] = useState<McpIssue | null>(null);
   const [url, setUrl] = useState(''); const [name, setName] = useState('');
   const [authKind, setAuthKind] = useState<'none' | 'bearer'>('none');
+  const [policyOn, setPolicyOn] = useState<boolean | null>(null);
   const [secret, setSecret] = useState('');
   const [formIssue, setFormIssue] = useState<McpIssue | null>(null);
   const [badField, setBadField] = useState<'name' | 'url' | null>(null);
@@ -114,6 +115,22 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
     void Promise.resolve().then(() => { if (live) void reload(); });
     return () => { live = false; };
   }, [canList, reload]);
+
+  useEffect(() => {
+    if (!canList) return;
+    let live = true;
+    void mcpApi.policy(fetcher).then((r) => { if (live && r.ok) setPolicyOn(r.data.allowExternalTools); });
+    return () => { live = false; };
+  }, [canList, fetcher]);
+
+  async function togglePolicy(next: boolean) {
+    setBusy('policy'); setNotice('');
+    const r = await mcpApi.setPolicy(next, fetcher);
+    setBusy(null);
+    if (!r.ok) { setFormIssue(mcpIssue(r, t)); return; }
+    setPolicyOn(r.data.allowExternalTools);
+    setNotice(t(next ? 'mcp.policy.enabled' : 'mcp.policy.disabled'));
+  }
 
   async function register(ev: React.FormEvent) {
     ev.preventDefault();
@@ -228,6 +245,16 @@ export function McpPanel({ canManage, routes, enabled, chatEnabled = false, fetc
 
       {!canManage ? <p className={s.muted} data-testid="mcp-members-only">{t('mcp.membersOnly')}</p> : (
         <>
+          {policyOn !== null && (
+            <div className={s.policyRow}>
+              <label>
+                <input type="checkbox" checked={policyOn} disabled={busy !== null}
+                  onChange={(e) => void togglePolicy(e.target.checked)} />
+                {t('mcp.policy.label')}
+              </label>
+              <small>{t('mcp.policy.help')}</small>
+            </div>
+          )}
           <form className={s.form} onSubmit={(e) => void register(e)} noValidate>
             <fieldset disabled={!can.register || busy === 'register'}>
               <legend className={s.sr}>{t('mcp.form.legend')}</legend>
