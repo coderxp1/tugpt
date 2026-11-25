@@ -135,5 +135,6 @@
   "20261121700002_usage_accounting.sql": "f3508c440437e9f95763da2fbeb8ec9d9f9e8617922625ce7fde2e574bb00d8e",
   "20261122100001_workspace_chat_turn_runs.sql": "8562ac385fb86a7f78b4e5260887a00e9911d832619695c285591ef66aa28dbc",
   "20261122100002_workspace_file_upload_request_ids.sql": "f993745668717f6bae214539aba2fe534b0b8159ca0284761079a1d33bac91ec",
-  "20261125000001_mcp_static_credential_admin.sql": "c0b3e2d7dc5fdb182bbbe5c7e4ea6ecb594237ab9e2449289f98de7edb20aa66"
+  "20261125000001_mcp_static_credential_admin.sql": "c0b3e2d7dc5fdb182bbbe5c7e4ea6ecb594237ab9e2449289f98de7edb20aa66",
+  "20261125000002_mcp_org_policy_gate.sql": "bf155a1bbbcdece86985c5c0bf8dba8ce1629868b22c622fc235a1b231bf658d"
 }
