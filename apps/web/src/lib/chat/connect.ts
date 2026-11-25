@@ -34,7 +34,7 @@ import type { ApprovalTarget } from './approval.server';
 import { listCapabilities, type CapabilityRow, type ChatDb } from './store';
 import {
   builtinRegistry, MCP_NO_CREDENTIAL, MCP_PROVIDER, mcpDirectory, verifyMcpTool,
-  type ChatToolRegistry, type McpDeps, type McpToolEntry,
+  type ChatToolRegistry, type McpDeps, type McpToolEntry, type StaticSecretSource,
 } from './mcp';
 
 export interface ChatToolContext {
@@ -116,18 +116,38 @@ type Env = Readonly<Record<string, string | undefined>>;
 const HEX_KEY = /^(?:[0-9a-f]{2}){32,}$/i;
 
 /**
- * Broker contract (packages/connect-server): TUGPT_BROKER_URL and
- * TUGPT_BROKER_CALLER_KEY, the key hex-encoded and at least 32 bytes.
- * Anything missing or malformed yields no token (fail closed).
+ * Chat reads credentials as broker caller `executor` (decision A,
+ * docs/connect/finding-chat-broker-caller.md): TUGPT_BROKER_URL and
+ * TUGPT_BROKER_EXECUTOR_KEY, hex-encoded, at least 32 bytes. The web key
+ * (TUGPT_BROKER_CALLER_KEY) is write-only and is never used here. Anything
+ * missing or malformed yields no client and no request (fail closed).
  */
+function executorClient(env: Env): BrokerClient | null {
+  const baseUrl = env.TUGPT_BROKER_URL; const key = env.TUGPT_BROKER_EXECUTOR_KEY?.trim();
+  if (!baseUrl || !key || !HEX_KEY.test(key)) return null;
+  try { return new BrokerClient({ baseUrl, caller: 'executor', key: Buffer.from(key, 'hex') }); } catch { return null; }
+}
+
 export function brokerTokenSource(env: Env = process.env): AccessTokenSource {
-  const unavailable: AccessTokenSource = { async getAccessToken() { return { ok: false, code: 'UNAVAILABLE' }; } };
-  const baseUrl = env.TUGPT_BROKER_URL; const key = env.TUGPT_BROKER_CALLER_KEY?.trim();
-  if (!baseUrl || !key || !HEX_KEY.test(key)) return unavailable;
-  let client: BrokerClient;
-  try { client = new BrokerClient({ baseUrl, caller: 'web', key: Buffer.from(key, 'hex') }); } catch { return unavailable; }
+  const client = executorClient(env);
+  if (!client) return { async getAccessToken() { return { ok: false, code: 'UNAVAILABLE' }; } };
   return { getAccessToken: (scope) => client.getAccessToken(scope) };
 }
+
+/** Static bearer of an authenticated customer MCP endpoint (broker get_static_secret, caller executor). */
+export function brokerStaticSecretSource(env: Env = process.env): StaticSecretSource {
+  const client = executorClient(env);
+  if (!client) return { async getStaticSecret() { return { ok: false, code: 'UNAVAILABLE' }; } };
+  return {
+    async getStaticSecret(scope) {
+      const r = await client.getStaticSecret({ organizationId: scope.organizationId, connectionId: scope.connectionId });
+      return r.ok ? { ok: true, value: { secret: r.value.secret, credentialVersion: r.value.credentialVersion } } : { ok: false, code: r.code };
+    },
+  };
+}
+
+/** Broker failure codes the runtime maps precisely; anything else is UNAVAILABLE (PROVIDER_UNAVAILABLE). */
+const PASS_THROUGH_SECRET_CODES = new Set(['NOT_FOUND', 'NOT_CONNECTED', 'REQUIRES_AUTHORIZATION']);
 
 export function auditOutcome(outcome: ToolAuditEvent['outcome']): { outcome: string; errorCode: string | null } {
   if (outcome === 'ok') return { outcome: 'succeeded', errorCode: null };
@@ -207,8 +227,22 @@ export function buildChatToolset(db: ChatDb, ctx: ChatToolContext, attached: rea
   };
 
   const inner = deps.tokens ?? brokerTokenSource();
+  const authConnectionFor = (endpointId: string) => mcpEntries.find((c) => c.row.connectionId === endpointId)?.mcp?.authConnectionId ?? null;
   const tokens: AccessTokenSource = {
-    getAccessToken: (scope) => (isMcp(scope.connectionId) ? MCP_NO_CREDENTIAL.getAccessToken(scope) : inner.getAccessToken(scope)),
+    async getAccessToken(scope) {
+      if (!isMcp(scope.connectionId)) return inner.getAccessToken(scope);
+      const auth = authConnectionFor(scope.connectionId);
+      if (auth === null) return MCP_NO_CREDENTIAL.getAccessToken(scope);
+      // Authenticated endpoint: read the bearer now (after authorization + approval, before egress), for the
+      // endpoint's own connection in THIS organization. Held in memory for this call only.
+      if (scope.organizationId !== ctx.organizationId) return { ok: false, code: 'NOT_FOUND' };
+      const secrets = deps.mcp?.staticSecrets ?? brokerStaticSecretSource(deps.mcp?.env ?? process.env);
+      try {
+        const r = await secrets.getStaticSecret({ organizationId: ctx.organizationId, connectionId: auth });
+        if (r.ok) return { ok: true, value: { accessToken: r.value.secret, expiresAt: new Date(8.64e15).toISOString(), credentialVersion: r.value.credentialVersion } };
+        return { ok: false, code: (PASS_THROUGH_SECRET_CODES.has(r.code) ? r.code : 'UNAVAILABLE') as never };
+      } catch { return { ok: false, code: 'UNAVAILABLE' }; }
+    },
   };
 
   const auditFailed = new Set<string>();

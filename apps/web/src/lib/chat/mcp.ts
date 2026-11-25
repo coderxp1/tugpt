@@ -84,6 +84,8 @@ export interface McpToolEntry {
   readonly permissionClass: PermissionClass;
   /** Host (and port) of the endpoint URL only; never the path or query string. */
   readonly endpointHost: string;
+  /** The endpoint's mcp_custom connection id (trusted path only), or null when anonymous. */
+  readonly authConnectionId: string | null;
   readonly tool: ConnectTool<never>;
 }
 
@@ -127,6 +129,18 @@ export interface McpDeps {
   readonly listTools?: (db: SupabaseClient, orgId: string) => Promise<ActiveMcpTool[]>;
   readonly serviceDb?: SupabaseClient;
   readonly directory?: (db: SupabaseClient, orgId: string) => ConnectionDirectory;
+  /**
+   * Reads an authenticated endpoint's static bearer, per call, after authorization and approval. Defaults to
+   * the credential broker as caller `executor` (brokerStaticSecretSource in ./connect). Never logged or returned.
+   */
+  readonly staticSecrets?: StaticSecretSource;
+}
+
+export type StaticSecretResult =
+  | { readonly ok: true; readonly value: { readonly secret: string; readonly credentialVersion: number } }
+  | { readonly ok: false; readonly code: string };
+export interface StaticSecretSource {
+  getStaticSecret(scope: { organizationId: string; connectionId: string }): Promise<StaticSecretResult>;
 }
 
 const asSupabase = (db: ChatDb): SupabaseClient => db as unknown as SupabaseClient;
@@ -208,26 +222,28 @@ export async function loadChatToolRegistry(db: ChatDb, orgId: string, deps: McpD
   } catch { return makeRegistry(builtins, [], gate, audit); }
 
   const serviceDb = deps.serviceDb;
-  const urls = new Map<string, string>();
+  const urls = new Map<string, { url: string; authConnectionId: string | null }>();
   if (serviceDb) {
     for (const id of new Set(tools.map((t) => t.endpointId))) {
       const r = await resolveMcpExecution(serviceDb, orgId, id);
-      if (r?.url) urls.set(id, r.url);
+      if (r?.url) urls.set(id, { url: r.url, authConnectionId: r.authConnectionId });
     }
   }
   const entries: McpToolEntry[] = [];
   for (const t of tools) {
-    const url = urls.get(t.endpointId);
-    if (!url || !validTool(t) || !runnable.has(t.endpointId)) continue;
+    const resolved = urls.get(t.endpointId);
+    if (!resolved || !validTool(t) || !runnable.has(t.endpointId)) continue;
+    const { url, authConnectionId } = resolved;
     const capability = `external.${t.name}`;
     if (entries.some((e) => e.endpointId === t.endpointId && e.capability === capability)) continue;
     const tool = createExternalMcpTool(
-      { url, fetchFn, ...(deps.resolveHostname ? { resolveHostname: deps.resolveHostname } : {}) },
+      // An authenticated endpoint takes its bearer from the runtime token step (deps.accessToken), never from here.
+      { url, fetchFn, ...(authConnectionId ? { credential: 'bearer' as const } : {}), ...(deps.resolveHostname ? { resolveHostname: deps.resolveHostname } : {}) },
       { name: t.name, description: t.description, inputSchema: t.inputSchema, permissionClass: t.permissionClass },
     ) as unknown as ConnectTool<never>;
     const endpointHost = hostOf(url);
     if (!endpointHost) continue;
-    entries.push({ endpointId: t.endpointId, capability, permissionClass: t.permissionClass, endpointHost, tool });
+    entries.push({ endpointId: t.endpointId, capability, permissionClass: t.permissionClass, endpointHost, authConnectionId, tool });
   }
   return makeRegistry(builtins, entries, gate, audit);
 }
@@ -253,9 +269,10 @@ export function mcpDirectory(db: ChatDb, orgId: string, deps: McpDeps = {}): Con
 }
 
 /**
- * MCP endpoints in chat carry no stored credential (gate item 4), so there is
- * nothing to fetch from the broker. The runtime still asks for a token after
- * all authorization checks; this answers for MCP endpoints only.
+ * Anonymous MCP endpoints (authConnectionId null) carry no stored credential, so
+ * there is nothing to fetch from the broker. The runtime still asks for a token
+ * after all authorization checks; this answers for those endpoints only.
+ * Authenticated endpoints read their bearer via McpDeps.staticSecrets instead.
  */
 export const MCP_NO_CREDENTIAL: AccessTokenSource = {
   async getAccessToken() {

@@ -256,11 +256,13 @@ export interface FakeState {
   mcpAudit: Row[];
   /** Rows of mcp_approval_events (20261120000010_mcp_approval_audit.sql). */
   approvalEvents: Row[];
+  /** connected_accounts rows consulted by the resolve_mcp_execution mirror (20261120000014). */
+  connections: Row[];
   now: () => number;
 }
 
 export function emptyState(): FakeState {
-  return { members: {}, endpoints: [], snapshots: [], tools: [], approvals: [], catalogue: ['calendar.find_availability'], rpcLog: [], mcpAudit: [], approvalEvents: [], now: () => Date.now() };
+  return { members: {}, endpoints: [], snapshots: [], tools: [], approvals: [], catalogue: ['calendar.find_availability'], rpcLog: [], mcpAudit: [], approvalEvents: [], connections: [], now: () => Date.now() };
 }
 
 const RLS_ADMIN_ONLY = new Set(['external_tool_endpoints', 'external_tool_snapshots', 'external_tools']);
@@ -433,14 +435,18 @@ export function fakeDb(state: FakeState, userId: string, identity: FakeIdentity 
         return { data: out, error: null };
       }
       if (fn === 'resolve_mcp_execution') {
-        // Mirrors 20261120000003: the trusted path also requires no stored credential (auth_connection_id IS NULL).
-        const e = state.endpoints.find((x) => x.id === args.p_endpoint_id && x.organization_id === org && x.status === 'active' && x.auth_connection_id == null);
+        // Mirrors 20261120000014: anonymous, or credentialed only by an org-owned, connected, unrevoked
+        // mcp_custom / mcp_static_bearer connection of the same organization.
+        const credentialOk = (x: Row) => x.auth_connection_id == null || state.connections.some((c) => c.id === x.auth_connection_id
+          && c.organization_id === org && c.provider_key === 'mcp_custom' && c.credential_kind === 'mcp_static_bearer'
+          && c.owner_type === 'organization' && c.status === 'connected' && c.revoked_at == null);
+        const e = state.endpoints.find((x) => x.id === args.p_endpoint_id && x.organization_id === org && x.status === 'active' && credentialOk(x));
         if (!e) return { data: null, error: null }; // the SQL function returns NULL (no row), not an error
         const snaps = state.snapshots.filter((s) => s.endpoint_id === e.id && s.organization_id === org).sort((a, b) => Number(b.version) - Number(a.version));
         const newest = snaps[0];
         if (!newest || newest.approved_at == null || newest.revoked_at != null) return { data: null, error: null };
         const tools = state.tools.filter((t) => t.snapshot_id === newest.id && t.organization_id === org).map((t) => ({ name: t.name, description: t.description, inputSchema: t.input_schema, permissionClass: t.permission_class }));
-        return { data: { endpointId: e.id, url: e.url, tools }, error: null };
+        return { data: { endpointId: e.id, url: e.url, authConnectionId: e.auth_connection_id ?? null, tools }, error: null };
       }
             if (fn === 'record_mcp_tool_call') {
         // Mirrors 20261115000013+ (trusted caller supplies the actor): the ACTOR must be a member of the organization.
