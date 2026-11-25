@@ -1,5 +1,0 @@
-test(usage): fix S0.4 meter-test mock typing (scope(c as never), as in the crash-suite)
-
-The previous commit's new tests passed vitest but failed tsc: the flaky-rpc
-mock's return union does not match scope()'s control() return type. Tests
-unchanged in behaviour; web typecheck passes again.
