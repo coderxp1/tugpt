@@ -1,0 +1,20 @@
+# Smokescreen ACL — S0.1 groundwork (NOT deployed; CP-2).
+#
+# Default action is DENY. Rules are added by an operator only, one domain
+# at a time, and reviewed against the platform registry (platform track)
+# or the CP-2 customer-track policy decision.
+version: v1
+services:
+  tugpt-platform:
+    name: tugpt-platform
+    # Platform track: STRICT allowlist. Add one entry per approved
+    # platform provider domain, e.g.:
+    #   - {action: allow, host: mcp.heygen.com, ports: [443]}
+    rules: []
+  tugpt-customer:
+    name: tugpt-customer
+    # Customer track: policy decided at CP-2's security review. The floor
+    # in every case: private/loopback/link-local/metadata ranges denied
+    # by the proxy itself, port 443 only.
+    rules: []
+default: deny

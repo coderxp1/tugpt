@@ -1,0 +1,25 @@
+# Smokescreen configuration — S0.1 groundwork (NOT deployed; CP-2).
+# Values are the intended production shape; the operator confirms ports,
+# hosts and log destinations against the real hosts at deployment time.
+
+# Listen on loopback of the app host (or a private interface shared only
+# with the app hosts). Never expose publicly.
+proxy_address: 127.0.0.1:4750
+
+# Deny-by-default destination ranges (Smokescreen denies these natively;
+# listed here so the security review can check them off one by one):
+#   10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16   RFC1918
+#   127.0.0.0/8                                  loopback
+#   169.254.0.0/16                               link-local + cloud metadata
+#   ::1/128, fc00::/7, fe80::/10                 IPv6 loopback/ULA/link-local
+
+# Only CONNECT to port 443 is permitted by the ACL (see acl.yaml).
+allow_missing_user_id: false
+
+# Timeouts (seconds).
+connect_timeout: 10
+client_request_timeout: 60
+
+# Audit: one JSON line per request (decision, host, bytes) — credentials
+# are never logged (Authorization is not part of the log schema).
+log_destination: /var/log/smokescreen/audit.jsonl
