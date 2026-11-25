@@ -1,6 +1,8 @@
 # ADR-022 — Platform-Owned MCP Integrations
 
-**Status:** Accepted (2026-11-25, paul — architecture acceptance + implementation GO)
+## Status
+
+**Accepted** (2026-11-25, paul — architecture acceptance + implementation GO).
 **Filing note:** approved as "ADR-020 — platform-owned MCP" in the 2026-11-25 product documents; filed under ADR-022 because ADR-020 in this repository is the tool-registry and agent-runtime ADR. Supersedes the platform-owned draft of 2026-11-24.
 **Date:** 2026-11-25
 **Deciders:** paul (product owner) — decisions D1, D4, D5, D6 recorded 2026-11-25

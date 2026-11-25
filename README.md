@@ -50,7 +50,7 @@ tugpt-nextjs-recovered/
 │   └── tests/database/         # pgTAP tests
 ├── deploy/                     # systemd unit, Caddy config, host preflight (check-host.sh)
 ├── docs/
-│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-017, ADR-019 to ADR-021; ADR-018 reserved)
+│   ├── adr/                    # Architecture Decision Records (ADR-001 to ADR-017, ADR-019 to ADR-022; ADR-018 reserved)
 │   ├── status/                 # Phase status reports
 │   └── production_environment.md
 ├── turbo.json
@@ -219,7 +219,8 @@ for the deployment runbook (`docker-compose.yml`, `deploy/systemd/tugpt.service`
 | [ADR-017](docs/adr/ADR-017-spanish-first-internationalization.md) | Spanish Is the Source of Truth; Locale Belongs to the Organization | Accepted |
 | [ADR-019](docs/adr/ADR-019-media-generation-capability.md) | Media Generation Capability (ComfyUI on the TuGPT GPU Host) | Proposed |
 | [ADR-020](docs/adr/ADR-020-tool-registry-and-agent-runtime.md) | Tool Registry, Capability Contracts, and the Agent Runtime | Accepted |
-| [ADR-021](docs/adr/ADR-021-tugpt-connect-integration-platform.md) | TuGPT Connect — Integration Platform | Proposed |
+| [ADR-021](docs/adr/ADR-021-tugpt-connect-integration-platform.md) | TuGPT Connect — Integration Platform | Accepted |
+| [ADR-022](docs/adr/ADR-022-platform-owned-mcp-integrations.md) | Platform-Owned MCP Integrations | Accepted |
 
 `apps/worker/tests/readme-matches-the-repo.test.ts` checks this table against
 `docs/adr/` on every run: a new ADR that is not listed here fails, a row pointing

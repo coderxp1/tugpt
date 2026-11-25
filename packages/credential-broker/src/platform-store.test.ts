@@ -76,9 +76,8 @@ class FakePool implements PgPoolLike {
   }
 
   async connect(): Promise<PgClientLike> {
-    const pool = this;
     return {
-      query: (text: string, values?: unknown[]) => pool.query(text, values),
+      query: (text: string, values?: unknown[]) => this.query(text, values),
       release: () => undefined,
     };
   }
